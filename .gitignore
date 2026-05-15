@@ -1,7 +1,6 @@
 # Build and Compilation Folders
 .vs/
 .vscode/
-build/
 out/
 bin/
 obj/
