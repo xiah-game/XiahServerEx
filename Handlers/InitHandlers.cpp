@@ -14,6 +14,7 @@
 #include "PartyHandler.h"
 #include "../GameObjects/DropManager.h"
 #include "RebuildItemHandler.h"
+#include "BankHandler.h"
 
 void InitPacketHandlers() {
     RegisterHandler(CS_IT_LOGINCHECK_REQ, [](SOCKET s, BYTE* p, WORD size) {
@@ -165,4 +166,5 @@ void InitPacketHandlers() {
     RegisterHandler(PKT_PARTYSHARE_REQ, [](SOCKET s, BYTE* p, WORD size) { OnPartyShareReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
 
     RegisterRebuildItemHandlers();
+    RegisterBankMallHandlers();
 }

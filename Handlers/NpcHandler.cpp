@@ -338,7 +338,8 @@ void OnBuyItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
 
         BYTE absolutePos = bCharSackPos;
         if (bCharSackCnt == 1) absolutePos = 20 + bCharSackPos;
-        else if (bCharSackCnt == 2) absolutePos = 20 + 36 + bCharSackPos;
+        else if (bCharSackCnt == 2) absolutePos = 60 + bCharSackPos;
+        else if (bCharSackCnt == 3) absolutePos = 100 + bCharSackPos;
         
         std::string insSack = "INSERT INTO SACKITEM (dwCharID, bSackPos, dwItemID) VALUES (" + std::to_string(charID) + ", " + std::to_string(absolutePos) + ", " + std::to_string(newDbItemID) + ")";
         DBHelper::GetInstance().ExecuteUpdate(insSack);

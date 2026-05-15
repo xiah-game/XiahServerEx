@@ -422,11 +422,23 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
             bcy = g_ItemTemplates[drop.wRefID].bCY;
         }
         
-        BYTE freePos = FindFreeSackPos(playerID, 1, bcx, bcy);
+        BYTE freePos = 255;
+        BYTE actualSackID = 1;
+        for (BYTE tryID = 1; tryID <= 3; tryID++) {
+            freePos = FindFreeSackPos(playerID, tryID, bcx, bcy);
+            if (freePos != 255) {
+                actualSackID = tryID;
+                break;
+            }
+        }
         if (freePos == 255) {
             LOG("[DropManager] Bag full for player " + std::to_string(playerID));
             return;
         }
+        
+        // Calculate relative position within the sack page
+        int startPos = (actualSackID == 1) ? 20 : (actualSackID == 2) ? 60 : 100;
+        BYTE relativeSackPos = freePos - startPos;
         
         // Insert into ITEM table
         DWORD newDbItemID = 0;
@@ -467,8 +479,8 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
         
         // Use BufferWriter for 0x420A (AddOnSack)
         BufferWriter bw;
-        bw.write<BYTE>(1); // bSackID (SACKTYPE__DEFAULT)
-        bw.write<BYTE>(freePos - 20); // bSackPos
+        bw.write<BYTE>(actualSackID); // bSackID
+        bw.write<BYTE>(relativeSackPos); // bSackPos
         
         // GetItemData format
         bw.write<DWORD>(newDbItemID);

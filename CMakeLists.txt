@@ -36,6 +36,7 @@ set(SOURCES
     Handlers/ChatHandler.cpp
     Handlers/PartyHandler.cpp
     Handlers/RebuildItemHandler.cpp
+    Handlers/BankHandler.cpp
     GameObjects/DropManager.cpp
     GameObjects/MugongManager.cpp
     GameObjects/PlayerManager.cpp

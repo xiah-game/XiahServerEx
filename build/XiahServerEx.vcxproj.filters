@@ -67,6 +67,9 @@
     <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\RebuildItemHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\BankHandler.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="D:\xiahold\XiahServerEx\GameObjects\DropManager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

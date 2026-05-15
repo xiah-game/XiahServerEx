@@ -193,6 +193,74 @@ void OnItemMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
         LOG("[ItemHandler] ITEM MOVE: CharID=" + std::to_string(charID) + " " + std::to_string(bSrcSackID) + ":" + std::to_string(bSrcSackPos) + " -> " + std::to_string(bDesSackID) + ":" + std::to_string(bDesSackPos));
         
         if (charID > 0) {
+            // Boundary validation: if a specific position is given for a backpack sack,
+            // check that the item's bCX×bCY dimensions actually fit within the 6×6 grid.
+            // If not, switch to auto-find mode (bDesSackPos=255).
+            if (bDesSackID > 0 && bDesSackPos != 255) {
+                BYTE bcx = 1, bcy = 1;
+                WORD wRefID = 0;
+                std::string qItem = "SELECT wRefID FROM ITEM WHERE dwItemID = " + std::to_string(dwSrcObjID);
+                DBHelper::GetInstance().ExecuteQuery(qItem, [&](SQLHSTMT hStmt) {
+                    SQLLEN len; SQLGetData(hStmt, 1, SQL_C_USHORT, &wRefID, 0, &len);
+                });
+                if (g_ItemTemplates.count(wRefID)) {
+                    bcx = g_ItemTemplates[wRefID].bCX;
+                    bcy = g_ItemTemplates[wRefID].bCY;
+                }
+                if (bcx < 1) bcx = 1; if (bcy < 1) bcy = 1;
+
+                int col = bDesSackPos % 6;
+                int row = bDesSackPos / 6;
+                if (col + bcx > 6 || row + bcy > 6) {
+                    LOG("[ItemHandler] Item (" + std::to_string(bcx) + "x" + std::to_string(bcy) + ") doesn't fit at grid (" + std::to_string(row) + "," + std::to_string(col) + "), auto-finding...");
+                    bDesSackPos = 255; // Trigger auto-find below
+                    dwDesObjID = 0;    // Auto-find targets an empty slot, no swap needed
+                }
+
+                // Check 2: For multi-cell items, verify no overlap with other items at destination.
+                // This catches the case where a 2×2 item is swapped with a 1×1 item but the
+                // surrounding cells are occupied by other items.
+                if (bDesSackPos != 255 && (bcx > 1 || bcy > 1)) {
+                    int startPos = (bDesSackID == 1) ? 20 : (bDesSackID == 2) ? 60 : 100;
+                    int endPos = startPos + 35;
+                    bool grid[6][6] = {false};
+
+                    // Build occupancy grid, excluding the two items being swapped
+                    std::string qOcc = "SELECT S.bSackPos, I.wRefID, S.dwItemID FROM SACKITEM S JOIN ITEM I ON S.dwItemID = I.dwItemID WHERE S.dwCharID = " + std::to_string(charID) + " AND S.bSackPos >= " + std::to_string(startPos) + " AND S.bSackPos <= " + std::to_string(endPos);
+                    DBHelper::GetInstance().ExecuteQuery(qOcc, [&](SQLHSTMT hStmt) {
+                        int oPos = 0; WORD oRef = 0; DWORD oItemID = 0; SQLLEN c1, c2, c3;
+                        SQLGetData(hStmt, 1, SQL_C_SLONG, &oPos, 0, &c1);
+                        SQLGetData(hStmt, 2, SQL_C_USHORT, &oRef, 0, &c2);
+                        SQLGetData(hStmt, 3, SQL_C_ULONG, &oItemID, 0, &c3);
+                        // Skip the two items involved in the swap
+                        if (oItemID == dwSrcObjID || oItemID == dwDesObjID) return;
+                        int ox = (oPos - startPos) % 6;
+                        int oy = (oPos - startPos) / 6;
+                        int ocx = 1, ocy = 1;
+                        if (g_ItemTemplates.count(oRef)) {
+                            ocx = g_ItemTemplates[oRef].bCX;
+                            ocy = g_ItemTemplates[oRef].bCY;
+                        }
+                        if (ocx < 1) ocx = 1; if (ocy < 1) ocy = 1;
+                        for (int dy = 0; dy < ocy; dy++)
+                            for (int dx = 0; dx < ocx; dx++)
+                                if (oy + dy < 6 && ox + dx < 6)
+                                    grid[oy + dy][ox + dx] = true;
+                    });
+
+                    // Check if source item's footprint fits at the destination position
+                    bool fits = true;
+                    for (int dy = 0; dy < bcy && fits; dy++)
+                        for (int dx = 0; dx < bcx && fits; dx++)
+                            if (grid[row + dy][col + dx]) fits = false;
+
+                    if (!fits) {
+                        LOG("[ItemHandler] Swap rejected: " + std::to_string(bcx) + "x" + std::to_string(bcy) + " item overlaps other items at (" + std::to_string(row) + "," + std::to_string(col) + ")");
+                        return;
+                    }
+                }
+            }
+
             if (bDesSackPos == 255 && bDesSackID > 0) {
                 BYTE bcx = 1, bcy = 1;
                 WORD wRefID = 0;
@@ -300,8 +368,8 @@ void OnItemMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
             UpdatePlayerStatsAndSend(clientSocket, charID);
         
             std::vector<BYTE> ackBuf; ackBuf.resize(4); ackBuf.push_back(0); 
-            ackBuf.push_back(payload[0]); ackBuf.push_back(payload[1]);
-            ackBuf.push_back(payload[6]); ackBuf.push_back(payload[7] == 255 ? bDesSackPos : payload[7]);
+            ackBuf.push_back(bSrcSackID); ackBuf.push_back(bSrcSackPos);
+            ackBuf.push_back(bDesSackID); ackBuf.push_back(bDesSackPos);
             
             PACKET_HEADER* ackHead = (PACKET_HEADER*)ackBuf.data(); ackHead->id = 0x420E; ackHead->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);
             EncryptPacket(ackBuf.data(), 0x42); SafeSend(clientSocket, (const char*)ackBuf.data(), ackBuf.size(), 0);
