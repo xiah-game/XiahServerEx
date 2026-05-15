@@ -1,0 +1,10 @@
+#pragma once
+#include "../ServerCore.h"
+#include "../XiahClient/csprotocol.h"
+#include "../DBHelper.h"
+#include "../Network/PacketRouter.h"
+
+void OnLoginCheckReq(SOCKET clientSocket, std::string& clientAccountName, BYTE* payload, WORD totalSize);
+void OnCharacterListReq(SOCKET clientSocket, const std::string& clientAccountName, BYTE* payload, WORD totalSize);
+void OnStartGameReq(SOCKET clientSocket, std::string& clientAccountName, BYTE* payload, WORD totalSize);
+void OnEndGameReq(SOCKET clientSocket, DWORD dwCharID, BYTE* payload, WORD totalSize);

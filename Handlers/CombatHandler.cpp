@@ -1,0 +1,357 @@
+#include "CombatHandler.h"
+#include "PartyHandler.h"
+#include "../MonsterAI.h"
+#include "../GameObjects/DropManager.h"
+#include "../UnitServer.h"
+#include "../DBHelper.h"
+#include "../GameObjects/MapInstance.h"
+#include "../Network/SessionMgr.h"
+
+extern std::map<DWORD, CMapInstance*> g_MapInstances;
+
+void OnPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
+    std::string hexDump = "";
+    for (int i = 0; i < totalSize && i < 32; i++) {
+        char buf[10]; sprintf(buf, "%02X ", payload[i]); hexDump += buf;
+    }
+    LOG("> RECEIVED 0x4003 PreAttackReq! Size: " + std::to_string(totalSize) + " Hex: " + hexDump);
+    
+    // Build 0x4004 PreAttackAck 鈥?echo payload back with id changed to 0x4004
+    // Layout: [4-byte header] + [payload bytes] + optional [bAttackSpeed if PC attacker]
+    std::vector<BYTE> ackBuf(totalSize + 4);
+    memcpy(ackBuf.data() + 4, payload, totalSize);
+    
+    if (totalSize >= 1 && payload[0] == 1) { // OBJTYPE_PC attacker: append bAttackSpeed
+        BYTE atkSpeed = 9; // default
+        if (totalSize >= 9) {
+            DWORD atkId = *(DWORD*)(payload + 1);
+            WORD atkPosX = *(WORD*)(payload + 5);
+            WORD atkPosY = *(WORD*)(payload + 7);
+            DWORD pMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+            if (g_MapInstances.count(pMapID)) {
+                std::lock_guard<std::mutex> lock(g_MapInstances[pMapID]->GetMutex());
+                sServerObject* pAtk = g_MapInstances[pMapID]->GetPlayer(atkId);
+                if (pAtk) {
+                    if (pAtk->wAtkSpeed > 0) atkSpeed = (BYTE)pAtk->wAtkSpeed;
+                    // Sync position from attack packet (client may not send ENDMOVE when auto-walking to target)
+                    if (atkPosX > 0 && atkPosX < 2048 && atkPosY > 0 && atkPosY < 2048) {
+                        int oldX = pAtk->wPosX, oldY = pAtk->wPosY;
+                        pAtk->wPosX = atkPosX;
+                        pAtk->wPosY = atkPosY;
+                        pAtk->fPosX = (float)atkPosX;
+                        pAtk->fPosY = (float)atkPosY;
+                        pAtk->bIsMoving = false;
+                        g_MapInstances[pMapID]->UpdatePlayerGrid(atkId, oldX, oldY, atkPosX, atkPosY);
+                    }
+                }
+            }
+        }
+        ackBuf.push_back(atkSpeed);
+    }
+
+    PACKET_HEADER* mh = (PACKET_HEADER*)ackBuf.data();
+    mh->id = 0x4004; // CS_BT_PREATTACK_ACK
+    mh->payloadSize = (WORD)(ackBuf.size() - 4);
+
+    EncryptPacket(ackBuf.data(), 0x42);
+    DWORD playerMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+    BroadcastPacketToMap(playerMapID, ackBuf);
+}
+
+void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
+    LOG(">> RECEIVED 0x4005 AttackHitReq! Size: " + std::to_string(totalSize));
+    std::string hexDump = "";
+    for (int i = 0; i < totalSize && i < 32; i++) {
+        char buf[10]; sprintf(buf, "%02X ", payload[i]); hexDump += buf;
+    }
+    LOG("[CombatHandler] ATTACK REQ 0x4005 Size: " + std::to_string(totalSize) + " Hex: " + hexDump);
+
+    if (totalSize >= 15) {
+        DWORD attackerId = *(DWORD*)(payload + 1);
+        DWORD targetId = *(DWORD*)(payload + 11);
+        DWORD playerMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+        if (!g_MapInstances.count(playerMapID)) return;
+        CMapInstance* mapInst = g_MapInstances[playerMapID];
+        
+        DWORD finalDmg = 50;
+        DWORD dwHpMax = 60000, dwHpCur = 60000;
+        BYTE bResult = 2; // Hit Success
+        BYTE bHitFlag = 0; // 0 = Normal, 1 = Critical
+        bool monsterDied = false;
+        bool needStatusRefresh = false;
+        DWORD attackerCharID = 0;
+        BYTE deadObjType = 0; DWORD deadObjID = 0; BYTE deadPropType = 0; DWORD deadExp = 0;
+        std::vector<DWORD> partyExpMembers;
+        {
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            sServerObject* pAttacker = mapInst->GetPlayer(attackerId);
+            if (pAttacker) {
+                finalDmg = pAttacker->dwTotalAtk;
+                if (finalDmg == 0) finalDmg = 50; // Fallback
+                
+                LOG("[CombatHandler] Player " + std::to_string(attackerId) + " attacks with Dmg: " + std::to_string(finalDmg) + " (TotalAtk: " + std::to_string(pAttacker->dwTotalAtk) + ")");
+            }
+            
+            sServerObject* pTarget = mapInst->GetMonster(targetId);
+            if (pTarget) {
+                // Use computed Init+Inc values from sServerObject, NOT raw template Init
+                DWORD monsterDef = pTarget->wWepDef;
+                WORD monsterAvoid = pTarget->wAvoidRatio;
+                
+                // Xiah Dodge Logic
+                DWORD playerAtkRating = 50 + (pAttacker ? pAttacker->dwTotalHit : 0);
+                float hitChance = (float)playerAtkRating / (float)(playerAtkRating + monsterAvoid);
+                
+                float roll = (float)(rand() % 10000) / 10000.0f;
+                
+                if (monsterAvoid > 0 && roll > hitChance) {
+                    bResult = 1; // 1 = Miss
+                    finalDmg = 0;
+                } else {
+                    // Damage variance +/-10%
+                    float dmgFloat = (float)finalDmg;
+                    float variance = 0.9f + ((float)(rand() % 2000) / 10000.0f);
+                    dmgFloat *= variance;
+                    
+                    // Critical Hit (uses player wCritical stat, fallback 5%)
+                    WORD critRate = (pAttacker && pAttacker->wCritical > 0) ? pAttacker->wCritical : 5;
+                    if ((WORD)(rand() % 100) < critRate) {
+                        dmgFloat *= 2.0f;
+                        bHitFlag = 1; // Critical hit!
+                    }
+                    
+                    finalDmg = (DWORD)dmgFloat;
+                    if (finalDmg > monsterDef) finalDmg -= monsterDef;
+                    else finalDmg = 1; 
+                }
+                
+                pTarget->dwHpCur = (pTarget->dwHpCur > finalDmg) ? (pTarget->dwHpCur - finalDmg) : 0;
+                
+                // Xiah AI Bitmask - NON-COMBAT (0) vs PASSIVE/ACTIVE
+                // Only set aggro if the monster is not completely passive (0)
+                if (pTarget->dwAttackPattern != 0) {
+                    pTarget->dwTargetID = attackerId; // Set aggro (Even if it is Passive (2), it will fight back now)
+                    LOG("[CombatHandler] SET AGGRO: Monster ObjID=" + std::to_string(targetId) + " -> targetID=" + std::to_string(attackerId) + " mapID=" + std::to_string(playerMapID));
+                    
+                    // Xiah AI Bitmask - ASSIST AGGRO / LINK AGGRO (Bit 3 / 8)
+                    if ((pTarget->dwAttackPattern & 8) != 0) {
+                        for (auto& pPair : mapInst->GetMonsters()) {
+                            auto& friendObj = pPair.second;
+                            if (friendObj.bObjectType == 3 && friendObj.dwHpCur > 0 && friendObj.dwTargetID == 0) {
+                                if (friendObj.bPropType == pTarget->bPropType) {
+                                    float dx = (float)friendObj.wPosX - (float)pTarget->wPosX;
+                                    float dy = (float)friendObj.wPosY - (float)pTarget->wPosY;
+                                    float dist = std::sqrt(dx*dx + dy*dy);
+                                    if (dist <= 20.0f) {
+                                        friendObj.dwTargetID = attackerId;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (pTarget->dwHpCur == 0) {
+                    pTarget->dwDeadTime = GetTickCount();
+                    pTarget->dwTargetID = 0;
+                    monsterDied = true;
+                    deadObjType = pTarget->bObjectType;
+                    deadObjID = pTarget->dwObjectID;
+                    deadPropType = pTarget->bPropType;
+                    deadExp = pTarget->dwExp;
+                    LOG("[CombatHandler] Monster " + g_NpcTemplates[deadPropType].szName + " died!");
+                    
+                    attackerCharID = attackerId - 400000000;
+                    
+                    // Party EXP sharing
+                    DWORD partyID = PartyManager::GetInstance().GetPartyID(attackerCharID);
+                    BYTE expShareMode = (partyID != 0) ? PartyManager::GetInstance().GetExpShareMode(partyID) : 0;
+                    
+                    if (partyID != 0 && expShareMode == 1) {
+                        // Shared mode: find nearby same-map party members
+                        auto members = PartyManager::GetInstance().GetMembers(partyID);
+                        std::vector<DWORD> nearbyMembers;
+                        
+                        // Get attacker position for distance check
+                        WORD atkX = 0, atkY = 0;
+                        sServerObject* pAtk2 = mapInst->GetPlayer(attackerId);
+                        if (pAtk2) { atkX = pAtk2->wPosX; atkY = pAtk2->wPosY; }
+                        
+                        for (auto& m : members) {
+                            SOCKET mSock = SessionMgr::GetInstance().GetSocketByCharID(m.dwCharID);
+                            if (mSock != INVALID_SOCKET) {
+                                DWORD mMap = SessionMgr::GetInstance().GetMapID(mSock);
+                                if (mMap == playerMapID) {
+                                    // Distance check (within AOI range ~50 tiles)
+                                    DWORD mObjID = m.dwCharID + 400000000;
+                                    sServerObject* mObj = mapInst->GetPlayer(mObjID);
+                                    if (mObj) {
+                                        float dx = (float)mObj->wPosX - (float)atkX;
+                                        float dy = (float)mObj->wPosY - (float)atkY;
+                                        float dist = std::sqrt(dx*dx + dy*dy);
+                                        if (dist <= 50.0f) {
+                                            nearbyMembers.push_back(m.dwCharID);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (nearbyMembers.empty()) nearbyMembers.push_back(attackerCharID);
+                        
+                        DWORD sharedExp = deadExp / (DWORD)nearbyMembers.size();
+                        if (sharedExp == 0) sharedExp = 1;
+                        
+                        LOG("[PARTY-EXP] Party " + std::to_string(partyID) + 
+                            " sharing " + std::to_string(deadExp) + " EXP among " + 
+                            std::to_string(nearbyMembers.size()) + " nearby members (" + 
+                            std::to_string(sharedExp) + " each)");
+                        
+                        for (DWORD memberCharID : nearbyMembers) {
+                            bool lvlUp = GrantExpToPlayer(memberCharID, sharedExp);
+                            if (memberCharID == attackerCharID) {
+                                needStatusRefresh = lvlUp;
+                            } else if (lvlUp) {
+                                SOCKET mSock = SessionMgr::GetInstance().GetSocketByCharID(memberCharID);
+                                if (mSock != INVALID_SOCKET) {
+                                    UpdatePlayerStatsAndSend(mSock, memberCharID);
+                                    DWORD mObjID = memberCharID + 400000000;
+                                    sServerObject* mObj = mapInst->GetPlayer(mObjID);
+                                    if (mObj) {
+                                        mObj->dwHpCur = mObj->dwHpMax;
+                                        mObj->wIpCur = mObj->wIpMax;
+                                    }
+                                }
+                            }
+                        }
+                        partyExpMembers = nearbyMembers;
+                    } else {
+                        // Individual mode or not in party
+                        needStatusRefresh = GrantExpToPlayer(attackerCharID, deadExp);
+                    }
+                    
+                    DropManager::GetInstance()->GenerateDrops(attackerId, *pTarget);
+                }
+                
+                
+                // Hit Stagger: push attack timer forward by wStaggerTime, but don't fully reset
+                // This gives a brief hit reaction without permanently preventing attacks
+                WORD staggerMs = g_NpcTemplates[pTarget->bPropType].wStaggerTime;
+                if (staggerMs > 0) {
+                    WORD atkInterval = g_NpcTemplates[pTarget->bPropType].wAtkInterval;
+                    if (atkInterval > staggerMs) {
+                        DWORD staggerTime = GetTickCount() - (atkInterval - staggerMs);
+                        if (staggerTime > pTarget->dwLastAttackTime) {
+                            pTarget->dwLastAttackTime = staggerTime;
+                        }
+                    }
+                }
+                dwHpMax = pTarget->dwHpMax;
+                dwHpCur = pTarget->dwHpCur;
+            }
+        } // unlock
+
+        // Send status refresh AFTER mutex release (avoids deadlock)
+        if (needStatusRefresh && attackerCharID != 0) {
+            // Recalculate all stats (level affects HP/IP max) and send 0x4414
+            UpdatePlayerStatsAndSend(clientSocket, attackerCharID);
+            
+            // Restore HP/IP to max after level-up
+            DWORD dwObjectID = attackerCharID + 400000000;
+            {
+                std::lock_guard<std::mutex> lock2(mapInst->GetMutex());
+                sServerObject* pObj = mapInst->GetPlayer(dwObjectID);
+                if (pObj) {
+                    pObj->dwHpCur = pObj->dwHpMax;
+                    pObj->wIpCur = pObj->wIpMax;
+                }
+            }
+            // Update DB
+            std::string hpQ = "UPDATE CHAR_POWER SET dwHpCur = dwHpMax, wIpCur = (SELECT P2.wIpMax FROM CHAR_POWER P2 WHERE P2.dwCharID = CHAR_POWER.dwCharID) WHERE dwCharID = " + std::to_string(attackerCharID);
+            DBHelper::GetInstance().ExecuteUpdate(hpQ);
+            
+            // Send HP/IP bar update to client
+            {
+                std::lock_guard<std::mutex> lock3(mapInst->GetMutex());
+                sServerObject* pObj = mapInst->GetPlayer(dwObjectID);
+                if (pObj) {
+                    std::vector<BYTE> hpBuf(4);
+                    auto push4 = [&](DWORD d) { hpBuf.push_back(d&0xFF); hpBuf.push_back((d>>8)&0xFF); hpBuf.push_back((d>>16)&0xFF); hpBuf.push_back((d>>24)&0xFF); };
+                    auto push2 = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
+                    push4(pObj->dwHpMax);
+                    push4(pObj->dwHpCur);
+                    push2(pObj->wIpMax);
+                    push2(pObj->wIpCur);
+                    hpBuf.push_back(1); // bType = 1 (with restore effect)
+                    PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
+                    hpHead->id = 0x3B0D;
+                    hpHead->payloadSize = hpBuf.size() - 4;
+                    EncryptPacket(hpBuf.data(), 0x42);
+                    SafeSend(clientSocket, (char*)hpBuf.data(), hpBuf.size(), 0);
+                }
+            }
+        }
+
+        // 1. Send 0x4006 (Damage ACK to attacker)
+        std::vector<BYTE> ackBuf; ackBuf.reserve(64);
+        ackBuf.push_back(bResult);
+        for (int i=0; i<10; i++) ackBuf.push_back(payload[i]); // bAtkType to bAtkHeight
+        ackBuf.push_back(payload[10]); // bDefType
+        for (int i=11; i<15; i++) ackBuf.push_back(payload[i]); // dwDefID
+        
+        auto pushDWord = [&](std::vector<BYTE>& buf, DWORD d) { buf.push_back(d&0xFF); buf.push_back((d>>8)&0xFF); buf.push_back((d>>16)&0xFF); buf.push_back(d>>24); };
+        
+        pushDWord(ackBuf, dwHpMax); // dwDefHpMax
+        pushDWord(ackBuf, dwHpCur); // dwDefHpCur
+        pushDWord(ackBuf, finalDmg); // wDamage
+        pushDWord(ackBuf, 10);      // dwExp
+        ackBuf.push_back(payload[15]); // bAttackMode
+        ackBuf.push_back(bHitFlag); // bHitFlag (1 = Critical)
+        
+        std::vector<BYTE> fullAck; fullAck.resize(4); fullAck.insert(fullAck.end(), ackBuf.begin(), ackBuf.end());
+        PACKET_HEADER* ackHead = (PACKET_HEADER*)fullAck.data(); ackHead->id = 0x4006; ackHead->payloadSize = ackBuf.size();
+        EncryptPacket(fullAck.data(), 0x42);
+        BroadcastPacketToMap(playerMapID, fullAck);
+
+        // 3. Send 0x3510 (CS_NC_STATUSCHANGE_ACK) to trigger Death Animation
+        if (monsterDied) {
+            std::vector<BYTE> animBuf; animBuf.resize(4);
+            animBuf.push_back(deadObjType); // bObjType
+            pushDWord(animBuf, deadObjID);
+            animBuf.push_back(3); // bStatus = 3 (Dead)
+            animBuf.push_back(0); // wValue1 L
+            animBuf.push_back(0); // wValue1 H
+            animBuf.push_back(0xFF); // bValue2
+            
+            PACKET_HEADER* animHead = (PACKET_HEADER*)animBuf.data(); animHead->id = 0x3510; animHead->payloadSize = animBuf.size() - sizeof(PACKET_HEADER);
+            EncryptPacket(animBuf.data(), 0x42);
+            BroadcastPacketToMap(playerMapID, animBuf);
+            
+            // Send CS_BT_KILLSUCCESS_ACK (0x4034) to trigger EXP acquire VFX
+            DWORD displayExp = deadExp;
+            if (!partyExpMembers.empty()) {
+                displayExp = deadExp / (DWORD)partyExpMembers.size();
+                if (displayExp == 0) displayExp = 1;
+                // Send to all party members on same map
+                for (DWORD memberCharID : partyExpMembers) {
+                    SOCKET mSock = SessionMgr::GetInstance().GetSocketByCharID(memberCharID);
+                    if (mSock != INVALID_SOCKET) {
+                        std::vector<BYTE> killBuf; killBuf.resize(4);
+                        killBuf.push_back(deadObjType);
+                        pushDWord(killBuf, deadObjID);
+                        pushDWord(killBuf, displayExp);
+                        PACKET_HEADER* killHead = (PACKET_HEADER*)killBuf.data(); killHead->id = 0x4034; killHead->payloadSize = killBuf.size() - sizeof(PACKET_HEADER);
+                        EncryptPacket(killBuf.data(), 0x42);
+                        SafeSend(mSock, (char*)killBuf.data(), killBuf.size(), 0);
+                    }
+                }
+            } else {
+                std::vector<BYTE> killBuf; killBuf.resize(4);
+                killBuf.push_back(deadObjType);
+                pushDWord(killBuf, deadObjID);
+                pushDWord(killBuf, displayExp);
+                PACKET_HEADER* killHead = (PACKET_HEADER*)killBuf.data(); killHead->id = 0x4034; killHead->payloadSize = killBuf.size() - sizeof(PACKET_HEADER);
+                EncryptPacket(killBuf.data(), 0x42);
+                SafeSend(clientSocket, (char*)killBuf.data(), killBuf.size(), 0);
+            }
+        }
+    }
+}

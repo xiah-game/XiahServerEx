@@ -1,0 +1,521 @@
+#include "DropManager.h"
+#include "../DBHelper.h"
+#include "../UnitServer.h"
+#include "../Network/SystemMessage.h"
+#include <iostream>
+
+class BufferWriter {
+public:
+    std::vector<BYTE> buf;
+    BufferWriter() {}
+    void write(const void* data, size_t size) {
+        const BYTE* p = (const BYTE*)data;
+        buf.insert(buf.end(), p, p + size);
+    }
+    template<typename T> void write(T val) { write(&val, sizeof(T)); }
+    void writeString(const std::string& str) {
+        std::string trimmed = str;
+        size_t endpos = trimmed.find_last_not_of(" \n\r\t");
+        if (endpos != std::string::npos) trimmed = trimmed.substr(0, endpos + 1);
+        else trimmed = "";
+        WORD len = trimmed.size();
+        write<WORD>(len);
+        if (len > 0) write(trimmed.data(), len);
+    }
+};
+
+// Shared map item ID counter
+static DWORD s_nextMapItemID = 5000000;
+
+DropManager* DropManager::s_instance = nullptr;
+
+DropManager* DropManager::GetInstance() {
+    if (!s_instance) {
+        s_instance = new DropManager();
+    }
+    return s_instance;
+}
+
+void DropManager::LoadDropTables() {
+    // Load legacy NPC_ROOTITEM (fallback for NPCs without drop groups)
+    m_rootItems.clear();
+    
+    std::string q = "SELECT bNpcType, dwItemID, wItemRatio FROM NPC_ROOTITEM";
+    int loadedCount = 0;
+    
+    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT stmt) {
+        BYTE bType;
+        DWORD itemID;
+        WORD ratio;
+        
+        SQLLEN cbType, cbItemID, cbRatio;
+        SQLGetData(stmt, 1, SQL_C_UTINYINT, &bType, 0, &cbType);
+        SQLGetData(stmt, 2, SQL_C_ULONG, &itemID, 0, &cbItemID);
+        SQLGetData(stmt, 3, SQL_C_USHORT, &ratio, 0, &cbRatio);
+        
+        sRootItem ri;
+        ri.dwItemID = itemID;
+        ri.wItemRatio = ratio;
+        m_rootItems[bType].push_back(ri);
+        loadedCount++;
+    });
+    
+    LOG("[DropManager] Loaded " + std::to_string(loadedCount) + " legacy NPC_ROOTITEM entries.");
+    
+    // Load new Drop Group system
+    LoadDropGroups();
+}
+
+void DropManager::LoadDropGroups() {
+    m_dropGroups.clear();
+    
+    // Load groups
+    std::string qGroup = "SELECT bNpcType, dwGroupID, wDropRate, bMinDrop, bMaxDrop FROM NPC_DROPGROUP ORDER BY bNpcType, dwGroupID";
+    int groupCount = 0;
+    
+    DBHelper::GetInstance().ExecuteQuery(qGroup, [&](SQLHSTMT stmt) {
+        BYTE bNpcType = 0;
+        int dwGroupID = 0, wDropRate = 1, bMinDrop = 1, bMaxDrop = 1;
+        SQLLEN c[5];
+        
+        SQLGetData(stmt, 1, SQL_C_UTINYINT, &bNpcType, 0, &c[0]);
+        SQLGetData(stmt, 2, SQL_C_SLONG, &dwGroupID, 0, &c[1]);
+        SQLGetData(stmt, 3, SQL_C_SLONG, &wDropRate, 0, &c[2]);
+        SQLGetData(stmt, 4, SQL_C_SLONG, &bMinDrop, 0, &c[3]);
+        SQLGetData(stmt, 5, SQL_C_SLONG, &bMaxDrop, 0, &c[4]);
+        
+        sDropGroup group;
+        group.bNpcType = bNpcType;
+        group.dwGroupID = (DWORD)dwGroupID;
+        group.wDropRate = (c[2] != SQL_NULL_DATA) ? (WORD)wDropRate : 1;
+        group.bMinDrop = (c[3] != SQL_NULL_DATA) ? (BYTE)bMinDrop : 1;
+        group.bMaxDrop = (c[4] != SQL_NULL_DATA) ? (BYTE)bMaxDrop : 1;
+        
+        m_dropGroups[bNpcType].push_back(group);
+        groupCount++;
+    });
+    
+    // Build index: dwGroupID -> pointer to loaded sDropGroup
+    std::map<DWORD, sDropGroup*> groupIndex;
+    for (auto& pair : m_dropGroups) {
+        for (auto& group : pair.second) {
+            groupIndex[group.dwGroupID] = &group;
+        }
+    }
+    
+    // Load group items
+    std::string qItems = "SELECT dwGroupID, dwItemID, wWeight FROM NPC_DROPGROUPITEM ORDER BY dwGroupID";
+    int itemCount = 0;
+    
+    DBHelper::GetInstance().ExecuteQuery(qItems, [&](SQLHSTMT stmt) {
+        int gid = 0, iid = 0, w = 100;
+        SQLLEN c[3];
+        SQLGetData(stmt, 1, SQL_C_SLONG, &gid, 0, &c[0]);
+        SQLGetData(stmt, 2, SQL_C_SLONG, &iid, 0, &c[1]);
+        SQLGetData(stmt, 3, SQL_C_SLONG, &w, 0, &c[2]);
+        
+        auto it = groupIndex.find((DWORD)gid);
+        if (it != groupIndex.end()) {
+            sDropGroupItem item;
+            item.dwItemID = (DWORD)iid;
+            item.wWeight = (c[2] != SQL_NULL_DATA) ? (WORD)w : 100;
+            it->second->items.push_back(item);
+            itemCount++;
+        }
+    });
+    
+    LOG("[DropManager] Loaded " + std::to_string(groupCount) + " drop groups with " + std::to_string(itemCount) + " items.");
+}
+
+extern void BroadcastPacketToMap(DWORD mapID, const std::vector<BYTE>& packet);
+
+// Helper: drop a single item to the map
+void DropManager::DropItemToMap(DWORD killerID, const sServerObject& obj, DWORD itemRefID, bool useRandomOffset) {
+    auto tplIt = g_ItemTemplates.find((WORD)itemRefID);
+    if (tplIt == g_ItemTemplates.end()) {
+        LOG("[Drop] Item RefID " + std::to_string(itemRefID) + " not found in ITEMTEMPLATE!");
+        return;
+    }
+    const sItemTemplate& tpl = tplIt->second;
+    
+    WORD dropX = obj.wPosX;
+    WORD dropY = obj.wPosY;
+    if (useRandomOffset) {
+        dropX += (rand() % 11) - 5;
+        dropY += (rand() % 11) - 5;
+    }
+    
+    BufferWriter bw;
+    bw.write<BYTE>(0);      // bResult
+    bw.write<WORD>(1);      // wItemNum
+    bw.write<DWORD>(obj.dwMapID);
+    bw.write<WORD>(dropX);
+    bw.write<WORD>(dropY);
+    bw.write<BYTE>(0);      // bHeight
+    
+    s_nextMapItemID++;
+    bw.write<DWORD>(s_nextMapItemID);
+    
+    bw.write<BYTE>(tpl.bType);
+    bw.write<WORD>(tpl.wVisualID);
+    bw.writeString(tpl.szName);
+    
+    DWORD dbItemID = rand() * rand();
+    bw.write<DWORD>(dbItemID);
+    bw.write<DWORD>(1);         // amount
+    bw.write<DWORD>(killerID);  // ownerID
+    bw.write<BYTE>(0);  // bType
+    bw.write<BYTE>(0);  // bFESocket
+    bw.write<BYTE>(0);  // bChangeItem
+    
+    // Create map drop entry
+    sMapDrop newDrop;
+    newDrop.dwMapItemID = s_nextMapItemID;
+    newDrop.dbItemID = dbItemID;
+    newDrop.wRefID = tpl.wRefID;
+    newDrop.amount = 1;
+    newDrop.ownerID = killerID;
+    newDrop.dropTime = GetTickCount();
+    newDrop.bType = tpl.bType;
+    newDrop.wVisualID = tpl.wVisualID;
+    newDrop.name = tpl.szName;
+    newDrop.isMoney = false;
+    memset(newDrop.nData, 0, sizeof(newDrop.nData));
+    
+    newDrop.nData[0] = tpl.nData1;  newDrop.nData[1] = tpl.nData2;
+    newDrop.nData[2] = tpl.nData3;  newDrop.nData[3] = tpl.nData4;
+    newDrop.nData[4] = tpl.nData5;  newDrop.nData[5] = tpl.nData6;
+    newDrop.nData[6] = tpl.nData7;  newDrop.nData[7] = tpl.nData8;
+    newDrop.nData[8] = tpl.nData9;  newDrop.nData[9] = tpl.nData10;
+    
+    // Xiah Socket Rolling Logic
+    if (tpl.bType <= 4) {
+        int wRatio = rand() % 6000;
+        if (tpl.bType == 1 || tpl.bType == 2) {
+            if (wRatio < 30) {
+                newDrop.nData[18] = 1; newDrop.nData[19] = 1;
+            } else if (wRatio < 630) {
+                newDrop.nData[18] = 1;
+            }
+        } else if (tpl.bType == 3 || tpl.bType == 4) {
+            if (wRatio < 30) {
+                newDrop.nData[18] = 1;
+            }
+        }
+    }
+    
+    m_activeDrops[s_nextMapItemID] = newDrop;
+    
+    std::vector<BYTE> finalBuf(4 + bw.buf.size());
+    PACKET_HEADER* head = (PACKET_HEADER*)finalBuf.data();
+    head->id = 0x420C;
+    head->payloadSize = (WORD)bw.buf.size();
+    memcpy(finalBuf.data() + 4, bw.buf.data(), bw.buf.size());
+    EncryptPacket(finalBuf.data(), 0x42);
+    BroadcastPacketToMap(obj.dwMapID, finalBuf);
+    
+    LOG("[Drop] Dropped Item: " + tpl.szName + " (RefID: " + std::to_string(tpl.wRefID) + ")");
+}
+
+// Helper: drop money to the map
+void DropManager::DropMoneyToMap(DWORD killerID, const sServerObject& obj, DWORD amount) {
+    int offsetX = (rand() % 31) - 15;
+    int offsetY = (rand() % 31) - 15;
+    WORD dropX = obj.wPosX + offsetX;
+    WORD dropY = obj.wPosY + offsetY;
+    std::string moneyName = "\xC7\xAE";
+    
+    BufferWriter bw;
+    bw.write<BYTE>(0);      // bResult
+    bw.write<WORD>(1);      // wItemNum
+    bw.write<DWORD>(obj.dwMapID);
+    bw.write<WORD>(dropX);
+    bw.write<WORD>(dropY);
+    bw.write<BYTE>(0);      // bHeight
+    
+    s_nextMapItemID++;
+    bw.write<DWORD>(s_nextMapItemID);
+    
+    bw.write<BYTE>(32);     // bType = 0x20 (money)
+    bw.write<WORD>(10050);  // wVisualID
+    bw.writeString(moneyName);
+    
+    DWORD dbItemID = rand() * rand();
+    bw.write<DWORD>(dbItemID);
+    bw.write<DWORD>(amount);
+    bw.write<DWORD>(killerID);
+    bw.write<BYTE>(0);  // bType
+    bw.write<BYTE>(0);  // bFESocket
+    bw.write<BYTE>(0);  // bChangeItem
+    
+    sMapDrop newDrop;
+    newDrop.dwMapItemID = s_nextMapItemID;
+    newDrop.dbItemID = dbItemID;
+    newDrop.wRefID = 20423;
+    newDrop.amount = amount;
+    newDrop.ownerID = killerID;
+    newDrop.dropTime = GetTickCount();
+    newDrop.bType = 32;
+    newDrop.wVisualID = 10050;
+    newDrop.name = moneyName;
+    newDrop.isMoney = true;
+    memset(newDrop.nData, 0, sizeof(newDrop.nData));
+    
+    m_activeDrops[s_nextMapItemID] = newDrop;
+    
+    std::vector<BYTE> finalBuf(4 + bw.buf.size());
+    PACKET_HEADER* head = (PACKET_HEADER*)finalBuf.data();
+    head->id = 0x420C;
+    head->payloadSize = (WORD)bw.buf.size();
+    memcpy(finalBuf.data() + 4, bw.buf.data(), bw.buf.size());
+    EncryptPacket(finalBuf.data(), 0x42);
+    BroadcastPacketToMap(obj.dwMapID, finalBuf);
+    
+    LOG("[Drop] Dropped " + std::to_string(amount) + " Money!");
+}
+
+void DropManager::GenerateDrops(DWORD killerID, const sServerObject& obj) {
+    auto tplIt = g_NpcTemplates.find(obj.bPropType);
+    if (tplIt == g_NpcTemplates.end()) return;
+    
+    // ===== Item Drop (wRootItem = master gate, 1:N) =====
+    if (obj.wRootItem > 0 && (rand() % obj.wRootItem == 0)) {
+        
+        // Try new Drop Group system first
+        auto groupIt = m_dropGroups.find(obj.bPropType);
+        if (groupIt != m_dropGroups.end() && !groupIt->second.empty()) {
+            // New system: iterate all groups for this NPC type
+            for (const auto& group : groupIt->second) {
+                if (group.wDropRate == 0) continue;
+                if (group.items.empty()) continue;
+                
+                // Per-group 1/N probability
+                if (rand() % group.wDropRate != 0) continue;
+                
+                // Determine pick count: bMinDrop ~ bMaxDrop
+                int picks = group.bMinDrop;
+                if (group.bMaxDrop > group.bMinDrop)
+                    picks += rand() % (group.bMaxDrop - group.bMinDrop + 1);
+                
+                // Calculate total weight
+                int totalWeight = 0;
+                for (const auto& item : group.items)
+                    totalWeight += item.wWeight;
+                if (totalWeight <= 0) continue;
+                
+                // Weighted random pick N items
+                for (int n = 0; n < picks; n++) {
+                    int roll = rand() % totalWeight;
+                    int cumulative = 0;
+                    for (const auto& item : group.items) {
+                        cumulative += item.wWeight;
+                        if (roll < cumulative) {
+                            DropItemToMap(killerID, obj, item.dwItemID);
+                            break;
+                        }
+                    }
+                }
+            }
+        } else {
+            // Legacy fallback: use NPC_ROOTITEM weighted random
+            auto dropIt = m_rootItems.find(obj.bPropType);
+            if (dropIt != m_rootItems.end() && !dropIt->second.empty()) {
+                int totalWeight = 0;
+                for (const auto& item : dropIt->second) totalWeight += item.wItemRatio;
+                
+                if (totalWeight > 0) {
+                    int itemRoll = rand() % totalWeight;
+                    int currentWeight = 0;
+                    DWORD droppedItemID = 0;
+                    
+                    for (const auto& item : dropIt->second) {
+                        currentWeight += item.wItemRatio;
+                        if (itemRoll < currentWeight) {
+                            droppedItemID = item.dwItemID;
+                            break;
+                        }
+                    }
+                    
+                    if (droppedItemID > 0) {
+                        DropItemToMap(killerID, obj, droppedItemID);
+                    }
+                }
+            }
+        }
+    }
+    
+    // ===== Money Drop (wRootMoney, 1:N) =====
+    if (obj.wRootMoney > 0 && (rand() % obj.wRootMoney == 0)) {
+        DWORD moneyAmount = obj.bPropType * 10 + (rand() % 100);
+        DropMoneyToMap(killerID, obj, moneyAmount);
+    }
+}
+
+void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payload, WORD size) {
+    if (size < 21) return;
+    DWORD mapID = *((DWORD*)(payload + 0));
+    DWORD dbItemID = *((DWORD*)(payload + 4));
+    WORD x = *((WORD*)(payload + 8));
+    WORD y = *((WORD*)(payload + 10));
+    DWORD mapItemID = *((DWORD*)(payload + 13)); 
+    DWORD amount = *((DWORD*)(payload + 17));
+    
+    auto it = m_activeDrops.end();
+    for (auto i = m_activeDrops.begin(); i != m_activeDrops.end(); ++i) {
+        if (i->second.dbItemID == dbItemID) {
+            it = i;
+            break;
+        }
+    }
+    
+    if (it == m_activeDrops.end()) {
+        LOG("[DropManager] Pick failed, item not found or already picked! dbItemID: " + std::to_string(dbItemID));
+        return;
+    }
+    
+    sMapDrop drop = it->second;
+    m_activeDrops.erase(it); // Remove from map
+    
+    LOG("[DropManager] Picked up item! RefID: " + std::to_string(drop.wRefID) + " Amount: " + std::to_string(drop.amount));
+    
+    if (drop.isMoney) {
+        // Remove from map
+        std::vector<BYTE> rmBuf(8);
+        PACKET_HEADER* head = (PACKET_HEADER*)rmBuf.data();
+        head->id = 0x4206; // CS_IM_REMOVELISTFROMMAP_ACK
+        head->payloadSize = 4;
+        *((DWORD*)(rmBuf.data() + 4)) = drop.dwMapItemID;
+        EncryptPacket(rmBuf.data(), 0x42);
+        SafeSend(clientSocket, (const char*)rmBuf.data(), rmBuf.size(), 0);
+        
+        // Add money directly to database
+        std::string qUpdate = "UPDATE CHAR_DATA SET dwMoney = dwMoney + " + std::to_string(drop.amount) + " WHERE dwCharID = " + std::to_string(playerID);
+        DBHelper::GetInstance().ExecuteUpdate(qUpdate);
+        
+        // Fetch new balance
+        std::string qSelect = "SELECT dwMoney FROM CHAR_DATA WHERE dwCharID = " + std::to_string(playerID);
+        auto moneyCallback = [clientSocket, drop](SQLHSTMT hStmt) {
+            INT64 currentMoney = 0;
+            SQLLEN cbMoney = 0;
+            SQLGetData(hStmt, 1, SQL_C_SBIGINT, &currentMoney, 0, &cbMoney);
+            
+            std::vector<BYTE> moneyBuf(13);
+            PACKET_HEADER* mHead = (PACKET_HEADER*)moneyBuf.data();
+            mHead->id = 0x3B13; // CS_IF_CHARMONEY_ACK in 1080 client
+            mHead->payloadSize = 9;
+            *((INT64*)(moneyBuf.data() + 4)) = (INT64)currentMoney;
+            moneyBuf[12] = 0; // bFreeUser
+            EncryptPacket(moneyBuf.data(), 0x42);
+            SafeSend(clientSocket, (const char*)moneyBuf.data(), moneyBuf.size(), 0);
+            LOG("[DropManager] Picked up money. Sent new balance using 0x3B13.");
+            
+            // Send the system message for gaining money
+            SystemMessage::SendHelpMessage(clientSocket, SystemMessage::MsgType::PICK_ITEM, "\xC1\xBD", drop.amount);
+        };
+        DBHelper::GetInstance().ExecuteQuery(qSelect, moneyCallback);
+        
+    } else {
+        // Get new item's grid dimensions
+        BYTE bcx = 1, bcy = 1;
+        if (g_ItemTemplates.count(drop.wRefID)) {
+            bcx = g_ItemTemplates[drop.wRefID].bCX;
+            bcy = g_ItemTemplates[drop.wRefID].bCY;
+        }
+        
+        BYTE freePos = FindFreeSackPos(playerID, 1, bcx, bcy);
+        if (freePos == 255) {
+            LOG("[DropManager] Bag full for player " + std::to_string(playerID));
+            return;
+        }
+        
+        // Insert into ITEM table
+        DWORD newDbItemID = 0;
+        std::string insItem = "SET NOCOUNT ON; INSERT INTO ITEM (wRefID, bType, bKind, wVisualID, szName, dwCost, wLevel, bCharType, wAmount, nBasicData1, nBasicData2, nBasicData3, nBasicData4, nBasicData5) SELECT wRefID, bType, bKind, wVisualID, szName, dwCost, wLevel, bCharType, wAmount, nBasicData1, nBasicData2, nBasicData3, nBasicData4, nBasicData5 FROM ITEMTEMPLATE WHERE wRefID = " + std::to_string(drop.wRefID) + "; SELECT @@IDENTITY;";
+        
+        DBHelper::GetInstance().ExecuteQuery(insItem, [&](SQLHSTMT hStmt) {
+            SQLLEN c;
+            SQLGetData(hStmt, 1, SQL_C_ULONG, &newDbItemID, 0, &c);
+        });
+        
+        if (newDbItemID == 0) { // Extreme fallback
+            newDbItemID = rand() * rand();
+        } else {
+            if (drop.bType < 10) {
+                // Insert the memory-rolled stats!
+                std::string dVals = "";
+                for (int i=0; i<25; i++) {
+                    dVals += std::to_string(drop.nData[i]);
+                    if (i < 24) dVals += ", ";
+                }
+                std::string insData = "INSERT INTO ITEMDATA (dwItemID, nData1, nData2, nData3, nData4, nData5, nData6, nData7, nData8, nData9, nData10, nData11, nData12, nData13, nData14, nData15, nData16, nData17, nData18, nData19, nData20, nData21, nData22, nData23, nData24, nData25) VALUES (" + std::to_string(newDbItemID) + ", " + dVals + ")";
+                DBHelper::GetInstance().ExecuteQuery(insData, [](SQLHSTMT){});
+            }
+        }
+        
+        // Insert into SACKITEM
+        std::string insSack = "INSERT INTO SACKITEM (dwCharID, bSackPos, dwItemID) VALUES (" + std::to_string(playerID) + ", " + std::to_string(freePos) + ", " + std::to_string(newDbItemID) + ")";
+        DBHelper::GetInstance().ExecuteQuery(insSack, [](SQLHSTMT){});
+        
+        // Remove from map
+        std::vector<BYTE> rmBuf(8);
+        PACKET_HEADER* head = (PACKET_HEADER*)rmBuf.data();
+        head->id = 0x4206; // CS_IM_REMOVELISTFROMMAP_ACK
+        head->payloadSize = 4;
+        *((DWORD*)(rmBuf.data() + 4)) = drop.dwMapItemID;
+        EncryptPacket(rmBuf.data(), 0x42);
+        SafeSend(clientSocket, (const char*)rmBuf.data(), rmBuf.size(), 0);
+        
+        // Use BufferWriter for 0x420A (AddOnSack)
+        BufferWriter bw;
+        bw.write<BYTE>(1); // bSackID (SACKTYPE__DEFAULT)
+        bw.write<BYTE>(freePos - 20); // bSackPos
+        
+        // GetItemData format
+        bw.write<DWORD>(newDbItemID);
+        bw.write<WORD>(drop.wRefID);
+        bw.write<BYTE>(drop.bType);
+        bw.write<BYTE>(0); // bItemKind
+        bw.write<WORD>(drop.wVisualID);
+        bw.writeString(drop.name);
+        bw.write<DWORD>(0); // dwPrice
+        bw.write<WORD>(0); // wLevel
+        bw.write<BYTE>(0); // bNeedCharType
+        bw.write<WORD>((WORD)drop.amount); // wAmount
+        
+        // Append weapon/armor stats if needed (zeros for now to avoid crash if client reads it)
+        if (drop.bType < 10) {
+            bw.write<WORD>(0); // m_wNeedLevel
+            bw.write<WORD>(0); // m_wNeedDex
+            bw.write<WORD>(0); // m_wNeedStr
+            bw.write<WORD>(0); // m_wNeedInt
+            bw.write<DWORD>(0); // m_dwNeedExp
+            bw.write<BYTE>(0); // m_bKind
+            bw.write<DWORD>(0); // m_dwDurability
+            bw.write<DWORD>(0); // m_dwDurabilityMax
+            bw.write<DWORD>(0); // m_dwMaxExp
+            for(int i=0; i<5; i++) bw.write<int>(drop.nData[i]); // 1~5
+            for(int i=0; i<3; i++) bw.write<int>(drop.nData[15+i]); // 16~18
+            bw.write<BYTE>(drop.nData[18]); // socket count
+            bw.write<BYTE>(0); // socket values ... simplified, let's just pad zeros
+            for(int i=0; i<30; i++) bw.write<BYTE>(0); // pad safely to cover socket data and attributes
+        }
+        
+        // HT_1116 : m_wRebuithValue
+        bw.write<WORD>(0);
+        
+        std::vector<BYTE> addBuf(4 + bw.buf.size()); 
+        head = (PACKET_HEADER*)addBuf.data();
+        head->id = 0x420A;
+        head->payloadSize = (WORD)bw.buf.size();
+        memcpy(addBuf.data() + 4, bw.buf.data(), bw.buf.size());
+        
+        EncryptPacket(addBuf.data(), 0x42);
+        SafeSend(clientSocket, (const char*)addBuf.data(), addBuf.size(), 0);
+        
+        std::string itemName = "Unknown Item";
+        if (g_ItemTemplates.count(drop.wRefID)) {
+            itemName = g_ItemTemplates[drop.wRefID].szName;
+        }
+        SystemMessage::SendHelpMessage(clientSocket, SystemMessage::MsgType::PICK_ITEM, itemName, drop.amount);
+    }
+}
