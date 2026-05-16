@@ -28,7 +28,13 @@ int SafeSend(SOCKET s, const char* buf, int len, int flags) {
     if (s == INVALID_SOCKET) return SOCKET_ERROR;
     auto mtx = GetSocketMutex(s);
     std::lock_guard<std::mutex> lock(*mtx);
-    return send(s, buf, len, flags);
+    int totalSent = 0;
+    while (totalSent < len) {
+        int sent = send(s, buf + totalSent, len - totalSent, flags);
+        if (sent == SOCKET_ERROR || sent == 0) return SOCKET_ERROR;
+        totalSent += sent;
+    }
+    return totalSent;
 }
 
 sServerConfig g_Config;

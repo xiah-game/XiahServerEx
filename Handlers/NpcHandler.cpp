@@ -495,9 +495,17 @@ void OnSellItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
     SafeSend(clientSocket, (const char*)mBuf.data(), mBuf.size(), 0);
 
     if (dbAmount <= amountToSell) {
-        std::string delSack = "DELETE FROM SACKITEM WHERE dwItemID = " + std::to_string(dwItemID);
+        // Delete order follows spSellItemAtNpc: SACKITEM -> ITEMDATA -> ITEM
+        // ITEMDATA has FK_ITEMDATA_ITEM referencing ITEM.dwItemID, must be deleted first
+        BYTE absolutePos = bSackPos;
+        if (bSackID == 1) absolutePos = 20 + bSackPos;
+        else if (bSackID == 2) absolutePos = 60 + bSackPos;
+        else if (bSackID == 3) absolutePos = 100 + bSackPos;
+        std::string delSack = "DELETE FROM SACKITEM WHERE dwCharID = " + std::to_string(charID) + " AND bSackPos = " + std::to_string(absolutePos) + " AND dwItemID = " + std::to_string(dwItemID);
+        std::string delItemData = "DELETE FROM ITEMDATA WHERE dwItemID = " + std::to_string(dwItemID);
         std::string delItem = "DELETE FROM ITEM WHERE dwItemID = " + std::to_string(dwItemID);
         DBHelper::GetInstance().ExecuteUpdate(delSack);
+        DBHelper::GetInstance().ExecuteUpdate(delItemData);
         DBHelper::GetInstance().ExecuteUpdate(delItem);
 
         std::vector<BYTE> rBuf(7);

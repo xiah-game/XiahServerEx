@@ -45,5 +45,12 @@ set(SOURCES
 
 add_executable(XiahServerEx ${SOURCES})
 
+# Disable aggressive optimization in Release to avoid UB from uninitialized vars
+if(MSVC)
+    target_compile_options(XiahServerEx PRIVATE /W3)
+    # Release: use /O1 (size opt) instead of /O2 (speed opt) for safer behavior
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O1")
+endif()
+
 # Link Winsock and ODBC
 target_link_libraries(XiahServerEx wsock32 ws2_32 odbc32)

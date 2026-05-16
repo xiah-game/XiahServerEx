@@ -495,24 +495,65 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
         bw.write<WORD>((WORD)drop.amount); // wAmount
         
         // Append weapon/armor stats if needed (zeros for now to avoid crash if client reads it)
-        if (drop.bType < 10) {
+        if (drop.bType >= 1 && drop.bType <= 9) {
             bw.write<WORD>(0); // m_wNeedLevel
             bw.write<WORD>(0); // m_wNeedDex
             bw.write<WORD>(0); // m_wNeedStr
-            bw.write<WORD>(0); // m_wNeedInt
-            bw.write<DWORD>(0); // m_dwNeedExp
-            bw.write<BYTE>(0); // m_bKind
-            bw.write<DWORD>(0); // m_dwDurability
-            bw.write<DWORD>(0); // m_dwDurabilityMax
-            bw.write<DWORD>(0); // m_dwMaxExp
-            for(int i=0; i<5; i++) bw.write<int>(drop.nData[i]); // 1~5
-            for(int i=0; i<3; i++) bw.write<int>(drop.nData[15+i]); // 16~18
-            bw.write<BYTE>(drop.nData[18]); // socket count
-            bw.write<BYTE>(0); // socket values ... simplified, let's just pad zeros
-            for(int i=0; i<30; i++) bw.write<BYTE>(0); // pad safely to cover socket data and attributes
+            bw.write<WORD>(0); // m_wNeedSus
+            bw.write<WORD>(0); // m_wNeedVit
+            bw.write<BYTE>(0); // m_bDecrDurRate
+            bw.write<WORD>(0); // m_wCurDur
+            bw.write<WORD>(0); // m_wMaxDur
+            bw.write<WORD>(drop.nData[1]); // m_wAtkPwr
+            bw.write<WORD>(drop.nData[3]); // m_wDefPwr
+            bw.write<WORD>(0); // m_wAtkRating
+            bw.write<WORD>(0); // m_wStkSpeed
+            bw.write<WORD>(0); // m_wAtkRange
+            bw.write<WORD>(drop.nData[5]); // m_wIncrHp
+            bw.write<WORD>(0); // m_wIncrIp
+            bw.write<WORD>(0); // m_wRestoreHp
+            bw.write<WORD>(0); // m_wRestoreIp
+            bw.write<WORD>(0); // m_wIncrCritical
+            bw.write<BYTE>(0); // m_bRarity
+            bw.write<BYTE>(0); // m_bStxType
+            bw.write<BYTE>(0); // m_bLimitCnt
+            bw.write<BYTE>(0); // m_bModifyCnt
+            bw.write<BYTE>(0); // m_bRepairCnt
+            bw.write<BYTE>(0); // m_bRepairDiscount
+            
+            if (drop.bType == 9) { // BONGIN
+                bw.write<DWORD>(0); bw.write<WORD>(0); bw.write<WORD>(0); bw.write<WORD>(0); bw.write<WORD>(0);
+            } else if (drop.bType == 8) { // SOCKET
+                for(int i=0; i<8; i++) bw.write<BYTE>(0);
+            } else {
+                bw.write<BYTE>(0); // PuzzleType
+            }
+            
+            if (drop.bType >= 1 && drop.bType <= 4) { // WEAPON, CLOTH, HAT, SHOE
+                bw.write<BYTE>(0); bw.write<BYTE>(0); bw.write<BYTE>(0); // SocketItems
+                bw.write<WORD>(0); // wRBSocketItem (RebuildValue)
+            }
+        } else {
+            switch (drop.bType) {
+                case 11: case 12: case 13: case 14: case 17: bw.write<BYTE>(0); bw.write<WORD>(0); bw.write<WORD>(0); break;
+                case 15: bw.write<BYTE>(0); bw.write<WORD>(0); bw.write<WORD>(0); bw.write<BYTE>(0); bw.write<BYTE>(0); break;
+                case 16: bw.write<WORD>(0); bw.write<BYTE>(0); bw.write<WORD>(0); bw.write<BYTE>(0); bw.write<WORD>(0); break;
+                case 18: bw.write<BYTE>(0); bw.write<DWORD>(0); bw.write<WORD>(0); bw.write<WORD>(0); bw.write<BYTE>(0); break;
+                case 19: bw.write<WORD>(0); bw.write<WORD>(0); break;
+                case 20: bw.write<BYTE>(0); bw.write<DWORD>(0); break;
+                case 21: bw.write<WORD>(0); bw.write<DWORD>(0); bw.write<BYTE>(0); bw.write<BYTE>(0); bw.write<BYTE>(0); break;
+                case 22: bw.write<DWORD>(0); bw.write<BYTE>(0); bw.write<WORD>(0); bw.write<WORD>(0); break;
+                case 23: bw.write<DWORD>(0); bw.write<WORD>(0); bw.write<WORD>(0); bw.write<BYTE>(0); bw.write<BYTE>(0); break;
+                case 25: bw.write<BYTE>(0); bw.write<WORD>(0); bw.write<WORD>(0); break;
+                case 27: bw.write<BYTE>(0); bw.write<DWORD>(0); bw.write<BYTE>(0); bw.write<BYTE>(0); bw.write<BYTE>(0); bw.write<BYTE>(0); bw.write<DWORD>(0); break;
+                case 29: bw.write<WORD>(0); bw.write<WORD>(0); break;
+                case 32: bw.write<WORD>(0); bw.write<WORD>(0); bw.write<WORD>(0); bw.write<DWORD>(0); break;
+                case 31: bw.write<BYTE>(0); bw.write<WORD>(0); bw.write<WORD>(0); break;
+                case 34: bw.write<DWORD>(0); bw.write<BYTE>(0); break;
+            }
         }
         
-        // HT_1116 : m_wRebuithValue
+        // wRebuithValue - client reads this WORD after GetItemData() in OnCS_IM_ADDONSACK_ACK
         bw.write<WORD>(0);
         
         std::vector<BYTE> addBuf(4 + bw.buf.size()); 

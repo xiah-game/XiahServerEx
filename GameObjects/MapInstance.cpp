@@ -199,10 +199,15 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, sServerObject& obj) {
         if (obj.dwDeadTime > 0) {
             if (obj.wPosX != 0 && tick - obj.dwDeadTime >= 3000) {
                 // Send MAPLEAVE to despawn corpse after 3 seconds
+                // Client expects: bResult(1) + dwObjectID(4) + bObjectType(1) + dwMapID(4) + bType(1)
                 std::vector<BYTE> leaveBuf; leaveBuf.resize(4);
-                leaveBuf.push_back(obj.bObjectType);
+                leaveBuf.push_back(0); // bResult = 0 (success)
                 DWORD oid = obj.dwObjectID; 
                 leaveBuf.push_back(oid&0xFF); leaveBuf.push_back((oid>>8)&0xFF); leaveBuf.push_back((oid>>16)&0xFF); leaveBuf.push_back(oid>>24);
+                leaveBuf.push_back(obj.bObjectType); // bObjectType (3 = NPC)
+                DWORD mid = obj.dwMapID;
+                leaveBuf.push_back(mid&0xFF); leaveBuf.push_back((mid>>8)&0xFF); leaveBuf.push_back((mid>>16)&0xFF); leaveBuf.push_back(mid>>24);
+                leaveBuf.push_back(0); // bType = 0 (normal leave)
                 PACKET_HEADER* leaveHead = (PACKET_HEADER*)leaveBuf.data(); leaveHead->id = 0x3506; leaveHead->payloadSize = leaveBuf.size() - sizeof(PACKET_HEADER);
                 EncryptPacket(leaveBuf.data(), 0x42);
                 BroadcastPacket(leaveBuf);

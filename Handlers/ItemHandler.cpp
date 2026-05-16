@@ -165,6 +165,14 @@ void OnItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
                 }
             }
             pushWord((WORD)dat20); // wRebuithValue
+            LOG("[ItemHandler] Item pos=" + std::to_string(pos) + " type=" + std::to_string(type) + " refid=" + std::to_string(refid) + " name=" + itemName + " size=" + std::to_string(bi.size()));
+            {   // Hex dump for debugging
+                std::string hex;
+                for (size_t h = 0; h < bi.size(); h++) {
+                    char tmp[8]; sprintf(tmp, "%02X ", bi[h]); hex += tmp;
+                }
+                LOG("[ItemHandler] HEX: " + hex);
+            }
             items.push_back(bi);
         };
         DBHelper::GetInstance().ExecuteQuery(q, itemCallback);
@@ -543,10 +551,13 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
         EncryptPacket(ackBuf.data(), 0x42);
         SafeSend(clientSocket, (char*)ackBuf.data(), ackBuf.size(), 0);
     } else {
-        std::string d1 = "DELETE FROM ITEM WHERE dwItemID = " + std::to_string(dwItemID);
-        std::string d2 = "DELETE FROM SACKITEM WHERE dwItemID = " + std::to_string(dwItemID);
-        DBHelper::GetInstance().ExecuteUpdate(d1);
-        DBHelper::GetInstance().ExecuteUpdate(d2);
+        // Delete order: SACKITEM -> ITEMDATA -> ITEM (FK constraint)
+        std::string delSack = "DELETE FROM SACKITEM WHERE dwItemID = " + std::to_string(dwItemID);
+        std::string delData = "DELETE FROM ITEMDATA WHERE dwItemID = " + std::to_string(dwItemID);
+        std::string delItem = "DELETE FROM ITEM WHERE dwItemID = " + std::to_string(dwItemID);
+        DBHelper::GetInstance().ExecuteUpdate(delSack);
+        DBHelper::GetInstance().ExecuteUpdate(delData);
+        DBHelper::GetInstance().ExecuteUpdate(delItem);
 
         std::vector<BYTE> ackBuf(4);
         ackBuf.push_back(bSackID);

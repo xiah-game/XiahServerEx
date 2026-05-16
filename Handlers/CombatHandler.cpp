@@ -82,6 +82,8 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
         DWORD attackerCharID = 0;
         BYTE deadObjType = 0; DWORD deadObjID = 0; BYTE deadPropType = 0; DWORD deadExp = 0;
         std::vector<DWORD> partyExpMembers;
+        sServerObject deadMonsterCopy; // copy for GenerateDrops outside mutex
+        bool hasDeadMonsterCopy = false;
         {
             std::lock_guard<std::mutex> lock(mapInst->GetMutex());
             sServerObject* pAttacker = mapInst->GetPlayer(attackerId);
@@ -228,7 +230,9 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                         needStatusRefresh = GrantExpToPlayer(attackerCharID, deadExp);
                     }
                     
-                    DropManager::GetInstance()->GenerateDrops(attackerId, *pTarget);
+                    // Save monster copy for GenerateDrops (called after mutex release)
+                    deadMonsterCopy = *pTarget;
+                    hasDeadMonsterCopy = true;
                 }
                 
                 
@@ -352,6 +356,11 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                 EncryptPacket(killBuf.data(), 0x42);
                 SafeSend(clientSocket, (char*)killBuf.data(), killBuf.size(), 0);
             }
+        }
+
+        // Generate drops AFTER all combat packets (0x4006, 0x3510, 0x4034)
+        if (monsterDied && hasDeadMonsterCopy) {
+            DropManager::GetInstance()->GenerateDrops(attackerId, deadMonsterCopy);
         }
     }
 }

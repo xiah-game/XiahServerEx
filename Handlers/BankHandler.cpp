@@ -121,7 +121,7 @@ static void SendBankOrMallList(SOCKET clientSocket, DWORD charID, WORD opCodeACK
                 } else {
                     pushByte(bi, 0); 
                 }
-                if (type >= 1 && type <= 4) { pushByte(bi, dat19); pushByte(bi, dat20); pushByte(bi, dat21); pushWord(bi, dat25); } 
+                if (type >= 1 && type <= 4) { pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushWord(bi, dat20); } 
             } else {
                 switch (type) {
                     case 11: case 12: case 13: case 14: case 17:
@@ -161,15 +161,19 @@ static void SendBankOrMallList(SOCKET clientSocket, DWORD charID, WORD opCodeACK
                         pushDWord(bi, 0); pushByte(bi, 0); break;
                 }
             }
-            pushWord(bi, (WORD)dat20); // wRebuithValue
             items.push_back(bi);
         };
         DBHelper::GetInstance().ExecuteQuery(q, itemCallback);
     }
     
     pushDWord(ackBuf, items.size());
-    for (auto i : items) ackBuf.insert(ackBuf.end(), i.begin(), i.end());
+    LOG("[BankHandler] SendBankOrMallList: account=" + account + " itemCount=" + std::to_string(items.size()) + " isBank=" + std::to_string(isBank));
+    for (size_t idx = 0; idx < items.size(); ++idx) {
+        LOG("[BankHandler]   item[" + std::to_string(idx) + "] bytes=" + std::to_string(items[idx].size()) + " pos=" + std::to_string(items[idx][0]));
+        ackBuf.insert(ackBuf.end(), items[idx].begin(), items[idx].end());
+    }
     
+    LOG("[BankHandler] Total packet size=" + std::to_string(ackBuf.size()) + " payloadSize=" + std::to_string(ackBuf.size() - 4));
     PACKET_HEADER* ackHead = (PACKET_HEADER*)ackBuf.data(); 
     ackHead->id = opCodeACK; 
     ackHead->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);
@@ -184,7 +188,196 @@ void OnItemListInBankReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD 
 }
 
 void OnDrawInBankReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
-    // Stub
+    LOG("[BankHandler] OnDrawInBankReq CharID: " + std::to_string(charID));
+    if (totalSize < 15) return;
+    
+    DWORD dwTargetCharID = *(DWORD*)(payload);
+    DWORD dwItemID = *(DWORD*)(payload + 4);
+    BYTE bSackID = payload[8];
+    BYTE bSackPos = payload[9];
+    BYTE bBankPos = payload[10];
+    DWORD dwAmount = *(DWORD*)(payload + 11);
+
+    std::string account = SessionMgr::GetInstance().GetAccount(clientSocket);
+    if (account.empty()) return;
+
+    BYTE result = 0; // Success
+
+    if (bBankPos == 255) {
+        // Find free bank pos (0-35)
+        std::vector<BYTE> usedPos;
+        std::string qBank = "SELECT bSackPos FROM BANKITEM WHERE szAccount = '" + account + "'";
+        DBHelper::GetInstance().ExecuteQuery(qBank, [&](SQLHSTMT hStmt) {
+            int p = 0; SQLLEN c;
+            if (SQL_SUCCEEDED(SQLGetData(hStmt, 1, SQL_C_SLONG, &p, 0, &c))) usedPos.push_back(p);
+        });
+        
+        for (BYTE p = 0; p < 36; ++p) {
+            if (std::find(usedPos.begin(), usedPos.end(), p) == usedPos.end()) {
+                bBankPos = p;
+                break;
+            }
+        }
+        if (bBankPos == 255) result = 3; // Bank full
+    } else {
+        bool isOccupied = false;
+        std::string qOcc = "SELECT dwItemID FROM BANKITEM WHERE szAccount = '" + account + "' AND bSackPos = " + std::to_string(bBankPos);
+        DBHelper::GetInstance().ExecuteQuery(qOcc, [&](SQLHSTMT hStmt) {
+            isOccupied = true;
+        });
+        if (isOccupied) result = 2; // Position occupied
+    }
+
+    if (result == 0) {
+        bool itemOwned = false;
+        std::string qCheck = "SELECT dwItemID FROM SACKITEM WHERE dwCharID = " + std::to_string(charID) + " AND dwItemID = " + std::to_string(dwItemID);
+        DBHelper::GetInstance().ExecuteQuery(qCheck, [&](SQLHSTMT hStmt) {
+            itemOwned = true;
+        });
+        if (!itemOwned) result = 1; // Item not found
+    }
+
+    if (result == 0) {
+        std::string qDel = "DELETE FROM SACKITEM WHERE dwCharID = " + std::to_string(charID) + " AND dwItemID = " + std::to_string(dwItemID);
+        DBHelper::GetInstance().ExecuteQuery(qDel, nullptr);
+        
+        std::string qIns = "INSERT INTO BANKITEM (szAccount, bSackPos, dwItemID) VALUES ('" + 
+                           account + "', " + std::to_string(bBankPos) + ", " + std::to_string(dwItemID) + ")";
+        DBHelper::GetInstance().ExecuteQuery(qIns, nullptr);
+    }
+
+    // CS_EC_DRAWINBANK_ACK = 0x3DA4
+    std::vector<BYTE> ack(5);
+    PACKET_HEADER* head = (PACKET_HEADER*)ack.data();
+    head->id = 0x3DA4;
+    head->payloadSize = 1;
+    ack[4] = result;
+    
+    EncryptPacket(ack.data(), 0x42);
+    SafeSend(clientSocket, (const char*)ack.data(), ack.size(), 0);
+
+    // If successful, clear the cursor and add the item visually to the Bank grid.
+    if (result == 0) {
+        // Clear cursor (CS_EC_REMOVEFROMBANK_ACK = 0x3DA2)
+        std::vector<BYTE> rmBuf(9);
+        PACKET_HEADER* rmHead = (PACKET_HEADER*)rmBuf.data();
+        rmHead->id = 0x3DA2;
+        rmHead->payloadSize = 5;
+        rmBuf[4] = bBankPos; // bSackPos
+        *(DWORD*)(&rmBuf[5]) = dwItemID; // dwItemID
+        EncryptPacket(rmBuf.data(), 0x42);
+        SafeSend(clientSocket, (const char*)rmBuf.data(), rmBuf.size(), 0);
+
+        // Add to Bank grid (CS_EC_ADDONBANK_ACK = 0x3DA0)
+        std::string q = "SELECT I.wVisualID, I.bType, I.bKind, I.wLevel, I.dwCost, D.nData18, D.nData19, I.wRefID, I.wAmount, ISNULL(D.nData1, -9999), ISNULL(D.nData2, -9999), ISNULL(D.nData3, -9999), ISNULL(D.nData4, -9999), ISNULL(D.nData5, -9999), ISNULL(D.nData6, -9999), ISNULL(D.nData7, -9999), ISNULL(D.nData8, -9999), ISNULL(D.nData9, -9999), ISNULL(D.nData10, -9999), ISNULL(D.nData11, -9999), ISNULL(D.nData12, -9999), ISNULL(D.nData13, -9999), ISNULL(D.nData14, -9999), ISNULL(D.nData15, -9999), ISNULL(D.nData16, -9999), ISNULL(D.nData17, -9999), ISNULL(D.nData20, 0), ISNULL(D.nData21, 0), ISNULL(D.nData25, 0), I.szName FROM ITEM I LEFT JOIN ITEMDATA D ON I.dwItemID=D.dwItemID WHERE I.dwItemID=" + std::to_string(dwItemID);
+        
+        DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+            int vis=0, type=0, kind=0, lvl=0, cost=0, dat18=0, dat19=0, dat20=0, dat21=0, dat25=0, refid=0, amount=0;
+            int d1=0, d2=0, d3=0, d4=0, d5=0, d6=0, d7=0, d8=0, d9=0, d10=0, d11=0, d12=0, d13=0, d14=0, d15=0, d16=0, d17=0; SQLLEN c[30]={0};
+            char szName[128]={0};
+
+            SQLGetData(hStmt, 1, SQL_C_SLONG, &vis, 0, &c[0]); SQLGetData(hStmt, 2, SQL_C_SLONG, &type, 0, &c[1]);
+            SQLGetData(hStmt, 3, SQL_C_SLONG, &kind, 0, &c[2]); SQLGetData(hStmt, 4, SQL_C_SLONG, &lvl, 0, &c[3]);
+            SQLGetData(hStmt, 5, SQL_C_SLONG, &cost, 0, &c[4]); SQLGetData(hStmt, 6, SQL_C_SLONG, &dat18, 0, &c[5]);
+            SQLGetData(hStmt, 7, SQL_C_SLONG, &dat19, 0, &c[6]); SQLGetData(hStmt, 8, SQL_C_SLONG, &refid, 0, &c[7]);
+            SQLGetData(hStmt, 9, SQL_C_SLONG, &amount, 0, &c[8]); SQLGetData(hStmt, 10, SQL_C_SLONG, &d1, 0, &c[9]);
+            SQLGetData(hStmt, 11, SQL_C_SLONG, &d2, 0, &c[10]); SQLGetData(hStmt, 12, SQL_C_SLONG, &d3, 0, &c[11]);
+            SQLGetData(hStmt, 13, SQL_C_SLONG, &d4, 0, &c[12]); SQLGetData(hStmt, 14, SQL_C_SLONG, &d5, 0, &c[13]);
+            SQLGetData(hStmt, 15, SQL_C_SLONG, &d6, 0, &c[14]); SQLGetData(hStmt, 16, SQL_C_SLONG, &d7, 0, &c[15]);
+            SQLGetData(hStmt, 17, SQL_C_SLONG, &d8, 0, &c[16]); SQLGetData(hStmt, 18, SQL_C_SLONG, &d9, 0, &c[17]);
+            SQLGetData(hStmt, 19, SQL_C_SLONG, &d10, 0, &c[18]); SQLGetData(hStmt, 20, SQL_C_SLONG, &d11, 0, &c[19]);
+            SQLGetData(hStmt, 21, SQL_C_SLONG, &d12, 0, &c[20]); SQLGetData(hStmt, 22, SQL_C_SLONG, &d13, 0, &c[21]);
+            SQLGetData(hStmt, 23, SQL_C_SLONG, &d14, 0, &c[22]); SQLGetData(hStmt, 24, SQL_C_SLONG, &d15, 0, &c[23]);
+            SQLGetData(hStmt, 25, SQL_C_SLONG, &d16, 0, &c[24]); SQLGetData(hStmt, 26, SQL_C_SLONG, &d17, 0, &c[25]);
+            SQLGetData(hStmt, 27, SQL_C_SLONG, &dat20, 0, &c[26]); SQLGetData(hStmt, 28, SQL_C_SLONG, &dat21, 0, &c[27]);
+            SQLGetData(hStmt, 29, SQL_C_SLONG, &dat25, 0, &c[28]); SQLGetData(hStmt, 30, SQL_C_CHAR, szName, sizeof(szName), &c[29]);
+
+            int nd1=0, nd2=0, nd3=0, nd4=0, nd5=0;
+            BYTE charType = 1;
+            if (g_ItemTemplates.count(refid)) {
+                if (type == 0) type = g_ItemTemplates[refid].bType;
+                if (kind == 0) kind = g_ItemTemplates[refid].bKind;
+                if (vis == 0) vis = g_ItemTemplates[refid].wVisualID;
+                if (lvl == 0) lvl = g_ItemTemplates[refid].wLevel;
+                if (cost == 0) cost = g_ItemTemplates[refid].dwCost;
+                if (amount == 0) amount = g_ItemTemplates[refid].wAmount;
+                charType = g_ItemTemplates[refid].bCharType;
+                nd1 = g_ItemTemplates[refid].nBasicData1;
+                nd2 = g_ItemTemplates[refid].nBasicData2;
+                nd3 = g_ItemTemplates[refid].nBasicData3;
+                nd4 = g_ItemTemplates[refid].nBasicData4;
+                nd5 = g_ItemTemplates[refid].nBasicData5;
+                if (d1 == -9999) d1 = g_ItemTemplates[refid].nData1;
+                if (d2 == -9999) d2 = g_ItemTemplates[refid].nData2;
+                if (d3 == -9999) d3 = g_ItemTemplates[refid].nData3;
+                if (d4 == -9999) d4 = g_ItemTemplates[refid].nData4;
+                if (d5 == -9999) d5 = g_ItemTemplates[refid].nData5;
+                if (d6 == -9999) d6 = g_ItemTemplates[refid].nData6;
+                if (d7 == -9999) d7 = g_ItemTemplates[refid].nData7;
+                if (d8 == -9999) d8 = g_ItemTemplates[refid].nData8;
+                if (d9 == -9999) d9 = g_ItemTemplates[refid].nData9;
+                if (d10 == -9999) d10 = g_ItemTemplates[refid].nData10;
+            }
+            if (d1 == -9999) d1 = 0; if (d2 == -9999) d2 = 0; if (d3 == -9999) d3 = 0;
+            if (d4 == -9999) d4 = 0; if (d5 == -9999) d5 = 0; if (d6 == -9999) d6 = 0;
+            if (d7 == -9999) d7 = 0; if (d8 == -9999) d8 = 0; if (d9 == -9999) d9 = 0;
+            if (d10 == -9999) d10 = 0; if (d11 == -9999) d11 = 0; if (d12 == -9999) d12 = 0;
+            if (d13 == -9999) d13 = 0; if (d14 == -9999) d14 = 0; if (d15 == -9999) d15 = 0;
+            if (d16 == -9999) d16 = 0; if (d17 == -9999) d17 = 0;
+
+            std::vector<BYTE> iBuf;
+            iBuf.resize(4); // header
+            pushByte(iBuf, 2); // bAction = ACT_ADDONBANK_ITEMMOVE
+            pushByte(iBuf, bBankPos);
+            // GetItemData format: dwItemID, wRefID, bType, bKind, wVisualID, szName, dwPrice, wLevel, bNeedCharType, wAmount
+            pushDWord(iBuf, dwItemID); pushWord(iBuf, refid);
+            pushByte(iBuf, type); pushByte(iBuf, kind); pushWord(iBuf, vis);
+            std::string itemName(szName);
+            if (itemName.empty() && g_ItemTemplates.count(refid)) itemName = g_ItemTemplates[refid].szName;
+            pushWord(iBuf, itemName.length());
+            for (char ch : itemName) pushByte(iBuf, ch);
+            pushDWord(iBuf, cost); pushWord(iBuf, lvl); pushByte(iBuf, charType);
+            pushWord(iBuf, amount);
+            if (type >= 1 && type <= 9) {
+                pushWord(iBuf, nd1); pushWord(iBuf, nd2); pushWord(iBuf, nd3); pushWord(iBuf, nd4); pushWord(iBuf, nd5);
+                pushByte(iBuf, d1);
+                pushWord(iBuf, d2); pushWord(iBuf, d3);
+                pushWord(iBuf, d4); pushWord(iBuf, d5); pushWord(iBuf, d6); pushWord(iBuf, d7); pushWord(iBuf, d8);
+                pushWord(iBuf, d9); pushWord(iBuf, d10); pushWord(iBuf, d11); pushWord(iBuf, d12); pushWord(iBuf, d13);
+                pushByte(iBuf, dat18); pushByte(iBuf, dat19);
+                pushByte(iBuf, d14); pushByte(iBuf, d15); pushByte(iBuf, d16); pushByte(iBuf, d17);
+                if (type == 9) { pushDWord(iBuf, 0); pushWord(iBuf, 0); pushWord(iBuf, 0); pushWord(iBuf, 0); pushWord(iBuf, 0); }
+                else if (type == 8) { for(int i=0;i<8;i++) pushByte(iBuf, 0); }
+                else { pushByte(iBuf, 0); }
+                if (type >= 1 && type <= 4) { pushByte(iBuf, 0); pushByte(iBuf, 0); pushByte(iBuf, 0); pushWord(iBuf, dat20); }
+            } else {
+                switch (type) {
+                    case 11: case 12: case 13: case 14: case 17: pushByte(iBuf, 0); pushWord(iBuf, d2); pushWord(iBuf, d3); break;
+                    case 15: pushByte(iBuf, d1); pushWord(iBuf, d2); pushWord(iBuf, d3); pushByte(iBuf, 0); pushByte(iBuf, 0); break;
+                    case 16: pushWord(iBuf, 0); pushByte(iBuf, 0); pushWord(iBuf, 0); pushByte(iBuf, 0); pushWord(iBuf, 0); break;
+                    case 18: pushByte(iBuf, 0); pushDWord(iBuf, 0); pushWord(iBuf, d2); pushWord(iBuf, d3); pushByte(iBuf, 0); break;
+                    case 19: pushWord(iBuf, 0); pushWord(iBuf, 0); break;
+                    case 20: pushByte(iBuf, 0); pushDWord(iBuf, 0); break;
+                    case 21: { DWORD mid=nd2; sMugongTemplate* mg=MugongManager::GetInstance()->GetTemplate(mid); pushWord(iBuf, lvl); pushDWord(iBuf, mid); pushByte(iBuf, mg?mg->bType:0); pushByte(iBuf, mg?mg->bKind:0); pushByte(iBuf, 1); break; }
+                    case 22: pushDWord(iBuf, 0); pushByte(iBuf, 0); pushWord(iBuf, 0); pushWord(iBuf, 0); break;
+                    case 23: pushDWord(iBuf, 0); pushWord(iBuf, 0); pushWord(iBuf, 0); pushByte(iBuf, 0); pushByte(iBuf, 0); break;
+                    case 25: pushByte(iBuf, 0); pushWord(iBuf, 0); pushWord(iBuf, 0); break;
+                    case 27: pushByte(iBuf, 0); pushDWord(iBuf, 0); pushByte(iBuf, 0); pushByte(iBuf, 0); pushByte(iBuf, 0); pushByte(iBuf, 0); pushDWord(iBuf, 0); break;
+                    case 29: pushWord(iBuf, 0); pushWord(iBuf, 0); break;
+                    case 32: pushWord(iBuf, 0); pushWord(iBuf, d2); pushWord(iBuf, d3); pushDWord(iBuf, 0); break;
+                    case 31: pushByte(iBuf, 0); pushWord(iBuf, 0); pushWord(iBuf, 0); break;
+                    case 34: pushDWord(iBuf, 0); pushByte(iBuf, 0); break;
+                }
+            }
+            
+            PACKET_HEADER* iHead = (PACKET_HEADER*)iBuf.data();
+            iHead->id = 0x3DA0;
+            iHead->payloadSize = (WORD)(iBuf.size() - 4);
+            EncryptPacket(iBuf.data(), 0x42);
+            SafeSend(clientSocket, (const char*)iBuf.data(), iBuf.size(), 0);
+            LOG("[BankHandler] DrawIn: Sent ADDONBANK_ACK for bankPos=" + std::to_string(bBankPos) + " type=" + std::to_string(type));
+        });
+    }
 }
 
 static void ProcessDrawOut(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize, bool isBank) {
@@ -195,6 +388,12 @@ static void ProcessDrawOut(SOCKET clientSocket, DWORD charID, BYTE* payload, WOR
     BYTE bSackID = payload[9];
     BYTE bSackPos = payload[10];
     DWORD dwAmount = *(DWORD*)(payload + 11);
+
+    // Convert from ObjectID (400M+) to DB CharID
+    DWORD dbCharID = charID;
+    if (dbCharID >= 400000000) dbCharID -= 400000000;
+
+    LOG("[BankHandler] ProcessDrawOut: charID=" + std::to_string(charID) + " dbCharID=" + std::to_string(dbCharID) + " dwItemID=" + std::to_string(dwItemID) + " bBankPos=" + std::to_string(bBankPos) + " bSackID=" + std::to_string(bSackID) + " bSackPos=" + std::to_string(bSackPos) + " isBank=" + std::to_string(isBank));
 
     std::string account = SessionMgr::GetInstance().GetAccount(clientSocket);
     if (account.empty()) {
@@ -210,6 +409,7 @@ static void ProcessDrawOut(SOCKET clientSocket, DWORD charID, BYTE* payload, WOR
     if (account.empty()) return;
 
     BYTE result = 0; // Success
+    BYTE absolutePos = bSackPos;
     
     if (bSackPos == 255) {
         BYTE bCX = 1, bCY = 1;
@@ -224,7 +424,31 @@ static void ProcessDrawOut(SOCKET clientSocket, DWORD charID, BYTE* payload, WOR
             }
         });
         bSackPos = FindFreeSackPos(charID, bSackID, bCX, bCY);
+        LOG("[BankHandler] ProcessDrawOut: FindFreeSackPos returned " + std::to_string(bSackPos));
+        absolutePos = bSackPos;
         if (bSackPos == 255) result = 3; // ERR_DRAWOUTBANK_FULLSACK
+    } else {
+        if (bSackID == 1) absolutePos = 20 + bSackPos;
+        else if (bSackID == 2) absolutePos = 60 + bSackPos;
+        else if (bSackID == 3) absolutePos = 100 + bSackPos;
+    }
+
+    if (result == 0) {
+        bool itemOwned = false;
+        std::string tableName = isBank ? "BANKITEM" : "MALLITEM";
+        std::string qCheck = "SELECT dwItemID FROM " + tableName + " WHERE szAccount = '" + account + "' AND dwItemID = " + std::to_string(dwItemID);
+        DBHelper::GetInstance().ExecuteQuery(qCheck, [&](SQLHSTMT hStmt) {
+            itemOwned = true;
+        });
+        if (!itemOwned) result = 1; // Item not found
+        else {
+            bool occ = false;
+            std::string qOcc = "SELECT dwItemID FROM SACKITEM WHERE dwCharID = " + std::to_string(charID) + " AND bSackPos = " + std::to_string(absolutePos);
+            DBHelper::GetInstance().ExecuteQuery(qOcc, [&](SQLHSTMT hStmt) {
+                occ = true;
+            });
+            if (occ) result = 2; // Position occupied
+        }
     }
 
     if (result == 0) {
@@ -232,9 +456,10 @@ static void ProcessDrawOut(SOCKET clientSocket, DWORD charID, BYTE* payload, WOR
         std::string qDel = "DELETE FROM " + tableName + " WHERE szAccount = '" + account + "' AND dwItemID = " + std::to_string(dwItemID);
         DBHelper::GetInstance().ExecuteQuery(qDel, nullptr);
         
-        std::string qIns = "INSERT INTO SACKITEM (dwCharID, bSackID, bSackPos, dwItemID) VALUES (" + 
-                           std::to_string(charID) + ", " + std::to_string(bSackID) + ", " + std::to_string(bSackPos) + ", " + std::to_string(dwItemID) + ")";
+        std::string qIns = "INSERT INTO SACKITEM (dwCharID, bSackPos, dwItemID) VALUES (" + 
+                           std::to_string(charID) + ", " + std::to_string(absolutePos) + ", " + std::to_string(dwItemID) + ")";
         DBHelper::GetInstance().ExecuteQuery(qIns, nullptr);
+        LOG("[BankHandler] ProcessDrawOut: SUCCESS! Moved item " + std::to_string(dwItemID) + " to sackPos=" + std::to_string(absolutePos));
     }
     
     std::vector<BYTE> ack(5);
@@ -242,9 +467,140 @@ static void ProcessDrawOut(SOCKET clientSocket, DWORD charID, BYTE* payload, WOR
     head->id = isBank ? 0x3DA6 : 0x3D5D;
     head->payloadSize = 1;
     ack[4] = result;
+    LOG("[BankHandler] ProcessDrawOut: result=" + std::to_string(result) + " absolutePos=" + std::to_string(absolutePos));
     
     EncryptPacket(ack.data(), 0x42);
     SafeSend(clientSocket, (const char*)ack.data(), ack.size(), 0);
+
+    if (result == 0) {
+        // Send REMOVEFROMBANK_ACK (0x3DA2) to clear item from bank UI
+        std::vector<BYTE> rmBuf(9);
+        PACKET_HEADER* rmHead = (PACKET_HEADER*)rmBuf.data();
+        rmHead->id = 0x3DA2;
+        rmHead->payloadSize = 5;
+        rmBuf[4] = bBankPos;
+        *(DWORD*)(&rmBuf[5]) = dwItemID;
+        EncryptPacket(rmBuf.data(), 0x42);
+        SafeSend(clientSocket, (const char*)rmBuf.data(), rmBuf.size(), 0);
+        LOG("[BankHandler] ProcessDrawOut: Sent REMOVEFROMBANK_ACK for bankPos=" + std::to_string(bBankPos));
+
+        // Send ADDONSACK_ACK (0x420A) to add item to backpack UI
+        // Reuse the same serialization format as SendBankOrMallList but for single item
+        BYTE displaySackID = bSackID;
+        BYTE displaySackPos = bSackPos;
+        
+        // Query full item data
+        std::string q = "SELECT I.wVisualID, I.bType, I.bKind, I.wLevel, I.dwCost, D.nData18, D.nData19, I.wRefID, I.wAmount, ISNULL(D.nData1, -9999), ISNULL(D.nData2, -9999), ISNULL(D.nData3, -9999), ISNULL(D.nData4, -9999), ISNULL(D.nData5, -9999), ISNULL(D.nData6, -9999), ISNULL(D.nData7, -9999), ISNULL(D.nData8, -9999), ISNULL(D.nData9, -9999), ISNULL(D.nData10, -9999), ISNULL(D.nData11, -9999), ISNULL(D.nData12, -9999), ISNULL(D.nData13, -9999), ISNULL(D.nData14, -9999), ISNULL(D.nData15, -9999), ISNULL(D.nData16, -9999), ISNULL(D.nData17, -9999), ISNULL(D.nData20, 0), ISNULL(D.nData21, 0), ISNULL(D.nData25, 0), I.szName FROM ITEM I LEFT JOIN ITEMDATA D ON I.dwItemID=D.dwItemID WHERE I.dwItemID=" + std::to_string(dwItemID);
+        
+        DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+            int vis=0, type=0, kind=0, lvl=0, cost=0, dat18=0, dat19=0, dat20=0, dat21=0, dat25=0, refid=0, amount=0;
+            int d1=0, d2=0, d3=0, d4=0, d5=0, d6=0, d7=0, d8=0, d9=0, d10=0, d11=0, d12=0, d13=0, d14=0, d15=0, d16=0, d17=0; SQLLEN c[30]={0};
+            char szName[128]={0};
+            SQLGetData(hStmt, 1, SQL_C_SLONG, &vis, 0, &c[0]); SQLGetData(hStmt, 2, SQL_C_SLONG, &type, 0, &c[1]);
+            SQLGetData(hStmt, 3, SQL_C_SLONG, &kind, 0, &c[2]); SQLGetData(hStmt, 4, SQL_C_SLONG, &lvl, 0, &c[3]);
+            SQLGetData(hStmt, 5, SQL_C_SLONG, &cost, 0, &c[4]); SQLGetData(hStmt, 6, SQL_C_SLONG, &dat18, 0, &c[5]);
+            SQLGetData(hStmt, 7, SQL_C_SLONG, &dat19, 0, &c[6]); SQLGetData(hStmt, 8, SQL_C_SLONG, &refid, 0, &c[7]);
+            SQLGetData(hStmt, 9, SQL_C_SLONG, &amount, 0, &c[8]); SQLGetData(hStmt, 10, SQL_C_SLONG, &d1, 0, &c[9]);
+            SQLGetData(hStmt, 11, SQL_C_SLONG, &d2, 0, &c[10]); SQLGetData(hStmt, 12, SQL_C_SLONG, &d3, 0, &c[11]);
+            SQLGetData(hStmt, 13, SQL_C_SLONG, &d4, 0, &c[12]); SQLGetData(hStmt, 14, SQL_C_SLONG, &d5, 0, &c[13]);
+            SQLGetData(hStmt, 15, SQL_C_SLONG, &d6, 0, &c[14]); SQLGetData(hStmt, 16, SQL_C_SLONG, &d7, 0, &c[15]);
+            SQLGetData(hStmt, 17, SQL_C_SLONG, &d8, 0, &c[16]); SQLGetData(hStmt, 18, SQL_C_SLONG, &d9, 0, &c[17]);
+            SQLGetData(hStmt, 19, SQL_C_SLONG, &d10, 0, &c[18]); SQLGetData(hStmt, 20, SQL_C_SLONG, &d11, 0, &c[19]);
+            SQLGetData(hStmt, 21, SQL_C_SLONG, &d12, 0, &c[20]); SQLGetData(hStmt, 22, SQL_C_SLONG, &d13, 0, &c[21]);
+            SQLGetData(hStmt, 23, SQL_C_SLONG, &d14, 0, &c[22]); SQLGetData(hStmt, 24, SQL_C_SLONG, &d15, 0, &c[23]);
+            SQLGetData(hStmt, 25, SQL_C_SLONG, &d16, 0, &c[24]); SQLGetData(hStmt, 26, SQL_C_SLONG, &d17, 0, &c[25]);
+            SQLGetData(hStmt, 27, SQL_C_SLONG, &dat20, 0, &c[26]); SQLGetData(hStmt, 28, SQL_C_SLONG, &dat21, 0, &c[27]);
+            SQLGetData(hStmt, 29, SQL_C_SLONG, &dat25, 0, &c[28]); SQLGetData(hStmt, 30, SQL_C_CHAR, szName, sizeof(szName), &c[29]);
+
+            int nd1=0, nd2=0, nd3=0, nd4=0, nd5=0;
+            BYTE charType = 1;
+            if (g_ItemTemplates.count(refid)) {
+                if (type == 0) type = g_ItemTemplates[refid].bType;
+                if (kind == 0) kind = g_ItemTemplates[refid].bKind;
+                if (vis == 0) vis = g_ItemTemplates[refid].wVisualID;
+                if (lvl == 0) lvl = g_ItemTemplates[refid].wLevel;
+                if (cost == 0) cost = g_ItemTemplates[refid].dwCost;
+                if (amount == 0) amount = g_ItemTemplates[refid].wAmount;
+                charType = g_ItemTemplates[refid].bCharType;
+                nd1 = g_ItemTemplates[refid].nBasicData1;
+                nd2 = g_ItemTemplates[refid].nBasicData2;
+                nd3 = g_ItemTemplates[refid].nBasicData3;
+                nd4 = g_ItemTemplates[refid].nBasicData4;
+                nd5 = g_ItemTemplates[refid].nBasicData5;
+                if (d1 == -9999) d1 = g_ItemTemplates[refid].nData1;
+                if (d2 == -9999) d2 = g_ItemTemplates[refid].nData2;
+                if (d3 == -9999) d3 = g_ItemTemplates[refid].nData3;
+                if (d4 == -9999) d4 = g_ItemTemplates[refid].nData4;
+                if (d5 == -9999) d5 = g_ItemTemplates[refid].nData5;
+                if (d6 == -9999) d6 = g_ItemTemplates[refid].nData6;
+                if (d7 == -9999) d7 = g_ItemTemplates[refid].nData7;
+                if (d8 == -9999) d8 = g_ItemTemplates[refid].nData8;
+                if (d9 == -9999) d9 = g_ItemTemplates[refid].nData9;
+                if (d10 == -9999) d10 = g_ItemTemplates[refid].nData10;
+            }
+            if (d1 == -9999) d1 = 0; if (d2 == -9999) d2 = 0; if (d3 == -9999) d3 = 0;
+            if (d4 == -9999) d4 = 0; if (d5 == -9999) d5 = 0; if (d6 == -9999) d6 = 0;
+            if (d7 == -9999) d7 = 0; if (d8 == -9999) d8 = 0; if (d9 == -9999) d9 = 0;
+            if (d10 == -9999) d10 = 0; if (d11 == -9999) d11 = 0; if (d12 == -9999) d12 = 0;
+            if (d13 == -9999) d13 = 0; if (d14 == -9999) d14 = 0; if (d15 == -9999) d15 = 0;
+            if (d16 == -9999) d16 = 0; if (d17 == -9999) d17 = 0;
+
+            // Build AddOnSack packet: bSackID + bSackPos + GetItemData + wRebuithValue
+            std::vector<BYTE> bi;
+            bi.resize(4); // header
+            pushByte(bi, displaySackID);
+            pushByte(bi, displaySackPos);
+            // GetItemData fields (same order as SendBankOrMallList)
+            pushDWord(bi, dwItemID); pushWord(bi, refid);
+            pushByte(bi, type); pushByte(bi, kind); pushWord(bi, vis);
+            std::string itemName(szName);
+            if (itemName.empty() && g_ItemTemplates.count(refid)) itemName = g_ItemTemplates[refid].szName;
+            pushWord(bi, itemName.length());
+            for (char ch : itemName) pushByte(bi, ch);
+            pushDWord(bi, cost); pushWord(bi, lvl); pushByte(bi, charType);
+            pushWord(bi, amount);
+            if (type >= 1 && type <= 9) {
+                pushWord(bi, nd1); pushWord(bi, nd2); pushWord(bi, nd3); pushWord(bi, nd4); pushWord(bi, nd5);
+                pushByte(bi, d1);
+                pushWord(bi, d2); pushWord(bi, d3);
+                pushWord(bi, d4); pushWord(bi, d5); pushWord(bi, d6); pushWord(bi, d7); pushWord(bi, d8);
+                pushWord(bi, d9); pushWord(bi, d10); pushWord(bi, d11); pushWord(bi, d12); pushWord(bi, d13);
+                pushByte(bi, dat18); pushByte(bi, dat19);
+                pushByte(bi, d14); pushByte(bi, d15); pushByte(bi, d16); pushByte(bi, d17);
+                if (type == 9) { pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); }
+                else if (type == 8) { for(int i=0;i<8;i++) pushByte(bi, 0); }
+                else { pushByte(bi, 0); }
+                if (type >= 1 && type <= 4) { pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushWord(bi, dat20); }
+            } else {
+                switch (type) {
+                    case 11: case 12: case 13: case 14: case 17: pushByte(bi, 0); pushWord(bi, d2); pushWord(bi, d3); break;
+                    case 15: pushByte(bi, d1); pushWord(bi, d2); pushWord(bi, d3); pushByte(bi, 0); pushByte(bi, 0); break;
+                    case 16: pushWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); break;
+                    case 18: pushByte(bi, 0); pushDWord(bi, 0); pushWord(bi, d2); pushWord(bi, d3); pushByte(bi, 0); break;
+                    case 19: pushWord(bi, 0); pushWord(bi, 0); break;
+                    case 20: pushByte(bi, 0); pushDWord(bi, 0); break;
+                    case 21: { DWORD mid=nd2; sMugongTemplate* mg=MugongManager::GetInstance()->GetTemplate(mid); pushWord(bi, lvl); pushDWord(bi, mid); pushByte(bi, mg?mg->bType:0); pushByte(bi, mg?mg->bKind:0); pushByte(bi, 1); break; }
+                    case 22: pushDWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
+                    case 23: pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); break;
+                    case 25: pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
+                    case 27: pushByte(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushDWord(bi, 0); break;
+                    case 29: pushWord(bi, 0); pushWord(bi, 0); break;
+                    case 32: pushWord(bi, 0); pushWord(bi, d2); pushWord(bi, d3); pushDWord(bi, 0); break;
+                    case 31: pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
+                    case 34: pushDWord(bi, 0); pushByte(bi, 0); break;
+                }
+            }
+            // ADDONSACK reads wRebuithValue AFTER GetItemData
+            pushWord(bi, (WORD)dat20);
+            
+            PACKET_HEADER* addHead = (PACKET_HEADER*)bi.data();
+            addHead->id = 0x420A;
+            addHead->payloadSize = (WORD)(bi.size() - 4);
+            EncryptPacket(bi.data(), 0x42);
+            SafeSend(clientSocket, (const char*)bi.data(), bi.size(), 0);
+            LOG("[BankHandler] ProcessDrawOut: Sent ADDONSACK_ACK for sackID=" + std::to_string(displaySackID) + " sackPos=" + std::to_string(displaySackPos));
+        });
+    }
 }
 
 void OnDrawOutBankReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
@@ -276,5 +632,20 @@ void RegisterBankMallHandlers() {
     RegisterHandler(0x3D5A, [](SOCKET s, BYTE* p, WORD size) {
         DWORD charID = SessionMgr::GetInstance().GetCharID(s);
         OnItemListInMallReq(s, charID, p, size);
+    });
+
+    RegisterHandler(0x3DA5, [](SOCKET s, BYTE* p, WORD size) {
+        DWORD charID = SessionMgr::GetInstance().GetCharID(s);
+        OnDrawOutBankReq(s, charID, p, size);
+    });
+
+    RegisterHandler(0x3DA3, [](SOCKET s, BYTE* p, WORD size) {
+        DWORD charID = SessionMgr::GetInstance().GetCharID(s);
+        OnDrawInBankReq(s, charID, p, size);
+    });
+
+    RegisterHandler(0x3D5C, [](SOCKET s, BYTE* p, WORD size) {
+        DWORD charID = SessionMgr::GetInstance().GetCharID(s);
+        OnDrawOutMallReq(s, charID, p, size);
     });
 }

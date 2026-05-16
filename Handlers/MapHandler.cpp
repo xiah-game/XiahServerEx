@@ -156,7 +156,7 @@ void OnMapEnterReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
     auto pushDWord = [&](DWORD d) { aoiBuf.push_back(d & 0xFF); aoiBuf.push_back((d>>8)&0xFF); aoiBuf.push_back((d>>16)&0xFF); aoiBuf.push_back((d>>24)&0xFF); };
     auto pushWord = [&](WORD w) { aoiBuf.push_back(w & 0xFF); aoiBuf.push_back((w>>8)&0xFF); };
     auto pushByte = [&](BYTE b) { aoiBuf.push_back(b); };
-    WORD numObjects = 0; 
+    WORD numObjects = 0;
     
     {
         std::lock_guard<std::mutex> lockMonsters(mapInst->GetMutex());
@@ -184,6 +184,7 @@ void OnMapEnterReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
                 pushWord(obj->wPosX);
                 pushWord(obj->wPosY);
                 pushByte(obj->bHeight);
+
             }
         }
         for (auto* obj : players) {
@@ -219,6 +220,8 @@ void OnMapEnterReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
     PACKET_HEADER* enterHead = (PACKET_HEADER*)enterBuf.data(); enterHead->id = 0x4312; enterHead->payloadSize = enterBuf.size() - sizeof(PACKET_HEADER);
     EncryptPacket(enterBuf.data(), 0x42);
     mapInst->BroadcastPacketAOI(wCurX, wCurY, enterBuf, clientSocket);
+    
+
     
     // Removed UpdatePlayerStatsAndSend because sending it here delays CharInfo 
     // past MugongListAck, causing Init_WindowOutSide to wipe out the Mugong UI!

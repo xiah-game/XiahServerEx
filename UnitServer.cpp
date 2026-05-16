@@ -10,6 +10,7 @@
 #include <cmath>
 #include <mutex>
 #include <set>
+#include <mstcpip.h>
 
 std::vector<SOCKET> g_UnitSockets;
 std::map<SOCKET, DWORD> g_SocketToMap;
@@ -221,6 +222,15 @@ void RunUnitSvr() {
     while (true) {
         SOCKET clientSocket = accept(listenSocket, NULL, NULL);
         if (clientSocket == INVALID_SOCKET) continue;
+        // Enable TCP keepalive to prevent idle timeout on remote servers
+        BOOL bKeepAlive = TRUE;
+        setsockopt(clientSocket, SOL_SOCKET, SO_KEEPALIVE, (const char*)&bKeepAlive, sizeof(bKeepAlive));
+        // Set keepalive interval to 5 seconds
+        DWORD dwKeepAliveTime = 5000;    // 5 sec before first probe
+        DWORD dwKeepAliveInterval = 5000; // 5 sec between probes
+        struct tcp_keepalive ka = { 1, dwKeepAliveTime, dwKeepAliveInterval };
+        DWORD dwBytesReturned = 0;
+        WSAIoctl(clientSocket, SIO_KEEPALIVE_VALS, &ka, sizeof(ka), NULL, 0, &dwBytesReturned, NULL, NULL);
         LOG("[UnitSvr " + std::to_string(g_Config.unitPort) + "] Game Client arrived!");
 
         {
