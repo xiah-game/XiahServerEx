@@ -199,8 +199,32 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
             // so we must immediately re-send the mugong lists to repopulate the UI.
             BYTE typeGeneral = 0; // General/Outgong (鞕戈车)
             OnMugongListReq(s, dwCharID, &typeGeneral, 1);
-            BYTE typePassive = 1; // Passive/Ingong (雮搓车) 鈥?also triggers Active list
+            BYTE typePassive = 1; // Passive/Ingong (雮搓车) — also triggers Active list
             OnMugongListReq(s, dwCharID, &typePassive, 1);
+
+            // Send 0x3B0D (HP/IP bar update) to ensure bars are refreshed with in-memory values
+            if (g_MapInstances.count(pMapID)) {
+                CMapInstance* mapInst2 = g_MapInstances[pMapID];
+                std::lock_guard<std::mutex> lock2(mapInst2->GetMutex());
+                sServerObject* pObj2 = mapInst2->GetPlayer(dwObjectID);
+                if (pObj2) {
+                    std::vector<BYTE> hpBuf(4);
+                    auto push4 = [&](DWORD d) { hpBuf.push_back(d&0xFF); hpBuf.push_back((d>>8)&0xFF); hpBuf.push_back((d>>16)&0xFF); hpBuf.push_back((d>>24)&0xFF); };
+                    auto push2 = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
+                    push4(pObj2->dwHpMax);
+                    push4(pObj2->dwHpCur);
+                    push2(pObj2->wIpMax);
+                    push2(pObj2->wIpCur);
+                    hpBuf.push_back(0); // bType
+                    PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
+                    hpHead->id = 0x3B0D; // CS_IF_CHARHP_ACK
+                    hpHead->payloadSize = hpBuf.size() - 4;
+                    EncryptPacket(hpBuf.data(), 0x42);
+                    SafeSend(s, (const char*)hpBuf.data(), hpBuf.size(), 0);
+                    LOG("[RecalcStats] Sent 0x3B0D bar update: HpCur=" + std::to_string(pObj2->dwHpCur) + "/" + std::to_string(pObj2->dwHpMax)
+                        + " IpCur=" + std::to_string(pObj2->wIpCur) + "/" + std::to_string(pObj2->wIpMax));
+                }
+            }
         }
     }
 }

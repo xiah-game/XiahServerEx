@@ -30,6 +30,7 @@ void SendCharStatusInfoAck(SOCKET clientSocket, DWORD dwCharID, WORD opCode) {
     
     sServerObject playerObj;
     playerObj.wWepAtk = 0; playerObj.wWepDef = 0; playerObj.wWepMag = 0; playerObj.wWalkSpeed = 24;
+    bool bHasMapObj = false;
     
     {
         DWORD mapID = SessionMgr::GetInstance().GetMapID(clientSocket);
@@ -39,6 +40,7 @@ void SendCharStatusInfoAck(SOCKET clientSocket, DWORD dwCharID, WORD opCode) {
             sServerObject* pObj = pMap->GetPlayer(dwObjectID);
             if (pObj) {
                 playerObj = *pObj;
+                bHasMapObj = true;
             }
         }
     }
@@ -77,9 +79,32 @@ void SendCharStatusInfoAck(SOCKET clientSocket, DWORD dwCharID, WORD opCode) {
         dwHpMax = (wSus * 8) + ((wLevel - 1) * 8) + playerObj.wEquipHp;
         wIpMax = (wVit * 0) + ((wLevel - 1) * 4) + playerObj.wEquipIp;
         
+        LOG("[SendStatusAck] BEFORE fix: bHasMapObj=" + std::to_string(bHasMapObj)
+            + " DB.dwHpCur=" + std::to_string(dwHpCur) + " DB.wIpCur=" + std::to_string(wIpCur)
+            + " calcHpMax=" + std::to_string(dwHpMax) + " calcIpMax=" + std::to_string(wIpMax)
+            + " mapObj.dwHpCur=" + std::to_string(playerObj.dwHpCur) + " mapObj.wIpCur=" + std::to_string(playerObj.wIpCur)
+            + " mapObj.dwHpMax=" + std::to_string(playerObj.dwHpMax) + " mapObj.wIpMax=" + std::to_string(playerObj.wIpMax)
+            + " equipHp=" + std::to_string(playerObj.wEquipHp) + " equipIp=" + std::to_string(playerObj.wEquipIp)
+            + " wSus=" + std::to_string(wSus) + " wVit=" + std::to_string(wVit) + " wLevel=" + std::to_string(wLevel));
+        
+        // Use in-memory map object's current HP/IP as authoritative runtime values.
+        // The DB only stores stale login-time values (only written on disconnect/save),
+        // so reading wIpCur from DB after using skills would return 0 or outdated values.
+        if (bHasMapObj) {
+            dwHpCur = playerObj.dwHpCur;
+            wIpCur = playerObj.wIpCur;
+            // Also use RecalculateStats' computed max values from map object
+            // since they include passive/buff bonuses that the formula here doesn't
+            dwHpMax = playerObj.dwHpMax;
+            wIpMax = playerObj.wIpMax;
+        }
+        
         // Clamp current HP/MP to the newly calculated maxes
         if (dwHpCur > dwHpMax || dwHpCur <= 8) dwHpCur = dwHpMax;
         if (wIpCur > wIpMax || wIpCur == 0) wIpCur = wIpMax;
+        
+        LOG("[SendStatusAck] AFTER fix: dwHpCur=" + std::to_string(dwHpCur) + " dwHpMax=" + std::to_string(dwHpMax)
+            + " wIpCur=" + std::to_string(wIpCur) + " wIpMax=" + std::to_string(wIpMax));
         
         // Fetch from memory cache
         if (g_LevelTemplates.count(wLevel)) {

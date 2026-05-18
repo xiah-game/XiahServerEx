@@ -84,8 +84,23 @@ void OnMapEnterReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
         pObj->wLastUpdateY = wCurY;
         pObj->bHeight = bCurH;
         pObj->bObjectType = 1; // player
-        pObj->dwHpMax = 60000;
-        pObj->dwHpCur = 60000;
+
+        // Initialize HP/IP from DB so RecalculateStats has valid initial values
+        DWORD dbHpCur = 0, dbHpMax = 0;
+        WORD dbIpCur = 0, dbIpMax = 0;
+        std::string hpQ = "SELECT dwHpCur, dwHpMax, wIpCur, wIpMax FROM CHAR_POWER WHERE dwCharID = " + std::to_string(dwActualCharID);
+        DBHelper::GetInstance().ExecuteQuery(hpQ, [&](SQLHSTMT hStmt) {
+            SQLLEN cb;
+            SQLGetData(hStmt, 1, SQL_C_ULONG, &dbHpCur, 0, &cb);
+            SQLGetData(hStmt, 2, SQL_C_ULONG, &dbHpMax, 0, &cb);
+            SQLGetData(hStmt, 3, SQL_C_USHORT, &dbIpCur, 0, &cb);
+            SQLGetData(hStmt, 4, SQL_C_USHORT, &dbIpMax, 0, &cb);
+        });
+        pObj->dwHpMax = (dbHpMax > 0) ? dbHpMax : 60000;
+        pObj->dwHpCur = (dbHpCur > 0) ? dbHpCur : pObj->dwHpMax;
+        pObj->wIpMax = (dbIpMax > 0) ? dbIpMax : 100;
+        pObj->wIpCur = (dbIpCur > 0) ? dbIpCur : pObj->wIpMax;
+        LOG("[MapHandler] Initialized player HP/IP from DB: HpCur=" + std::to_string(pObj->dwHpCur) + "/" + std::to_string(pObj->dwHpMax) + " IpCur=" + std::to_string(pObj->wIpCur) + "/" + std::to_string(pObj->wIpMax));
     }
     
     // Fetch szNickName and bCharType from CHAR_VISUAL
