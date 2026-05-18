@@ -123,6 +123,9 @@ public:
     // Upsert ITEMDATA (rebuild stats) in ITEMDATA
     void UpsertRebuildData(DWORD dwItemID, int d4, int d5, int d9, int d14, int d15, int d17);
 
+    // Get cumulative rebuild bonus (Wujing or Sujing)
+    int GetRebuildBonusSum(const std::string& attrColumn, int reqLevel, int maxRebuildLevel);
+
     // Get item amount
     WORD GetItemAmount(DWORD dwItemID);
 

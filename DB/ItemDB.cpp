@@ -283,3 +283,11 @@ bool ItemDB::GetItemBasicInfo(DWORD dwItemID, ItemBasicInfo& out) {
         });
     return found;
 }
+
+int ItemDB::GetRebuildBonusSum(const std::string& attrColumn, int reqLevel, int maxRebuildLevel) {
+    int result = 0;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT ISNULL(SUM(" + attrColumn + " * " + std::to_string(reqLevel) + " * LevelMultiplier / 100), 0) FROM REBUILD_CONFIG WHERE RebuildLevel <= " + std::to_string(maxRebuildLevel),
+        [&](SQLHSTMT hStmt) { SQLLEN c; SQLGetData(hStmt, 1, SQL_C_SLONG, &result, 0, &c); });
+    return result;
+}

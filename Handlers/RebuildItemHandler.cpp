@@ -373,14 +373,10 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
     } else {
         int totalWujingBonus = 0, totalSujingBonus = 0;
         if (currentRebuild > 0) {
-            DBHelper::GetInstance().ExecuteQuery("SELECT ISNULL(SUM(Wujing_Attr * " + std::to_string(reqLevel) + " * LevelMultiplier / 100), 0) FROM REBUILD_CONFIG WHERE RebuildLevel <= " + std::to_string(currentRebuild), [&](SQLHSTMT hStmt) {
-                SQLLEN c; SQLGetData(hStmt, 1, SQL_C_SLONG, &totalWujingBonus, 0, &c);
-            });
+            totalWujingBonus = ItemDB::GetInstance().GetRebuildBonusSum("Wujing_Attr", reqLevel, currentRebuild);
         }
         if (currentAppend > 0) {
-            DBHelper::GetInstance().ExecuteQuery("SELECT ISNULL(SUM(Sujing_Attr * " + std::to_string(reqLevel) + " * LevelMultiplier / 100), 0) FROM REBUILD_CONFIG WHERE RebuildLevel <= " + std::to_string(currentAppend), [&](SQLHSTMT hStmt) {
-                SQLLEN c; SQLGetData(hStmt, 1, SQL_C_SLONG, &totalSujingBonus, 0, &c);
-            });
+            totalSujingBonus = ItemDB::GetInstance().GetRebuildBonusSum("Sujing_Attr", reqLevel, currentAppend);
         }
 
         int finalData4 = baseData4;
