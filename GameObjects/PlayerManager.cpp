@@ -14,15 +14,12 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
 
     // 1. Fetch base attributes from DB
     int baseStr = 10, baseDex = 10, baseVit = 10, baseInt = 10, baseLevel = 1;
-    std::string qStats = "SELECT wStr, wDex, wVit, wSus, wLevel FROM CHAR_DATA WHERE dwCharID = " + std::to_string(dwCharID);
-    DBHelper::GetInstance().ExecuteQuery(qStats, [&](SQLHSTMT hStmt) {
-        SQLLEN c1, c2, c3, c4, c5;
-        SQLGetData(hStmt, 1, SQL_C_SLONG, &baseStr, 0, &c1);
-        SQLGetData(hStmt, 2, SQL_C_SLONG, &baseDex, 0, &c2);
-        SQLGetData(hStmt, 3, SQL_C_SLONG, &baseVit, 0, &c3);
-        SQLGetData(hStmt, 4, SQL_C_SLONG, &baseInt, 0, &c4);
-        SQLGetData(hStmt, 5, SQL_C_SLONG, &baseLevel, 0, &c5);
-    });
+    CharacterDB::CharPower cpPM;
+    if (CharacterDB::GetInstance().GetCharData(dwCharID, cpPM)) {
+        baseStr = cpPM.wStr; baseDex = cpPM.wDex; baseVit = cpPM.wVit;
+        baseInt = cpPM.wSus; baseLevel = cpPM.wLevel;
+    }
+
 
     // 2. Fetch equipment stats from DB
     int equipAtk=0, equipDef=0, equipMag=0, equipSpd=0, equipAtkSpd=0, equipCrit=0, equipHp=0, equipIp=0, equipRestoreHp=0, equipRestoreIp=0;
