@@ -4,7 +4,7 @@
 #include "../DBHelper.h"
 #include "../Network/PacketRouter.h"
 #include "../Network/SessionMgr.h"
-#include "../UnitServer.h"
+#include "../GameObjects/PlayerManager.h"
 
 void OnMapLoadingSequenceReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize, WORD headerId);
 void OnMapEnterReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);

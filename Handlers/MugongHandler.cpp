@@ -1,11 +1,13 @@
 #include "MugongHandler.h"
 #include "../GameObjects/MugongManager.h"
 #include "../GameObjects/PlayerManager.h"
+#include "../GameObjects/ExpSystem.h"
 #include "../Network/SessionMgr.h"
 #include "../MonsterAI.h"
 #include "../GameObjects/DropManager.h"
 #include "../GameObjects/MapInstance.h"
-#include "../UnitServer.h"
+#include "../GameObjects/PlayerManager.h"
+#include "../GameObjects/ExpSystem.h"
 #include "../DBHelper.h"
 #include <cmath>
 
@@ -301,7 +303,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
             sServerObject* pObj = mapInst->GetPlayer(dwAttackID);
             if (pObj) {
                 if (pObj->wIpCur < (WORD)pMugongData->dwCostMp) {
-                    // Not enough IP éˆ¥?block skill use
+                    // Not enough IP éˆ?block skill use
                     LOG("[MugongHandler] Skill " + std::to_string(dwMugongID) + " blocked: IP " 
                         + std::to_string(pObj->wIpCur) + " < cost " + std::to_string(pMugongData->dwCostMp));
                     return;
@@ -356,15 +358,15 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
         if (g_MapInstances.count(playerMapID)) {
             CMapInstance* mapInst = g_MapInstances[playerMapID];
             std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-            sServerObject* pTarget = mapInst->GetMonster(dwDefenseID);
+            MonsterData* pTarget = mapInst->GetMonster(dwDefenseID);
             if (pTarget) {
-                // Use computed Init+Inc values from sServerObject, NOT raw template Init
-                DWORD monsterDef = pTarget->wWepDef;
+                // Use template defense since MonsterData doesn't store wWepDef
+                DWORD monsterDef = g_NpcTemplates.count(pTarget->bPropType) ? g_NpcTemplates[pTarget->bPropType].dwDefInit : 0;
                 WORD monsterAvoid = pTarget->wAvoidRatio;
 
                 // Dodge Logic
                 DWORD playerAtkRating = 50; 
-                sServerObject* pAttacker = mapInst->GetPlayer(dwAttackID);
+                PlayerData* pAttacker = mapInst->GetPlayer(dwAttackID);
                 if (pAttacker) {
                     playerAtkRating += pAttacker->dwTotalHit;
                 }

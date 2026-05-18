@@ -64,11 +64,11 @@ public:
     void LoadDropGroups();
     
     // Drop helpers (also used by ItemHandler for throw-item)
-    void DropItemToMap(DWORD killerID, const sServerObject& obj, DWORD itemRefID, bool useRandomOffset = true);
-    void DropMoneyToMap(DWORD killerID, const sServerObject& obj, DWORD amount);
+    void DropItemToMap(DWORD killerID, const MonsterData& obj, DWORD itemRefID, bool useRandomOffset = true);
+    void DropMoneyToMap(DWORD killerID, const MonsterData& obj, DWORD amount);
     
     // Roll and generate drops for a killed monster
-    void GenerateDrops(DWORD killerID, const sServerObject& deadMonster);
+    void GenerateDrops(DWORD killerID, const MonsterData& deadMonster);
     
     // Process CS_IM_PICK_REQ (0x4201)
     void HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payload, WORD size);

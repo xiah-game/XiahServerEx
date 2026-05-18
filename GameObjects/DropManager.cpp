@@ -1,6 +1,6 @@
 #include "DropManager.h"
 #include "../DBHelper.h"
-#include "../UnitServer.h"
+#include "PlayerManager.h"
 #include "../Network/SystemMessage.h"
 #include <iostream>
 
@@ -127,10 +127,10 @@ void DropManager::LoadDropGroups() {
     LOG("[DropManager] Loaded " + std::to_string(groupCount) + " drop groups with " + std::to_string(itemCount) + " items.");
 }
 
-extern void BroadcastPacketToMap(DWORD mapID, const std::vector<BYTE>& packet);
+// BroadcastPacketToMap now declared in PlayerManager.h
 
 // Helper: drop a single item to the map
-void DropManager::DropItemToMap(DWORD killerID, const sServerObject& obj, DWORD itemRefID, bool useRandomOffset) {
+void DropManager::DropItemToMap(DWORD killerID, const MonsterData& obj, DWORD itemRefID, bool useRandomOffset) {
     auto tplIt = g_ItemTemplates.find((WORD)itemRefID);
     if (tplIt == g_ItemTemplates.end()) {
         LOG("[Drop] Item RefID " + std::to_string(itemRefID) + " not found in ITEMTEMPLATE!");
@@ -218,7 +218,7 @@ void DropManager::DropItemToMap(DWORD killerID, const sServerObject& obj, DWORD 
 }
 
 // Helper: drop money to the map
-void DropManager::DropMoneyToMap(DWORD killerID, const sServerObject& obj, DWORD amount) {
+void DropManager::DropMoneyToMap(DWORD killerID, const MonsterData& obj, DWORD amount) {
     int offsetX = (rand() % 31) - 15;
     int offsetY = (rand() % 31) - 15;
     WORD dropX = obj.wPosX + offsetX;
@@ -274,7 +274,7 @@ void DropManager::DropMoneyToMap(DWORD killerID, const sServerObject& obj, DWORD
     LOG("[Drop] Dropped " + std::to_string(amount) + " Money!");
 }
 
-void DropManager::GenerateDrops(DWORD killerID, const sServerObject& obj) {
+void DropManager::GenerateDrops(DWORD killerID, const MonsterData& obj) {
     auto tplIt = g_NpcTemplates.find(obj.bPropType);
     if (tplIt == g_NpcTemplates.end()) return;
     

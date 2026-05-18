@@ -4,7 +4,7 @@
 #include "../DBHelper.h"
 #include "../Network/PacketRouter.h"
 #include "../Network/SessionMgr.h"
-#include "../UnitServer.h"
+#include "../GameObjects/PlayerManager.h"
 
 void OnSackItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize); // 0x4413
 void OnEquipItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize); // 0x4419

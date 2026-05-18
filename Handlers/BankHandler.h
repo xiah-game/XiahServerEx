@@ -4,7 +4,7 @@
 #include "../DBHelper.h"
 #include "../Network/PacketRouter.h"
 #include "../Network/SessionMgr.h"
-#include "../UnitServer.h"
+#include "../GameObjects/PlayerManager.h"
 
 // Bank (仓库) Handlers
 void OnItemListInBankReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);
@@ -12,7 +12,7 @@ void OnDrawInBankReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tota
 void OnDrawOutBankReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);
 void OnDrawMoveBankReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);
 
-// Item Mall (物品店) Handlers
+// Item Mall (物品�? Handlers
 void OnItemListInMallReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);
 void OnDrawOutMallReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);
 

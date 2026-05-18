@@ -3,10 +3,7 @@
 #include <cmath>
 #include <unordered_set>
 
-extern std::vector<SOCKET> g_UnitSockets;
-extern std::map<SOCKET, DWORD> g_SocketToMap;
-extern std::map<SOCKET, DWORD> g_SocketToChar;
-extern std::mutex g_SocketsMutex;
+
 
 CMapInstance::CMapInstance(DWORD mapID, int width, int height, const std::vector<BYTE>& collisionGrid)
     : m_dwMapID(mapID), m_width(width), m_height(height), m_collisionGrid(collisionGrid) {
@@ -26,7 +23,7 @@ CMapInstance::~CMapInstance() {
     m_monsterGrid.clear();
 }
 
-void CMapInstance::AddPlayer(const sServerObject& player) {
+void CMapInstance::AddPlayer(const PlayerData& player) {
     m_players[player.dwObjectID] = player;
     int idx = GetGridIndex(player.wPosX, player.wPosY);
     if (idx >= 0) AddToGrid(m_playerGrid, idx, player.dwObjectID);
@@ -41,7 +38,7 @@ void CMapInstance::RemovePlayer(DWORD dwObjectID) {
     }
 }
 
-sServerObject* CMapInstance::GetPlayer(DWORD dwObjectID) {
+PlayerData* CMapInstance::GetPlayer(DWORD dwObjectID) {
     auto it = m_players.find(dwObjectID);
     if (it != m_players.end()) {
         return &(it->second);
@@ -49,7 +46,7 @@ sServerObject* CMapInstance::GetPlayer(DWORD dwObjectID) {
     return nullptr;
 }
 
-void CMapInstance::AddMonster(const sServerObject& monster) {
+void CMapInstance::AddMonster(const MonsterData& monster) {
     m_monsters[monster.dwObjectID] = monster;
     int idx = GetGridIndex(monster.wPosX, monster.wPosY);
     if (idx >= 0) AddToGrid(m_monsterGrid, idx, monster.dwObjectID);
@@ -64,7 +61,7 @@ void CMapInstance::RemoveMonster(DWORD dwObjectID) {
     }
 }
 
-sServerObject* CMapInstance::GetMonster(DWORD dwObjectID) {
+MonsterData* CMapInstance::GetMonster(DWORD dwObjectID) {
     auto it = m_monsters.find(dwObjectID);
     if (it != m_monsters.end()) {
         return &(it->second);
@@ -73,15 +70,7 @@ sServerObject* CMapInstance::GetMonster(DWORD dwObjectID) {
 }
 
 void CMapInstance::BroadcastPacket(const std::vector<BYTE>& packet) {
-    std::lock_guard<std::mutex> lock(g_SocketsMutex);
-    int sentCount = 0;
-    WORD pktId = (packet.size() >= 2) ? *(WORD*)packet.data() : 0;
-    for (SOCKET s : g_UnitSockets) {
-        if (g_SocketToMap.count(s) && g_SocketToMap[s] == m_dwMapID) {
-            int ret = SafeSend(s, (const char*)packet.data(), (int)packet.size(), 0);
-            sentCount++;
-        }
-    }
+    SessionMgr::GetInstance().BroadcastToMap(m_dwMapID, packet);
 }
 
 void CMapInstance::Update(DWORD tick) {
@@ -89,7 +78,7 @@ void CMapInstance::Update(DWORD tick) {
     // 0. Process Deferred Player Death Broadcasts
     // -----------------------------------------------------
     for (auto& pair : m_players) {
-        sServerObject& pl = pair.second;
+        PlayerData& pl = pair.second;
         if (pl.dwHpCur == 0 && pl.dwDeadTime != 0 && (tick - pl.dwDeadTime) >= 500) {
             // Send death broadcast after 500ms delay
             auto pushDWord = [&](std::vector<BYTE>& buf, DWORD d) { buf.push_back(d&0xFF); buf.push_back((d>>8)&0xFF); buf.push_back((d>>16)&0xFF); buf.push_back(d>>24); };
@@ -189,7 +178,7 @@ void CMapInstance::ProcessBuffs(DWORD tick) {
     // which can safely call RecalculateStats() outside the map mutex.
 }
 
-void CMapInstance::ProcessMonsterAI(DWORD tick, sServerObject& obj) {
+void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
     if (obj.bObjectType != 3) return; // Monster only
     sNpcTemplate& tpl = g_NpcTemplates[obj.bPropType];
     if (tpl.dwHpInit == 0) return; // Missing template
@@ -290,12 +279,12 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, sServerObject& obj) {
     
     DWORD targetId = obj.dwTargetID; 
     float minDist = 99999.0f;
-    sServerObject* bestPlayer = nullptr;
+    PlayerData* bestPlayer = nullptr;
 
     // FIND TARGET (Only checks players in THIS map now, not all active players globally!)
     if ((obj.dwAttackPattern & 1) != 0 || targetId != 0) {
         for (auto& pair : m_players) {
-            sServerObject& player = pair.second;
+            PlayerData& player = pair.second;
             if (player.dwHpCur == 0) continue;
             if (player.dwInvulnerableUntil > tick) continue; // Death/respawn protection
             if (targetId != 0 && player.dwObjectID != targetId) continue;
@@ -418,7 +407,7 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, sServerObject& obj) {
                 BYTE bHitFlag = 0; // 0 = Normal, 1 = Critical
                 
                 if (m_players.count(targetId)) {
-                    sServerObject& player = m_players[targetId];
+                    PlayerData& player = m_players[targetId];
                     
                     playerHpMax = player.dwHpMax;
                     playerHpCur = player.dwHpCur;
@@ -481,7 +470,7 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, sServerObject& obj) {
 
                 // Send 0x3B0D (CS_IF_CHARHP_ACK) to the attacked player to update their HP/IP bar
                 if (m_players.count(targetId)) {
-                    sServerObject& targetPlayer = m_players[targetId];
+                    PlayerData& targetPlayer = m_players[targetId];
                     DWORD charID = targetId - 400000000;
                     
                     std::vector<BYTE> hpBuf(4);
@@ -499,12 +488,9 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, sServerObject& obj) {
                     
                     // Find socket for this player and send directly
                     {
-                        std::lock_guard<std::mutex> sockLock(g_SocketsMutex);
-                        for (auto& sc : g_SocketToChar) {
-                            if (sc.second == charID) {
-                                SafeSend(sc.first, (const char*)hpBuf.data(), hpBuf.size(), 0);
-                                break;
-                            }
+                        SOCKET targetSock = SessionMgr::GetInstance().GetSocketByCharID(charID);
+                        if (targetSock != INVALID_SOCKET) {
+                            SafeSend(targetSock, (const char*)hpBuf.data(), hpBuf.size(), 0);
                         }
                     }
                 }
@@ -757,8 +743,8 @@ void CMapInstance::UpdateMonsterGrid(DWORD dwObjectID, int oldX, int oldY, int n
     }
 }
 
-std::vector<sServerObject*> CMapInstance::GetPlayersInAOI(int x, int y) {
-    std::vector<sServerObject*> result;
+std::vector<PlayerData*> CMapInstance::GetPlayersInAOI(int x, int y) {
+    std::vector<PlayerData*> result;
     int gx = x / GRID_SIZE;
     int gy = y / GRID_SIZE;
     
@@ -780,8 +766,8 @@ std::vector<sServerObject*> CMapInstance::GetPlayersInAOI(int x, int y) {
     return result;
 }
 
-std::vector<sServerObject*> CMapInstance::GetMonstersInAOI(int x, int y) {
-    std::vector<sServerObject*> result;
+std::vector<MonsterData*> CMapInstance::GetMonstersInAOI(int x, int y) {
+    std::vector<MonsterData*> result;
     int gx = x / GRID_SIZE;
     int gy = y / GRID_SIZE;
     
@@ -811,16 +797,7 @@ void CMapInstance::BroadcastPacketAOI_NoLock(int x, int y, const std::vector<BYT
     }
     if (targetIDs.empty()) return;
 
-    std::lock_guard<std::mutex> lock(g_SocketsMutex);
-    for (SOCKET s : g_UnitSockets) {
-        if (s != excludeSocket && g_SocketToMap.count(s) && g_SocketToMap[s] == m_dwMapID) {
-            DWORD sCharID = g_SocketToChar.count(s) ? g_SocketToChar[s] : 0;
-            DWORD sObjID = sCharID + 400000000;
-            if (targetIDs.count(sObjID)) {
-                SafeSend(s, (const char*)packet.data(), (int)packet.size(), 0);
-            }
-        }
-    }
+    SessionMgr::GetInstance().SendToObjectIDs(targetIDs, m_dwMapID, packet, excludeSocket);
 }
 
 void CMapInstance::BroadcastPacketAOI(int x, int y, const std::vector<BYTE>& packet, SOCKET excludeSocket) {
@@ -845,16 +822,5 @@ void CMapInstance::BroadcastPacketAOI(int x, int y, const std::vector<BYTE>& pac
     }
     if (targetIDs.empty()) return;
 
-    std::lock_guard<std::mutex> lock(g_SocketsMutex);
-    for (SOCKET s : g_UnitSockets) {
-        if (s != excludeSocket && g_SocketToMap.count(s) && g_SocketToMap[s] == m_dwMapID) {
-            // NOTE: Do NOT call SessionMgr::GetCharID() here — it locks g_SocketsMutex again,
-            // causing a deadlock since we already hold it. Access g_SocketToChar directly.
-            DWORD sCharID = g_SocketToChar.count(s) ? g_SocketToChar[s] : 0;
-            DWORD sObjID = sCharID + 400000000;
-            if (targetIDs.count(sObjID)) {
-                SafeSend(s, (const char*)packet.data(), (int)packet.size(), 0);
-            }
-        }
-    }
+    SessionMgr::GetInstance().SendToObjectIDs(targetIDs, m_dwMapID, packet, excludeSocket);
 }

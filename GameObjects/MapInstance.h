@@ -20,15 +20,15 @@ public:
     // ==========================================
     // 实体管理 (Entities Management)
     // ==========================================
-    void AddPlayer(const sServerObject& player);
+    void AddPlayer(const PlayerData& player);
     void RemovePlayer(DWORD dwObjectID);
-    sServerObject* GetPlayer(DWORD dwObjectID);
-    std::map<DWORD, sServerObject>& GetPlayers() { return m_players; }
+    PlayerData* GetPlayer(DWORD dwObjectID);
+    std::map<DWORD, PlayerData>& GetPlayers() { return m_players; }
 
-    void AddMonster(const sServerObject& monster);
+    void AddMonster(const MonsterData& monster);
     void RemoveMonster(DWORD dwObjectID);
-    sServerObject* GetMonster(DWORD dwObjectID);
-    std::map<DWORD, sServerObject>& GetMonsters() { return m_monsters; }
+    MonsterData* GetMonster(DWORD dwObjectID);
+    std::map<DWORD, MonsterData>& GetMonsters() { return m_monsters; }
 
     // ==========================================
     // 地图心跳与 AI (Map Tick & AI)
@@ -42,8 +42,8 @@ public:
     static const int GRID_SIZE = 100;
     
     // Retrieves objects in the 9-grid area (current + 8 surrounding)
-    std::vector<sServerObject*> GetPlayersInAOI(int x, int y);
-    std::vector<sServerObject*> GetMonstersInAOI(int x, int y);
+    std::vector<PlayerData*> GetPlayersInAOI(int x, int y);
+    std::vector<MonsterData*> GetMonstersInAOI(int x, int y);
     
     // Updates object position in the grid. Call this when wPosX/wPosY changes!
     void UpdatePlayerGrid(DWORD dwObjectID, int oldX, int oldY, int newX, int newY);
@@ -71,9 +71,8 @@ private:
     std::mutex m_mapMutex;
 
     // Entity list within this map
-    std::map<DWORD, sServerObject> m_players;
-    std::map<DWORD, sServerObject> m_monsters;
-    // std::map<DWORD, sServerObject> m_items; // Reserved for drops
+    std::map<DWORD, PlayerData> m_players;
+    std::map<DWORD, MonsterData> m_monsters;
 
     // AOI Grid Data
     int m_gridCols;
@@ -86,12 +85,12 @@ private:
     void AddToGrid(std::vector<std::vector<DWORD>>& grid, int gridIdx, DWORD dwObjectID);
 
     // Internal AI helpers
-    void ProcessMonsterAI(DWORD tick, sServerObject& obj);
+    void ProcessMonsterAI(DWORD tick, MonsterData& obj);
     void ProcessBuffs(DWORD tick);
     void InterpolatePlayerPositions(DWORD tick);
 
 public:
-    // Pending sync broadcasts (filled under m_mapMutex, sent under g_SocketsMutex)
+    // Pending sync broadcasts (filled under m_mapMutex, sent via SessionMgr outside lock)
     struct PendingSyncMove {
         DWORD dwObjectID;
         WORD wPosX, wPosY;

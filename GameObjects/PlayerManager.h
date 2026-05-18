@@ -20,3 +20,8 @@ private:
     PlayerManager() {}
     ~PlayerManager() {}
 };
+
+// --- Free functions (migrated from UnitServer) ---
+void SendCharStatusInfoAck(SOCKET clientSocket, DWORD dwCharID, WORD opCode);
+void UpdatePlayerStatsAndSend(SOCKET clientSocket, DWORD dwCharID);
+void BroadcastPacketToMap(DWORD mapID, const std::vector<BYTE>& packet);

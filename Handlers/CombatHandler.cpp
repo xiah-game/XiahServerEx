@@ -2,7 +2,8 @@
 #include "PartyHandler.h"
 #include "../MonsterAI.h"
 #include "../GameObjects/DropManager.h"
-#include "../UnitServer.h"
+#include "../GameObjects/PlayerManager.h"
+#include "../GameObjects/ExpSystem.h"
 #include "../DBHelper.h"
 #include "../GameObjects/MapInstance.h"
 #include "../Network/SessionMgr.h"
@@ -16,7 +17,7 @@ void OnPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
     }
     LOG("> RECEIVED 0x4003 PreAttackReq! Size: " + std::to_string(totalSize) + " Hex: " + hexDump);
     
-    // Build 0x4004 PreAttackAck éˆ¥?echo payload back with id changed to 0x4004
+    // Build 0x4004 PreAttackAck éˆ?echo payload back with id changed to 0x4004
     // Layout: [4-byte header] + [payload bytes] + optional [bAttackSpeed if PC attacker]
     std::vector<BYTE> ackBuf(totalSize + 4);
     memcpy(ackBuf.data() + 4, payload, totalSize);
@@ -30,9 +31,9 @@ void OnPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
             DWORD pMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
             if (g_MapInstances.count(pMapID)) {
                 std::lock_guard<std::mutex> lock(g_MapInstances[pMapID]->GetMutex());
-                sServerObject* pAtk = g_MapInstances[pMapID]->GetPlayer(atkId);
+                PlayerData* pAtk = g_MapInstances[pMapID]->GetPlayer(atkId);
                 if (pAtk) {
-                    if (pAtk->wAtkSpeed > 0) atkSpeed = (BYTE)pAtk->wAtkSpeed;
+                    // wAtkSpeed not in PlayerData; use default 9
                     // Sync position from attack packet (client may not send ENDMOVE when auto-walking to target)
                     if (atkPosX > 0 && atkPosX < 2048 && atkPosY > 0 && atkPosY < 2048) {
                         int oldX = pAtk->wPosX, oldY = pAtk->wPosY;
@@ -82,11 +83,11 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
         DWORD attackerCharID = 0;
         BYTE deadObjType = 0; DWORD deadObjID = 0; BYTE deadPropType = 0; DWORD deadExp = 0;
         std::vector<DWORD> partyExpMembers;
-        sServerObject deadMonsterCopy; // copy for GenerateDrops outside mutex
+        MonsterData deadMonsterCopy; // copy for GenerateDrops outside mutex
         bool hasDeadMonsterCopy = false;
         {
             std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-            sServerObject* pAttacker = mapInst->GetPlayer(attackerId);
+            PlayerData* pAttacker = mapInst->GetPlayer(attackerId);
             if (pAttacker) {
                 finalDmg = pAttacker->dwTotalAtk;
                 if (finalDmg == 0) finalDmg = 50; // Fallback
@@ -94,10 +95,11 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                 LOG("[CombatHandler] Player " + std::to_string(attackerId) + " attacks with Dmg: " + std::to_string(finalDmg) + " (TotalAtk: " + std::to_string(pAttacker->dwTotalAtk) + ")");
             }
             
-            sServerObject* pTarget = mapInst->GetMonster(targetId);
+            MonsterData* pTarget = mapInst->GetMonster(targetId);
             if (pTarget) {
-                // Use computed Init+Inc values from sServerObject, NOT raw template Init
-                DWORD monsterDef = pTarget->wWepDef;
+                DWORD monsterDef = 0; // MonsterData has no wWepDef; use template
+                if (g_NpcTemplates.count(pTarget->bPropType))
+                    monsterDef = g_NpcTemplates[pTarget->bPropType].dwDefInit;
                 WORD monsterAvoid = pTarget->wAvoidRatio;
                 
                 // Xiah Dodge Logic
@@ -175,7 +177,7 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                         
                         // Get attacker position for distance check
                         WORD atkX = 0, atkY = 0;
-                        sServerObject* pAtk2 = mapInst->GetPlayer(attackerId);
+                        PlayerData* pAtk2 = mapInst->GetPlayer(attackerId);
                         if (pAtk2) { atkX = pAtk2->wPosX; atkY = pAtk2->wPosY; }
                         
                         for (auto& m : members) {
@@ -185,7 +187,7 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                                 if (mMap == playerMapID) {
                                     // Distance check (within AOI range ~50 tiles)
                                     DWORD mObjID = m.dwCharID + 400000000;
-                                    sServerObject* mObj = mapInst->GetPlayer(mObjID);
+                                    PlayerData* mObj = mapInst->GetPlayer(mObjID);
                                     if (mObj) {
                                         float dx = (float)mObj->wPosX - (float)atkX;
                                         float dy = (float)mObj->wPosY - (float)atkY;
@@ -216,7 +218,7 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                                 if (mSock != INVALID_SOCKET) {
                                     UpdatePlayerStatsAndSend(mSock, memberCharID);
                                     DWORD mObjID = memberCharID + 400000000;
-                                    sServerObject* mObj = mapInst->GetPlayer(mObjID);
+                                    PlayerData* mObj = mapInst->GetPlayer(mObjID);
                                     if (mObj) {
                                         mObj->dwHpCur = mObj->dwHpMax;
                                         mObj->wIpCur = mObj->wIpMax;
@@ -262,7 +264,7 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
             DWORD dwObjectID = attackerCharID + 400000000;
             {
                 std::lock_guard<std::mutex> lock2(mapInst->GetMutex());
-                sServerObject* pObj = mapInst->GetPlayer(dwObjectID);
+                PlayerData* pObj = mapInst->GetPlayer(dwObjectID);
                 if (pObj) {
                     pObj->dwHpCur = pObj->dwHpMax;
                     pObj->wIpCur = pObj->wIpMax;
@@ -275,7 +277,7 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
             // Send HP/IP bar update to client
             {
                 std::lock_guard<std::mutex> lock3(mapInst->GetMutex());
-                sServerObject* pObj = mapInst->GetPlayer(dwObjectID);
+                PlayerData* pObj = mapInst->GetPlayer(dwObjectID);
                 if (pObj) {
                     std::vector<BYTE> hpBuf(4);
                     auto push4 = [&](DWORD d) { hpBuf.push_back(d&0xFF); hpBuf.push_back((d>>8)&0xFF); hpBuf.push_back((d>>16)&0xFF); hpBuf.push_back((d>>24)&0xFF); };

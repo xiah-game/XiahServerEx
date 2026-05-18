@@ -12,7 +12,7 @@ void OnNpcInfoReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
     if (g_MapInstances.count(pMapID)) {
         CMapInstance* mapInst = g_MapInstances[pMapID];
         std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-        sServerObject* pObj = mapInst->GetMonster(reqId);
+        MonsterData* pObj = mapInst->GetMonster(reqId);
         if (pObj && pObj->bObjectType == 3) {
             std::vector<BYTE> ackBuf; ackBuf.reserve(64);
             ackBuf.push_back(0); // bResult
@@ -149,7 +149,7 @@ void OnFunctionalNpcItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload
     if (g_MapInstances.count(reqMapID)) {
         CMapInstance* mapInst = g_MapInstances[reqMapID];
         std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-        sServerObject* pObj = mapInst->GetMonster(reqObjectID);
+        MonsterData* pObj = mapInst->GetMonster(reqObjectID);
         if (pObj) {
             for (auto& it : pObj->npcItems) {
                 if (it.bSackCnt == bSackCnt) {
@@ -283,7 +283,7 @@ void OnBuyItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
     if (g_MapInstances.count(pMapID)) {
         CMapInstance* mapInst = g_MapInstances[pMapID];
         std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-        sServerObject* pObj = mapInst->GetMonster(dwShopID);
+        MonsterData* pObj = mapInst->GetMonster(dwShopID);
         if (pObj) {
             for (auto& it : pObj->npcItems) {
                 if (it.dwItemID == dwItemID) {

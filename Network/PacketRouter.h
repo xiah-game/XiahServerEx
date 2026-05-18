@@ -7,9 +7,9 @@
 typedef std::function<void(SOCKET, BYTE*, WORD)> PacketHandlerFunc;
 
 extern std::map<WORD, PacketHandlerFunc> g_PacketHandlers;
-extern std::map<SOCKET, DWORD> g_SocketToChar;
-extern std::map<SOCKET, DWORD> g_SocketToMap;
-extern std::mutex g_SocketsMutex;
+
+// NOTE: g_SocketToChar, g_SocketToMap, g_SocketsMutex have been moved into SessionMgr.
+// Use SessionMgr::GetInstance() to access session data.
 
 void InitPacketHandlers();
 void RegisterHandler(WORD id, PacketHandlerFunc func);

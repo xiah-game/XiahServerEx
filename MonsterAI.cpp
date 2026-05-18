@@ -3,40 +3,12 @@
 #include "Network/SessionMgr.h"
 #include "Network/PacketRouter.h"
 #include "GameObjects/MapInstance.h"
-#include "UnitServer.h"
 #include "GameObjects/PlayerManager.h"
+#include "GameObjects/ExpSystem.h"
 #include <cmath>
 #include <thread>
 #include <time.h>
 #include <set>
-
-extern std::vector<SOCKET> g_UnitSockets;
-extern std::map<SOCKET, DWORD> g_SocketToMap;
-extern std::mutex g_SocketsMutex;
-
-void BroadcastPacketToMap(DWORD mapID, const std::vector<BYTE>& packet) {
-    std::lock_guard<std::mutex> lock(g_SocketsMutex);
-    int sentCount = 0;
-    WORD pktId = (packet.size() >= 2) ? *(WORD*)packet.data() : 0;
-    for (SOCKET s : g_UnitSockets) {
-        if (g_SocketToMap.count(s) && g_SocketToMap[s] == mapID) {
-            int ret = SafeSend(s, (const char*)packet.data(), (int)packet.size(), 0);
-            LOG("[BroadcastPacketToMap] Sent " + std::to_string(packet.size()) + " bytes for ID: 0x" + std::to_string(pktId) + " to socket, map: " + std::to_string(mapID));
-            sentCount++;
-        } else if (g_SocketToMap.count(s)) {
-            // wrong map
-        } else {
-            // no map registered (e.g. spam socket or lobby)
-        }
-    }
-    if ((pktId == 0x4004 || pktId == 0x4006) && sentCount == 0) {
-        char buf[128]; sprintf(buf, "[Broadcast] WARNING: PktID 0x%04X to mapID %u reached 0 sockets!", pktId, mapID);
-        LOG(std::string(buf));
-    } else if (pktId == 0x4004 || pktId == 0x4006) {
-        char buf[128]; sprintf(buf, "[Broadcast] PktID 0x%04X successfully sent to %d sockets on mapID %u", pktId, sentCount, mapID);
-        LOG(std::string(buf));
-    }
-}
 
 void MonsterAIWorker(int workerId, int totalWorkers) {
     srand((unsigned int)time(NULL) ^ workerId);
@@ -65,9 +37,8 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
                     
                     // Broadcast pending sync moves outside map mutex to prevent deadlock
                     if (!syncsToSend.empty()) {
-                        std::lock_guard<std::mutex> sockLock(g_SocketsMutex);
                         for (const auto& sm : syncsToSend) {
-                            // Build SYNCMOVE_ACK (0x430E) — client adjusts target + speed, only SetPosition if far off
+                            // Build SYNCMOVE_ACK (0x430E)
                             std::vector<BYTE> buf; buf.resize(4);
                             buf.push_back(0); // bResult
                             buf.push_back(sm.dwObjectID & 0xFF); buf.push_back((sm.dwObjectID>>8)&0xFF); buf.push_back((sm.dwObjectID>>16)&0xFF); buf.push_back((sm.dwObjectID>>24)&0xFF);
@@ -80,7 +51,7 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
                             buf.push_back(sm.wDirection & 0xFF); buf.push_back(sm.wDirection >> 8);
                             buf.push_back(0); // bStatus
                             buf.push_back(sm.bSpeed);
-                            WORD wDiffTime = 150; // estimated time between syncs
+                            WORD wDiffTime = 150;
                             buf.push_back(wDiffTime & 0xFF); buf.push_back(wDiffTime >> 8);
                             
                             PACKET_HEADER* h = (PACKET_HEADER*)buf.data();
@@ -88,16 +59,15 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
                             h->payloadSize = buf.size() - sizeof(PACKET_HEADER);
                             EncryptPacket(buf.data(), 0x42);
                             
-                            // Send to all other players on same map
-                            for (SOCKET s : g_UnitSockets) {
-                                if (g_SocketToMap.count(s) && g_SocketToMap[s] == mapID) {
-                                    DWORD sCharID = g_SocketToChar.count(s) ? g_SocketToChar[s] : 0;
-                                    DWORD sObjID = sCharID + 400000000;
-                                    if (sObjID != sm.dwObjectID) { // Don't send to self
-                                        SafeSend(s, (const char*)buf.data(), buf.size(), 0);
-                                    }
+                            // Send to all other players on same map (exclude self)
+                            DWORD selfCharID = sm.dwObjectID - 400000000;
+                            SOCKET selfSock = SessionMgr::GetInstance().GetSocketByCharID(selfCharID);
+                            SessionMgr::GetInstance().ForEachSocketInMap(mapID, [&](SOCKET s, DWORD sCharID) {
+                                DWORD sObjID = sCharID + 400000000;
+                                if (sObjID != sm.dwObjectID) {
+                                    SafeSend(s, (const char*)buf.data(), buf.size(), 0);
                                 }
-                            }
+                            });
                         }
                     }
 
@@ -148,13 +118,9 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
                     }
                     // Send regen packets outside map mutex
                     if (!regenPackets.empty()) {
-                        std::lock_guard<std::mutex> sockLock(g_SocketsMutex);
                         for (const auto& ri : regenPackets) {
                             DWORD charID = ri.dwObjectID - 400000000;
-                            SOCKET targetSock = INVALID_SOCKET;
-                            for (auto& sc : g_SocketToChar) {
-                                if (sc.second == charID) { targetSock = sc.first; break; }
-                            }
+                            SOCKET targetSock = SessionMgr::GetInstance().GetSocketByCharID(charID);
                             if (targetSock == INVALID_SOCKET) continue;
                             
                             std::vector<BYTE> hpBuf(4);
@@ -207,7 +173,6 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
                     if (!expiredBuffs.empty()) {
                         // 1. Send 0x402E (KeepUpMugongEnd_ACK) to remove buff icon
                         {
-                            std::lock_guard<std::mutex> sockLock(g_SocketsMutex);
                             for (const auto& eb : expiredBuffs) {
                                 std::vector<BYTE> endAck(4 + 11);
                                 BYTE* ep = endAck.data() + 4;
@@ -221,11 +186,7 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
                                 headE->payloadSize = 11;
                                 EncryptPacket(endAck.data(), 0x42);
                                 // Broadcast to all players on same map
-                                for (SOCKET s : g_UnitSockets) {
-                                    if (g_SocketToMap.count(s) && g_SocketToMap[s] == mapID) {
-                                        SafeSend(s, (const char*)endAck.data(), endAck.size(), 0);
-                                    }
-                                }
+                                SessionMgr::GetInstance().BroadcastToMap(mapID, endAck);
                             }
                         }
                         // 2. Recalculate stats for affected players (outside all mutexes)
@@ -252,9 +213,10 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
                 // We do this by iterating all online players and checking if they're in a party
                 std::vector<std::pair<DWORD, SOCKET>> onlinePlayers;
                 {
-                    std::lock_guard<std::mutex> sockLock(g_SocketsMutex);
-                    for (auto& sc : g_SocketToChar) {
-                        onlinePlayers.push_back({sc.second, sc.first});
+                    auto allSockets = SessionMgr::GetInstance().GetAllSockets();
+                    for (SOCKET s : allSockets) {
+                        DWORD cid = SessionMgr::GetInstance().GetCharID(s);
+                        if (cid > 0) onlinePlayers.push_back({cid, s});
                     }
                 }
                 // Track which parties we've already synced

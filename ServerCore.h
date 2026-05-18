@@ -60,97 +60,100 @@ struct sFunctionalNpcItem {
     BYTE bSackCnt;
 };
 
-struct sServerObject {
-    DWORD dwObjectID;
-    BYTE  bObjectType;
-    DWORD dwMapID;
-    WORD  wPosX;
-    WORD  wPosY;
-    float fPosX;
-    float fPosY;
-    BYTE  bHeight;
-    BYTE  bPropType;
-    WORD  wSpawnX;
-    WORD  wSpawnY;
-    WORD  wDestX;
-    WORD  wDestY;
-    WORD  wWanderRange;
-    WORD  wAtkSpeed;
-    WORD  wAtkRange;
-    WORD  wStr;
-    WORD  wDex;
-    WORD  wVit;
-    WORD  wInt;
-    DWORD wWepAtk;
-    DWORD wWepDef;
-    DWORD wWepMag;
-    DWORD dwHpCur;
-    DWORD dwHpMax;
-    WORD wIpCur;
-    WORD wIpMax;
-    WORD wPlusSpeed;
-    WORD wCritical;
-    WORD wEquipHp;   // Equipment bonus to max HP (from nData9)
-    WORD wEquipIp;   // Equipment bonus to max IP (from nData10)
-    WORD wEquipRestoreHp; // Equipment HP regen per tick (from nData11)
-    WORD wEquipRestoreIp; // Equipment IP regen per tick (from nData12)
-    DWORD dwLastRegenTime; // Timestamp of last player HP/IP regen tick
-    DWORD dwTargetID;
-    DWORD dwLastAttackTime;
-    DWORD dwDeadTime; // AI: Timestamp when the monster died
-    DWORD dwInvulnerableUntil; // Player: Tick until which player cannot be targeted (death/respawn protection)
-    DWORD dwMovePattern;
-    DWORD dwAttackPattern;
-    std::string szName;
-    WORD wWalkSpeed;
-    WORD wLastSentDestX;
-    WORD wLastSentDestY;
-    WORD wSpawnRange; // AI: For respawning within a radius
-    WORD wSightRange; // AI: Calculated Sight Range (Init + Inc)
-    WORD wMeleeAtkRange; // AI: Calculated Melee Range (Init + Inc)
-    WORD wShotAtkRange;  // AI: Calculated Ranged Attack Range (Init + Inc)
-    DWORD dwExp;      // Exp rewarded on death (Init + Inc)
-    WORD wLevel;      // NPC Level (NPCLIST override or NPCTEMPLATE fallback)
-    WORD wAtkRatio;   // Hit ratio (Init + Inc)
-    WORD wAvoidRatio; // Dodge ratio (Init + Inc)
-    BYTE bGroupOrder; // Group order (affects client scale, = bOrderID)
-    BYTE bWalkSpeedByte; // Walk speed byte for client packet (from NPCTEMPLATE.bWalkSpeed)
-    WORD wRootItem;   // AI: Drop chance for Items (0-10000)
-    WORD wRootMoney;  // AI: Drop chance for Gold (0-10000)
-    WORD wRootRes;    // AI: Drop chance for Resources (0-10000)
-    WORD wRootBook;   // AI: Drop chance for Books (0-10000)
-    DWORD dwLastHealTime; // AI: Timestamp of last HP regeneration
-    WORD wLastUpdateX;    // Tracking: AoI distance checking
-    WORD wLastUpdateY;    // Tracking: AoI distance checking
-    DWORD dwLastMoveTime; // Tracking: Time of last movement for wDiffTime interpolation
-    
-    // Movement state tracking for AOI entry re-sync
-    bool  bIsMoving;
-    WORD  wMoveDesX;
-    WORD  wMoveDesY;
-    BYTE  bMoveDesH;
-    WORD  wMoveDirection;
-    BYTE  bMoveState;
-    
-    // Dynamic Stat Caches (Calculated via RecalculateStats)
-    DWORD dwTotalAtk;
-    DWORD dwTotalDef;
-    DWORD dwTotalHit;
-    DWORD dwTotalDodge;
+// ============================================================
+// Entity Type Hierarchy (Phase 2 refactor)
+// EntityBase → PlayerData / MonsterData
+// ============================================================
 
+struct EntityBase {
+    DWORD dwObjectID = 0;
+    BYTE  bObjectType = 0;   // 1=Player, 3=Monster, 5=FuncNPC
+    DWORD dwMapID = 0;
+    WORD  wPosX = 0;
+    WORD  wPosY = 0;
+    float fPosX = 0.0f;
+    float fPosY = 0.0f;
+    BYTE  bHeight = 1;
+    BYTE  bPropType = 0;     // bCharType for players, bNpcType for monsters
+    std::string szName;
+    DWORD dwHpCur = 0;
+    DWORD dwHpMax = 0;
+    WORD  wWalkSpeed = 11;
+    WORD  wLevel = 1;
+    DWORD dwDeadTime = 0;
+    WORD  wLastUpdateX = 0;  // AoI distance tracking
+    WORD  wLastUpdateY = 0;
+};
+
+struct PlayerData : EntityBase {
+    // Base stats
+    WORD  wStr = 10, wDex = 10, wVit = 10, wInt = 10;
+    // Weapon stats
+    DWORD wWepAtk = 0, wWepDef = 0, wWepMag = 0;
+    // IP (Mana)
+    WORD  wIpCur = 0, wIpMax = 0;
+    // Equipment bonuses
+    WORD  wPlusSpeed = 0, wCritical = 0;
+    WORD  wEquipHp = 0, wEquipIp = 0;
+    WORD  wEquipRestoreHp = 0, wEquipRestoreIp = 0;
+    DWORD dwLastRegenTime = 0;
+    DWORD dwInvulnerableUntil = 0;  // Death/respawn protection
+    // Movement state
+    bool  bIsMoving = false;
+    WORD  wMoveDesX = 0, wMoveDesY = 0;
+    BYTE  bMoveDesH = 0;
+    WORD  wMoveDirection = 0;
+    BYTE  bMoveState = 0;
+    DWORD dwLastMoveTime = 0;
+    // Dynamic stat caches (RecalculateStats)
+    DWORD dwTotalAtk = 0, dwTotalDef = 0, dwTotalHit = 0, dwTotalDodge = 0;
+    // Buffs
     struct sActiveBuff {
         DWORD dwMugongID;
         BYTE bLevel;
         DWORD dwEndTime;
         bool bIsDebuff;
     };
-    std::map<DWORD, sActiveBuff> activeBuffs; // Tracks currently active buffs
-    
-    std::map<DWORD, DWORD> mugongLastCastTime; // AI: Tracks cooldowns for each skill
-    std::map<DWORD, BYTE> learnedMugongs; // Player: Tracks learned MugongID -> Level
-    std::vector<sFunctionalNpcItem> npcItems;
-    sServerObject(): dwObjectID(0), bObjectType(0), dwMapID(0), wPosX(0), wPosY(0), fPosX(0.0f), fPosY(0.0f), bHeight(1), bPropType(0), wSpawnX(0), wSpawnY(0), wDestX(0), wDestY(0), wWanderRange(0), wAtkSpeed(9), wMeleeAtkRange(10), wShotAtkRange(0), wStr(10), wDex(10), wVit(10), wInt(10), wWepAtk(0), wWepDef(0), wWepMag(0), dwHpCur(0), dwHpMax(0), wIpCur(0), wIpMax(0), wPlusSpeed(0), wCritical(0), wEquipHp(0), wEquipIp(0), wEquipRestoreHp(0), wEquipRestoreIp(0), dwLastRegenTime(0), dwTargetID(0), dwLastAttackTime(0), dwDeadTime(0), dwInvulnerableUntil(0), dwMovePattern(0), dwAttackPattern(0), wWalkSpeed(11), wLastSentDestX(0), wLastSentDestY(0), wSpawnRange(0), wSightRange(0), dwExp(0), wLevel(1), wAtkRatio(0), wAvoidRatio(0), bGroupOrder(0), bWalkSpeedByte(8), wRootItem(0), wRootMoney(0), wRootRes(0), wRootBook(0), dwLastHealTime(0), wLastUpdateX(0), wLastUpdateY(0), dwLastMoveTime(0), dwTotalAtk(0), dwTotalDef(0), dwTotalHit(0), dwTotalDodge(0), bIsMoving(false), wMoveDesX(0), wMoveDesY(0), bMoveDesH(0), wMoveDirection(0), bMoveState(0) {}
+    std::map<DWORD, sActiveBuff> activeBuffs;
+    // Skills
+    std::map<DWORD, BYTE> learnedMugongs;
+
+    PlayerData() { bObjectType = 1; }
 };
+
+struct MonsterData : EntityBase {
+    // Spawn
+    WORD  wSpawnX = 0, wSpawnY = 0, wSpawnRange = 0;
+    WORD  wDestX = 0, wDestY = 0;
+    WORD  wWanderRange = 0;
+    // Combat
+    WORD  wAtkSpeed = 9;
+    DWORD wWepAtk = 0;  // Monster base attack power
+    WORD  wMeleeAtkRange = 10, wShotAtkRange = 0;
+    WORD  wSightRange = 0;
+    WORD  wAtkRatio = 0, wAvoidRatio = 0;
+    DWORD dwTargetID = 0;
+    DWORD dwLastAttackTime = 0;
+    DWORD dwMovePattern = 0, dwAttackPattern = 0;
+    DWORD dwExp = 0;
+    // Movement tracking
+    WORD  wLastSentDestX = 0, wLastSentDestY = 0;
+    // Display
+    BYTE  bGroupOrder = 0;
+    BYTE  bWalkSpeedByte = 8;
+    // Drop rates
+    WORD  wRootItem = 0, wRootMoney = 0, wRootRes = 0, wRootBook = 0;
+    DWORD dwLastHealTime = 0;
+    // NPC skills
+    std::map<DWORD, DWORD> mugongLastCastTime;
+    // Functional NPC items (bObjectType=5 only)
+    std::vector<sFunctionalNpcItem> npcItems;
+
+    MonsterData() { bObjectType = 3; }
+};
+
+// Backward-compat alias — will be removed after all handlers are migrated
+typedef PlayerData sServerObject;
 
 struct sNpcMugong {
     DWORD dwMugongID;

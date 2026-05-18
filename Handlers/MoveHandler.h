@@ -3,6 +3,6 @@
 #include "../XiahClient/csprotocol.h"
 #include "../Network/PacketRouter.h"
 #include "../Network/SessionMgr.h"
-#include "../UnitServer.h"
+#include "../GameObjects/PlayerManager.h"
 
 void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize, WORD headerId);

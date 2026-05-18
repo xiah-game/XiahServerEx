@@ -355,7 +355,7 @@ void LoadGameData() {
 }
 
 void LoadWorldObjects() {
-    std::vector<sServerObject> g_WorldObjects;
+    std::vector<MonsterData> g_WorldObjects;
     
     // Load Functional NPCs
     std::string qNpc = "SELECT dwID, dwMapID, wPosX, wPosY, bHeight, bType, szName FROM FunctionalNpcList";
@@ -369,7 +369,7 @@ void LoadWorldObjects() {
         SQLGetData(hStmt, 6, SQL_C_SLONG, &t, 0, &c[5]);
         SQLGetData(hStmt, 7, SQL_C_CHAR, nameBuf, sizeof(nameBuf), &c[6]);
         
-        sServerObject obj;
+        MonsterData obj;
         obj.dwObjectID = id + 100000;
         obj.bObjectType = 5;
         obj.dwMapID = mapid; 
@@ -416,7 +416,7 @@ void LoadWorldObjects() {
         if (c[10] == SQL_NULL_DATA) range = 0;
         
         for (int i = 0; i < count; ++i) {
-            sServerObject obj;
+            MonsterData obj;
             // Generate a unique ID for each instance by combining DB ID and index
             obj.dwObjectID = id + 200000 + (i * 1000000); 
             obj.bObjectType = 3;
@@ -464,7 +464,6 @@ void LoadWorldObjects() {
                 obj.dwHpCur = obj.dwHpMax;
                 
                 obj.wWepAtk = tpl.dwPwrInit + (c[13] != SQL_NULL_DATA ? pwrInc : 0);
-                obj.wWepDef = tpl.dwDefInit + (c[14] != SQL_NULL_DATA ? defInc : 0);
                 
                 obj.wSightRange = tpl.wSightRangeInit + (c[11] != SQL_NULL_DATA ? sightInc : 0);
                 obj.wWanderRange = tpl.wWanderRangeInit + (c[8] != SQL_NULL_DATA ? wander : 0);

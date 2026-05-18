@@ -438,9 +438,8 @@ void OnItemDropReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
     // Drop item onto the map using DropManager
     DWORD mapID = SessionMgr::GetInstance().GetMapID(clientSocket);
     
-    // Build a temporary sServerObject for DropItemToMap
-    // DO NOT memset - sServerObject has std::string/vector members!
-    sServerObject fakeObj = {};
+    // Build a temporary MonsterData for DropItemToMap position
+    MonsterData fakeObj;
     fakeObj.dwMapID = mapID;
     fakeObj.wPosX = wPosX;
     fakeObj.wPosY = wPosY;
@@ -590,11 +589,11 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
         DBHelper::GetInstance().ExecuteUpdate(statusUpd);
 
         DWORD oldMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
-        sServerObject objToMove;
+        PlayerData objToMove;
         bool found = false;
         if (g_MapInstances.count(oldMapID)) {
             std::lock_guard<std::mutex> lock(g_MapInstances[oldMapID]->GetMutex());
-            sServerObject* pObj = g_MapInstances[oldMapID]->GetPlayer(charID + 400000000);
+            PlayerData* pObj = g_MapInstances[oldMapID]->GetPlayer(charID + 400000000);
             if (pObj) {
                 objToMove = *pObj;
                 found = true;
@@ -635,7 +634,7 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
         DWORD pMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
         if (g_MapInstances.count(pMapID)) {
             std::lock_guard<std::mutex> lock(g_MapInstances[pMapID]->GetMutex());
-            sServerObject* pObj = g_MapInstances[pMapID]->GetPlayer(charID + 400000000);
+            PlayerData* pObj = g_MapInstances[pMapID]->GetPlayer(charID + 400000000);
             if (pObj) {
                 pObj->dwHpCur += incrHp;
                 if (pObj->dwHpCur > pObj->dwHpMax) pObj->dwHpCur = pObj->dwHpMax;

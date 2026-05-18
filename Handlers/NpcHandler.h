@@ -4,7 +4,7 @@
 #include "../DBHelper.h"
 #include "../Network/PacketRouter.h"
 #include "../Network/SessionMgr.h"
-#include "../UnitServer.h"
+#include "../GameObjects/PlayerManager.h"
 #include <unordered_set>
 
 void OnNpcInfoReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);

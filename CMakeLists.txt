@@ -23,6 +23,7 @@ set(SOURCES
     Network/PacketRouter.cpp
     Network/SessionMgr.cpp
     Network/SystemMessage.cpp
+    Network/PacketBuilder.cpp
     Handlers/InitHandlers.cpp
     Handlers/LoginHandler.cpp
     Handlers/ItemHandler.cpp
@@ -39,6 +40,9 @@ set(SOURCES
     Handlers/BankHandler.cpp
     Handlers/StatHandler.cpp
     GameObjects/DropManager.cpp
+    GameObjects/ExpSystem.cpp
+    DB/CharacterDB.cpp
+    DB/ItemDB.cpp
     GameObjects/MugongManager.cpp
     GameObjects/PlayerManager.cpp
     GameObjects/MapInstance.cpp
