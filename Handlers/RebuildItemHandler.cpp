@@ -244,14 +244,13 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
     }
     
     CharacterDB::GetInstance().SubtractMoney(charID, rebuildCost);
-    DBHelper::GetInstance().ExecuteQuery("SELECT dwMoney FROM CHAR_DATA WHERE dwCharID = " + std::to_string(charID), [&](SQLHSTMT hStmt) {
-        INT64 currentMoney = 0; SQLLEN cb;
-        SQLGetData(hStmt, 1, SQL_C_SBIGINT, &currentMoney, 0, &cb);
+    {
+        INT64 currentMoney = CharacterDB::GetInstance().GetMoney(charID);
         std::vector<BYTE> moneyBuf(13); PACKET_HEADER* mHead = (PACKET_HEADER*)moneyBuf.data();
         mHead->id = 0x3B13; mHead->payloadSize = 9;
         *((INT64*)(moneyBuf.data() + 4)) = (INT64)currentMoney; moneyBuf[12] = 0;
         EncryptPacket(moneyBuf.data(), 0x42); SafeSend(clientSocket, (const char*)moneyBuf.data(), moneyBuf.size(), 0);
-    });
+    }
     
     for (int i=0; i<3; i++) {
         if (dwResourceID[i] != 0) {
@@ -398,14 +397,7 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
         else if (itemType >= 2 && itemType <= 4) { finalData5 += totalWujingBonus; finalData9 += totalSujingBonus; } 
         else { finalData5 += totalWujingBonus; finalData4 += totalSujingBonus; }
 
-        DBHelper::GetInstance().ExecuteUpdate("IF EXISTS (SELECT 1 FROM ITEMDATA WHERE dwItemID = " + std::to_string(dwItemID) + ") "
-            "UPDATE ITEMDATA SET nData4 = " + std::to_string(finalData4) + ", nData5 = " + std::to_string(finalData5) + 
-            ", nData9 = " + std::to_string(finalData9) + ", nData14 = " + std::to_string(currentRebuild) + 
-            ", nData15 = " + std::to_string(currentAppend) + ", nData17 = " + std::to_string(currentAttempts) +
-            " WHERE dwItemID = " + std::to_string(dwItemID) + " "
-            "ELSE INSERT INTO ITEMDATA (dwItemID, nData4, nData5, nData9, nData14, nData15, nData17) VALUES (" + 
-            std::to_string(dwItemID) + ", " + std::to_string(finalData4) + ", " + std::to_string(finalData5) + 
-            ", " + std::to_string(finalData9) + ", " + std::to_string(currentRebuild) + ", " + std::to_string(currentAppend) + ", " + std::to_string(currentAttempts) + ")");
+        ItemDB::GetInstance().UpsertRebuildData(dwItemID, finalData4, finalData5, finalData9, currentRebuild, currentAppend, currentAttempts);
 
         ItemDB::GetInstance().UpdateItemName(dwItemID, newName);
     }
