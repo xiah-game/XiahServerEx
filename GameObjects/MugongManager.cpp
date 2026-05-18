@@ -1,4 +1,5 @@
 #include "MugongManager.h"
+#include "../DB/CharacterDB.h"
 #include "../DBHelper.h"
 #include <cstring>
 
@@ -145,11 +146,9 @@ void MugongManager::LearnMugong(SOCKET clientSocket, DWORD charID, DWORD dwMugon
     
     int currentLvl = GetPlayerMugongLevel(charID, dwMugongID);
     if (currentLvl == 0) {
-        std::string qInsert = "INSERT INTO CHAR_MUGONG (dwCharID, dwMugongID, bMugongLevel) VALUES (" + std::to_string(charID) + ", " + std::to_string(dwMugongID) + ", " + std::to_string(targetLevel) + ")";
-        DBHelper::GetInstance().ExecuteUpdate(qInsert);
+        CharacterDB::GetInstance().InsertMugong(charID, dwMugongID, (BYTE)targetLevel);
     } else {
-        std::string qUpdate = "UPDATE CHAR_MUGONG SET bMugongLevel = " + std::to_string(targetLevel) + " WHERE dwCharID = " + std::to_string(charID) + " AND dwMugongID = " + std::to_string(dwMugongID);
-        DBHelper::GetInstance().ExecuteUpdate(qUpdate);
+        CharacterDB::GetInstance().UpdateMugongLevel(charID, dwMugongID, (BYTE)targetLevel);
     }
     
     std::vector<BYTE> ackBuf(4);
@@ -213,12 +212,10 @@ void MugongManager::UpgradeMugong(SOCKET clientSocket, DWORD charID, DWORD dwMug
     }
     
     // Deduct TP
-    std::string qDeduct = "UPDATE CHAR_DATA SET wRemainTp = wRemainTp - " + std::to_string(targetData->dwNeedPoint) + " WHERE dwCharID = " + std::to_string(charID);
-    DBHelper::GetInstance().ExecuteUpdate(qDeduct);
+    CharacterDB::GetInstance().DeductTpFromCharData(charID, targetData->dwNeedPoint);
     
     // Update Mugong Level
-    std::string qUpdate = "UPDATE CHAR_MUGONG SET bMugongLevel = " + std::to_string(targetLvl) + " WHERE dwCharID = " + std::to_string(charID) + " AND dwMugongID = " + std::to_string(dwMugongID);
-    DBHelper::GetInstance().ExecuteUpdate(qUpdate);
+    CharacterDB::GetInstance().UpdateMugongLevel(charID, dwMugongID, (BYTE)targetLvl);
     
     // Send ACK
     std::vector<BYTE> ackBuf(4);

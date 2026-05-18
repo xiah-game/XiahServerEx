@@ -162,3 +162,21 @@ void CharacterDB::DeductTP(DWORD dwCharID, WORD amount) {
         + " WHERE dwCharID = " + std::to_string(dwCharID);
     DBHelper::GetInstance().ExecuteUpdate(q);
 }
+
+void CharacterDB::DeductTpFromCharData(DWORD dwCharID, DWORD amount) {
+    std::string q = "UPDATE CHAR_DATA SET wRemainTp = wRemainTp - " + std::to_string(amount)
+        + " WHERE dwCharID = " + std::to_string(dwCharID);
+    DBHelper::GetInstance().ExecuteUpdate(q);
+}
+
+void CharacterDB::InsertMugong(DWORD dwCharID, DWORD dwMugongID, BYTE bLevel) {
+    std::string q = "INSERT INTO CHAR_MUGONG (dwCharID, dwMugongID, bMugongLevel) VALUES ("
+        + std::to_string(dwCharID) + ", " + std::to_string(dwMugongID) + ", " + std::to_string(bLevel) + ")";
+    DBHelper::GetInstance().ExecuteUpdate(q);
+}
+
+void CharacterDB::UpdateMugongLevel(DWORD dwCharID, DWORD dwMugongID, BYTE bLevel) {
+    std::string q = "UPDATE CHAR_MUGONG SET bMugongLevel = " + std::to_string(bLevel)
+        + " WHERE dwCharID = " + std::to_string(dwCharID) + " AND dwMugongID = " + std::to_string(dwMugongID);
+    DBHelper::GetInstance().ExecuteUpdate(q);
+}

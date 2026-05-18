@@ -93,6 +93,15 @@ public:
     // Deduct TP for skill learning
     void DeductTP(DWORD dwCharID, WORD amount);
 
+    // Deduct TP from CHAR_DATA (wRemainTp field, used by MugongManager)
+    void DeductTpFromCharData(DWORD dwCharID, DWORD amount);
+
+    // Insert new mugong skill
+    void InsertMugong(DWORD dwCharID, DWORD dwMugongID, BYTE bLevel);
+
+    // Update mugong skill level
+    void UpdateMugongLevel(DWORD dwCharID, DWORD dwMugongID, BYTE bLevel);
+
 private:
     CharacterDB() {}
     ~CharacterDB() {}
