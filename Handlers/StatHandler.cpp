@@ -1,6 +1,6 @@
 #include "StatHandler.h"
 #include "../Network/SessionMgr.h"
-#include "../DBHelper.h"
+#include "../DB/CharacterDB.h"
 #include "../GameObjects/PlayerManager.h"
 #include "../ServerCore.h"
 #include <vector>
@@ -17,20 +17,12 @@ namespace StatHandler {
         
         if (bSpValue == 0) return;
         
-        // 1. Fetch current stats
-        std::string q = "SELECT wStr, wSus, wDex, wVit, wRemainSp FROM CHAR_POWER WHERE dwCharID = " + std::to_string(charID);
-        WORD wStr = 0, wSus = 0, wDex = 0, wVit = 0, wRemainSp = 0;
-        bool bFound = false;
+        // 1. Fetch current stats via CharacterDB
+        CharacterDB::CharPower stats;
+        bool bFound = CharacterDB::GetInstance().GetCharData(charID, stats);
         
-        DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
-            bFound = true;
-            SQLLEN cb;
-            SQLGetData(hStmt, 1, SQL_C_USHORT, &wStr, 0, &cb);
-            SQLGetData(hStmt, 2, SQL_C_USHORT, &wSus, 0, &cb);
-            SQLGetData(hStmt, 3, SQL_C_USHORT, &wDex, 0, &cb);
-            SQLGetData(hStmt, 4, SQL_C_USHORT, &wVit, 0, &cb);
-            SQLGetData(hStmt, 5, SQL_C_USHORT, &wRemainSp, 0, &cb);
-        });
+        WORD wStr = stats.wStr, wSus = stats.wSus, wDex = stats.wDex, wVit = stats.wVit;
+        WORD wRemainSp = stats.wRemainSp;
         
         auto sendFail = [&]() {
             std::vector<BYTE> ackBuf(7, 0);
@@ -47,13 +39,12 @@ namespace StatHandler {
             return;
         }
         
-        // 2. Update stats
-        std::string colName = "";
+        // 2. Apply stat change
         WORD newValue = 0;
-        if (bSpType == 1) { colName = "wDex"; newValue = wDex + bSpValue; }
-        else if (bSpType == 2) { colName = "wStr"; newValue = wStr + bSpValue; }
-        else if (bSpType == 3) { colName = "wSus"; newValue = wSus + bSpValue; }
-        else if (bSpType == 4) { colName = "wVit"; newValue = wVit + bSpValue; }
+        if (bSpType == 1) { wDex += bSpValue; newValue = wDex; }
+        else if (bSpType == 2) { wStr += bSpValue; newValue = wStr; }
+        else if (bSpType == 3) { wSus += bSpValue; newValue = wSus; }
+        else if (bSpType == 4) { wVit += bSpValue; newValue = wVit; }
         else {
             sendFail();
             return;
@@ -61,30 +52,26 @@ namespace StatHandler {
         
         wRemainSp -= bSpValue;
         
-        std::string upd = "UPDATE CHAR_POWER SET " + colName + " = " + std::to_string(newValue) + 
-                          ", wRemainSp = " + std::to_string(wRemainSp) + " WHERE dwCharID = " + std::to_string(charID);
-                          
-        if (DBHelper::GetInstance().ExecuteUpdate(upd)) {
-            // 3. Send ACK
-            std::vector<BYTE> ackBuf;
-            ackBuf.push_back(0); // bResult = success
-            ackBuf.push_back(bSpType);
-            ackBuf.push_back(bSpValue);
-            ackBuf.push_back(wRemainSp & 0xFF); ackBuf.push_back(wRemainSp >> 8);
-            ackBuf.push_back(newValue & 0xFF); ackBuf.push_back(newValue >> 8);
-            
-            std::vector<BYTE> fullBuf(ackBuf.size() + 4);
-            memcpy(fullBuf.data() + 4, ackBuf.data(), ackBuf.size());
-            PACKET_HEADER* head = (PACKET_HEADER*)fullBuf.data();
-            head->id = 0x401E; // CS_BT_EXECSP_ACK
-            head->payloadSize = ackBuf.size();
-            EncryptPacket(fullBuf.data(), 0x42);
-            SafeSend(clientSocket, (const char*)fullBuf.data(), fullBuf.size(), 0);
-            
-            // 4. Recalculate stats and send updates
-            UpdatePlayerStatsAndSend(clientSocket, charID);
-        } else {
-            sendFail();
-        }
+        // 3. Persist via CharacterDB
+        CharacterDB::GetInstance().UpdateStatPoints(charID, wStr, wSus, wDex, wVit, wRemainSp);
+        
+        // 4. Send ACK
+        std::vector<BYTE> ackBuf;
+        ackBuf.push_back(0); // bResult = success
+        ackBuf.push_back(bSpType);
+        ackBuf.push_back(bSpValue);
+        ackBuf.push_back(wRemainSp & 0xFF); ackBuf.push_back(wRemainSp >> 8);
+        ackBuf.push_back(newValue & 0xFF); ackBuf.push_back(newValue >> 8);
+        
+        std::vector<BYTE> fullBuf(ackBuf.size() + 4);
+        memcpy(fullBuf.data() + 4, ackBuf.data(), ackBuf.size());
+        PACKET_HEADER* head = (PACKET_HEADER*)fullBuf.data();
+        head->id = 0x401E; // CS_BT_EXECSP_ACK
+        head->payloadSize = ackBuf.size();
+        EncryptPacket(fullBuf.data(), 0x42);
+        SafeSend(clientSocket, (const char*)fullBuf.data(), fullBuf.size(), 0);
+        
+        // 5. Recalculate stats and send updates
+        UpdatePlayerStatsAndSend(clientSocket, charID);
     }
 }

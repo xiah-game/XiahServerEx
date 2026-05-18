@@ -1,6 +1,8 @@
 #include "DropManager.h"
 #include "../DBHelper.h"
 #include "PlayerManager.h"
+#include "../DB/ItemDB.h"
+#include "../DB/CharacterDB.h"
 #include "../Network/SystemMessage.h"
 #include <iostream>
 
@@ -389,8 +391,7 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
         SafeSend(clientSocket, (const char*)rmBuf.data(), rmBuf.size(), 0);
         
         // Add money directly to database
-        std::string qUpdate = "UPDATE CHAR_DATA SET dwMoney = dwMoney + " + std::to_string(drop.amount) + " WHERE dwCharID = " + std::to_string(playerID);
-        DBHelper::GetInstance().ExecuteUpdate(qUpdate);
+        CharacterDB::GetInstance().AddMoney(playerID, drop.amount);
         
         // Fetch new balance
         std::string qSelect = "SELECT dwMoney FROM CHAR_DATA WHERE dwCharID = " + std::to_string(playerID);
@@ -440,33 +441,20 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
         int startPos = (actualSackID == 1) ? 20 : (actualSackID == 2) ? 60 : 100;
         BYTE relativeSackPos = freePos - startPos;
         
-        // Insert into ITEM table
-        DWORD newDbItemID = 0;
-        std::string insItem = "SET NOCOUNT ON; INSERT INTO ITEM (wRefID, bType, bKind, wVisualID, szName, dwCost, wLevel, bCharType, wAmount, nBasicData1, nBasicData2, nBasicData3, nBasicData4, nBasicData5) SELECT wRefID, bType, bKind, wVisualID, szName, dwCost, wLevel, bCharType, wAmount, nBasicData1, nBasicData2, nBasicData3, nBasicData4, nBasicData5 FROM ITEMTEMPLATE WHERE wRefID = " + std::to_string(drop.wRefID) + "; SELECT @@IDENTITY;";
+        // Insert into ITEM table via ItemDB
+        DWORD newDbItemID = ItemDB::GetInstance().CreateItemFromTemplate(drop.wRefID);
         
-        DBHelper::GetInstance().ExecuteQuery(insItem, [&](SQLHSTMT hStmt) {
-            SQLLEN c;
-            SQLGetData(hStmt, 1, SQL_C_ULONG, &newDbItemID, 0, &c);
-        });
-        
-        if (newDbItemID == 0) { // Extreme fallback
-            newDbItemID = rand() * rand();
+        if (newDbItemID == 0) {
+            newDbItemID = rand() * rand(); // Extreme fallback
         } else {
             if (drop.bType < 10) {
-                // Insert the memory-rolled stats!
-                std::string dVals = "";
-                for (int i=0; i<25; i++) {
-                    dVals += std::to_string(drop.nData[i]);
-                    if (i < 24) dVals += ", ";
-                }
-                std::string insData = "INSERT INTO ITEMDATA (dwItemID, nData1, nData2, nData3, nData4, nData5, nData6, nData7, nData8, nData9, nData10, nData11, nData12, nData13, nData14, nData15, nData16, nData17, nData18, nData19, nData20, nData21, nData22, nData23, nData24, nData25) VALUES (" + std::to_string(newDbItemID) + ", " + dVals + ")";
-                DBHelper::GetInstance().ExecuteQuery(insData, [](SQLHSTMT){});
+                // Insert the memory-rolled stats via ItemDB
+                ItemDB::GetInstance().InsertItemData(newDbItemID, drop.nData);
             }
         }
         
-        // Insert into SACKITEM
-        std::string insSack = "INSERT INTO SACKITEM (dwCharID, bSackPos, dwItemID) VALUES (" + std::to_string(playerID) + ", " + std::to_string(freePos) + ", " + std::to_string(newDbItemID) + ")";
-        DBHelper::GetInstance().ExecuteQuery(insSack, [](SQLHSTMT){});
+        // Insert into SACKITEM via ItemDB
+        ItemDB::GetInstance().AddToSack(playerID, freePos, newDbItemID);
         
         // Remove from map
         std::vector<BYTE> rmBuf(8);
