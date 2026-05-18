@@ -298,12 +298,7 @@ void OnBuyItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
 
     DWORD totalCost = price * dwAmount;
 
-    INT64 currentMoney = -1;
-    std::string q = "SELECT dwMoney FROM CHAR_DATA WHERE dwCharID = " + std::to_string(charID);
-    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
-        SQLLEN cbMoney = 0;
-        SQLGetData(hStmt, 1, SQL_C_SBIGINT, &currentMoney, 0, &cbMoney);
-    });
+    INT64 currentMoney = (INT64)CharacterDB::GetInstance().GetMoney(charID);
 
     if (currentMoney == -1) return;
 
@@ -319,12 +314,7 @@ void OnBuyItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
         EncryptPacket(mBuf.data(), 0x42);
         SafeSend(clientSocket, (const char*)mBuf.data(), mBuf.size(), 0);
 
-        DWORD newDbItemID = 0;
-        std::string insItem = "SET NOCOUNT ON; INSERT INTO ITEM (wRefID, bType, bKind, wVisualID, szName, dwCost, wLevel, bCharType, wAmount) VALUES (" + std::to_string(dwItemID) + ", " + std::to_string(tpl.bType) + ", " + std::to_string(tpl.bKind) + ", " + std::to_string(tpl.wVisualID) + ", '" + tpl.szName + "', " + std::to_string(tpl.dwCost) + ", " + std::to_string(tpl.wLevel) + ", " + std::to_string(tpl.bCharType) + ", " + std::to_string(dwAmount) + "); SELECT @@IDENTITY;";
-        DBHelper::GetInstance().ExecuteQuery(insItem, [&](SQLHSTMT hStmt2) {
-            SQLLEN c;
-            SQLGetData(hStmt2, 1, SQL_C_ULONG, &newDbItemID, 0, &c);
-        });
+        DWORD newDbItemID = ItemDB::GetInstance().InsertItem(dwItemID, tpl.bType, tpl.bKind, tpl.wVisualID, tpl.szName, tpl.dwCost, tpl.wLevel, tpl.bCharType, dwAmount);
         if (newDbItemID == 0) newDbItemID = rand() * rand();
 
         if (bCharSackPos == 255) {
@@ -459,13 +449,10 @@ void OnSellItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
     WORD wRefID = 0;
     DWORD dbAmount = 0;
     DWORD dbCost = 0;
-    std::string qItem = "SELECT wRefID, wAmount, dwCost FROM ITEM WHERE dwItemID = " + std::to_string(dwItemID);
-    DBHelper::GetInstance().ExecuteQuery(qItem, [&](SQLHSTMT hStmt) {
-        SQLLEN c1, c2, c3;
-        SQLGetData(hStmt, 1, SQL_C_USHORT, &wRefID, 0, &c1);
-        SQLGetData(hStmt, 2, SQL_C_ULONG, &dbAmount, 0, &c2);
-        SQLGetData(hStmt, 3, SQL_C_ULONG, &dbCost, 0, &c3);
-    });
+    ItemDB::ItemBasicInfo ibi;
+    if (ItemDB::GetInstance().GetItemBasicInfo(dwItemID, ibi)) {
+        wRefID = ibi.wRefID; dbAmount = ibi.wAmount; dbCost = ibi.dwCost;
+    }
 
     if (wRefID == 0) return;
     if (amountToSell > dbAmount) amountToSell = dbAmount;
@@ -477,12 +464,7 @@ void OnSellItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
 
     CharacterDB::GetInstance().AddMoney(charID, sellPrice);
 
-    INT64 currentMoney = 0;
-    std::string qMoney = "SELECT dwMoney FROM CHAR_DATA WHERE dwCharID = " + std::to_string(charID);
-    DBHelper::GetInstance().ExecuteQuery(qMoney, [&](SQLHSTMT hStmt2) {
-        SQLLEN cbMoney = 0;
-        SQLGetData(hStmt2, 1, SQL_C_SBIGINT, &currentMoney, 0, &cbMoney);
-    });
+    INT64 currentMoney = (INT64)CharacterDB::GetInstance().GetMoney(charID);
 
     std::vector<BYTE> mBuf(13);
     PACKET_HEADER* mHead = (PACKET_HEADER*)mBuf.data();

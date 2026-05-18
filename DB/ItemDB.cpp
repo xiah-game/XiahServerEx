@@ -256,3 +256,30 @@ WORD ItemDB::GetItemAmount(DWORD dwItemID) {
         });
     return amount;
 }
+
+DWORD ItemDB::InsertItem(WORD wRefID, BYTE bType, BYTE bKind, WORD wVisualID, const std::string& szName,
+                          DWORD dwCost, WORD wLevel, BYTE bCharType, DWORD wAmount) {
+    DWORD newId = 0;
+    std::string q = "SET NOCOUNT ON; INSERT INTO ITEM (wRefID, bType, bKind, wVisualID, szName, dwCost, wLevel, bCharType, wAmount) VALUES ("
+        + std::to_string(wRefID) + ", " + std::to_string(bType) + ", " + std::to_string(bKind) + ", "
+        + std::to_string(wVisualID) + ", '" + szName + "', " + std::to_string(dwCost) + ", "
+        + std::to_string(wLevel) + ", " + std::to_string(bCharType) + ", " + std::to_string(wAmount) + "); SELECT @@IDENTITY;";
+    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+        SQLLEN c; SQLGetData(hStmt, 1, SQL_C_ULONG, &newId, 0, &c);
+    });
+    return newId;
+}
+
+bool ItemDB::GetItemBasicInfo(DWORD dwItemID, ItemBasicInfo& out) {
+    bool found = false;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT wRefID, wAmount, dwCost FROM ITEM WHERE dwItemID = " + std::to_string(dwItemID),
+        [&](SQLHSTMT hStmt) {
+            SQLLEN c1, c2, c3;
+            SQLGetData(hStmt, 1, SQL_C_USHORT, &out.wRefID, 0, &c1);
+            SQLGetData(hStmt, 2, SQL_C_ULONG, &out.wAmount, 0, &c2);
+            SQLGetData(hStmt, 3, SQL_C_ULONG, &out.dwCost, 0, &c3);
+            found = true;
+        });
+    return found;
+}

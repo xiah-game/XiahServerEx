@@ -112,7 +112,15 @@ public:
     // Returns new dwItemID, or 0 on failure
     DWORD InsertItemFromTemplate(DWORD dwCharID, WORD wRefID, BYTE bSackPos);
 
-    // Upsert rebuild stats in ITEMDATA
+    // Insert new item and return dwItemID
+    DWORD InsertItem(WORD wRefID, BYTE bType, BYTE bKind, WORD wVisualID, const std::string& szName,
+                     DWORD dwCost, WORD wLevel, BYTE bCharType, DWORD wAmount);
+
+    // Get basic item info for sell operations
+    struct ItemBasicInfo { WORD wRefID = 0; DWORD wAmount = 0; DWORD dwCost = 0; };
+    bool GetItemBasicInfo(DWORD dwItemID, ItemBasicInfo& out);
+
+    // Upsert ITEMDATA (rebuild stats) in ITEMDATA
     void UpsertRebuildData(DWORD dwItemID, int d4, int d5, int d9, int d14, int d15, int d17);
 
     // Get item amount
