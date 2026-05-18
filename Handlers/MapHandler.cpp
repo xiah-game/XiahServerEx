@@ -89,14 +89,11 @@ void OnMapEnterReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
         // Initialize HP/IP from DB so RecalculateStats has valid initial values
         DWORD dbHpCur = 0, dbHpMax = 0;
         WORD dbIpCur = 0, dbIpMax = 0;
-        std::string hpQ = "SELECT dwHpCur, dwHpMax, wIpCur, wIpMax FROM CHAR_POWER WHERE dwCharID = " + std::to_string(dwActualCharID);
-        DBHelper::GetInstance().ExecuteQuery(hpQ, [&](SQLHSTMT hStmt) {
-            SQLLEN cb;
-            SQLGetData(hStmt, 1, SQL_C_ULONG, &dbHpCur, 0, &cb);
-            SQLGetData(hStmt, 2, SQL_C_ULONG, &dbHpMax, 0, &cb);
-            SQLGetData(hStmt, 3, SQL_C_USHORT, &dbIpCur, 0, &cb);
-            SQLGetData(hStmt, 4, SQL_C_USHORT, &dbIpMax, 0, &cb);
-        });
+        CharacterDB::CharPower cpMap;
+        if (CharacterDB::GetInstance().GetCharData(dwActualCharID, cpMap)) {
+            dbHpCur = cpMap.dwHpCur; dbHpMax = cpMap.dwHpMax;
+            dbIpCur = cpMap.wIpCur; dbIpMax = cpMap.wIpMax;
+        }
         pObj->dwHpMax = (dbHpMax > 0) ? dbHpMax : 60000;
         pObj->dwHpCur = (dbHpCur > 0) ? dbHpCur : pObj->dwHpMax;
         pObj->wIpMax = (dbIpMax > 0) ? dbIpMax : 100;
@@ -741,14 +738,9 @@ void OnMapMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
             startX = wReqPosX;
             startY = wReqPosY;
         } else {
-            std::string locQ = "SELECT TOP 1 wStartPosX, wStartPosY FROM LOCATION WHERE dwMapID = " + std::to_string(destMapID);
-            DBHelper::GetInstance().ExecuteQuery(locQ, [&](SQLHSTMT hStmt) {
-                int x = 0, y = 0; SQLLEN cb1, cb2;
-                SQLGetData(hStmt, 1, SQL_C_SLONG, &x, 0, &cb1);
-                if (cb1 != SQL_NULL_DATA) startX = x;
-                SQLGetData(hStmt, 2, SQL_C_SLONG, &y, 0, &cb2);
-                if (cb2 != SQL_NULL_DATA) startY = y;
-            });
+            int spX = startX, spY = startY;
+            CharacterDB::GetInstance().GetSpawnPosition(destMapID, spX, spY);
+            startX = spX; startY = spY;
         }
     }
     
