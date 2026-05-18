@@ -8,7 +8,7 @@
 #include "../GameObjects/MapInstance.h"
 #include "../GameObjects/PlayerManager.h"
 #include "../GameObjects/ExpSystem.h"
-#include "../DBHelper.h"
+#include "../DB/CharacterDB.h"
 #include <cmath>
 
 extern std::map<DWORD, CMapInstance*> g_MapInstances;
@@ -461,8 +461,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                         pObj->wIpCur = pObj->wIpMax;
                     }
                 }
-                std::string hpQ = "UPDATE CHAR_POWER SET dwHpCur = dwHpMax, wIpCur = (SELECT P2.wIpMax FROM CHAR_POWER P2 WHERE P2.dwCharID = CHAR_POWER.dwCharID) WHERE dwCharID = " + std::to_string(attackerCharID);
-                DBHelper::GetInstance().ExecuteUpdate(hpQ);
+                CharacterDB::GetInstance().RestoreHpIpToMax(attackerCharID);
                 
                 {
                     std::lock_guard<std::mutex> lock3(mapInst2->GetMutex());

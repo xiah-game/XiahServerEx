@@ -73,6 +73,13 @@ void CharacterDB::UpdateHpIp(DWORD dwCharID, DWORD dwHpCur, WORD wIpCur) {
     DBHelper::GetInstance().ExecuteUpdate(q);
 }
 
+void CharacterDB::RestoreHpIpToMax(DWORD dwCharID) {
+    std::string q = "UPDATE CHAR_POWER SET dwHpCur = dwHpMax, wIpCur = "
+                    "(SELECT P2.wIpMax FROM CHAR_POWER P2 WHERE P2.dwCharID = CHAR_POWER.dwCharID) "
+                    "WHERE dwCharID = " + std::to_string(dwCharID);
+    DBHelper::GetInstance().ExecuteUpdate(q);
+}
+
 void CharacterDB::UpdateExpAndLevel(DWORD dwCharID, long long int newExp, WORD wLevel,
                                      WORD wRemainSp, DWORD dwTotalSp,
                                      WORD wRemainTp, DWORD dwTotalTp,

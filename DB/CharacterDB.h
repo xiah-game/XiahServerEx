@@ -48,6 +48,9 @@ public:
     // Update HP/IP in database
     void UpdateHpIp(DWORD dwCharID, DWORD dwHpCur, WORD wIpCur);
 
+    // Restore HP/IP to max in database (used on level-up)
+    void RestoreHpIpToMax(DWORD dwCharID);
+
     // Update EXP + Level (used by ExpSystem)
     void UpdateExpAndLevel(DWORD dwCharID, long long int newExp, WORD wLevel,
                            WORD wRemainSp, DWORD dwTotalSp,
