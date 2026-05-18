@@ -48,6 +48,9 @@ public:
     void AddMoney(DWORD dwCharID, DWORD amount);
     void SubtractMoney(DWORD dwCharID, DWORD amount);
 
+    // Get current money
+    INT64 GetMoney(DWORD dwCharID);
+
     // Update HP/IP in database
     void UpdateHpIp(DWORD dwCharID, DWORD dwHpCur, WORD wIpCur);
 

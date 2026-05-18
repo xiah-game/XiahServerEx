@@ -66,6 +66,14 @@ void CharacterDB::AddMoney(DWORD dwCharID, DWORD amount) {
     DBHelper::GetInstance().ExecuteUpdate(q);
 }
 
+INT64 CharacterDB::GetMoney(DWORD dwCharID) {
+    INT64 money = 0;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT dwMoney FROM CHAR_DATA WHERE dwCharID = " + std::to_string(dwCharID),
+        [&](SQLHSTMT hStmt) { SQLLEN cb; SQLGetData(hStmt, 1, SQL_C_SBIGINT, &money, 0, &cb); });
+    return money;
+}
+
 void CharacterDB::SubtractMoney(DWORD dwCharID, DWORD amount) {
     std::string q = "UPDATE CHAR_DATA SET dwMoney = dwMoney - " + std::to_string(amount) + " WHERE dwCharID = " + std::to_string(dwCharID);
     DBHelper::GetInstance().ExecuteUpdate(q);

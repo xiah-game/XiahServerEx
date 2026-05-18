@@ -112,6 +112,9 @@ public:
     // Returns new dwItemID, or 0 on failure
     DWORD InsertItemFromTemplate(DWORD dwCharID, WORD wRefID, BYTE bSackPos);
 
+    // Upsert rebuild stats in ITEMDATA
+    void UpsertRebuildData(DWORD dwItemID, int d4, int d5, int d9, int d14, int d15, int d17);
+
     // Get item amount
     WORD GetItemAmount(DWORD dwItemID);
 
