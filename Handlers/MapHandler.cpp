@@ -788,10 +788,7 @@ void OnMapMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
     
     // Update session and DB
     SessionMgr::GetInstance().SetMapID(clientSocket, destMapID);
-    std::string statusUpd = "UPDATE CHAR_STATUS SET dwMapID = " + std::to_string(destMapID) + 
-        ", wPosX = " + std::to_string(startX) + ", wPosY = " + std::to_string(startY) + 
-        " WHERE dwCharID = " + std::to_string(charID);
-    DBHelper::GetInstance().ExecuteUpdate(statusUpd);
+    CharacterDB::GetInstance().SavePosition(charID, startX, startY, destMapID);
     
     // Send CS_NV_MAPMOVE_ACK (0x4308) to client
     auto pushDWord = [&](std::vector<BYTE>& buf, DWORD d) { buf.push_back(d&0xFF); buf.push_back((d>>8)&0xFF); buf.push_back((d>>16)&0xFF); buf.push_back((d>>24)&0xFF); };
