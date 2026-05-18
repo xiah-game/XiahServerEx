@@ -47,15 +47,9 @@ void OnMapEnterReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
     SessionMgr::GetInstance().SetCharID(clientSocket, dwActualCharID);
     
     WORD wCurX = 398, wCurY = 618; BYTE bCurH = 1;
-    std::string q = "SELECT wPosX, wPosY, bHeight FROM CHAR_STATUS WHERE dwCharID = " + std::to_string(dwActualCharID);
-    auto posCallback = [&](SQLHSTMT hStmt) {
-        int x, y, h; SQLLEN cb1, cb2, cb3;
-        SQLGetData(hStmt, 1, SQL_C_SLONG, &x, 0, &cb1);
-        SQLGetData(hStmt, 2, SQL_C_SLONG, &y, 0, &cb2);
-        SQLGetData(hStmt, 3, SQL_C_SLONG, &h, 0, &cb3);
-        wCurX = x; wCurY = y; bCurH = h;
-    };
-    DBHelper::GetInstance().ExecuteQuery(q, posCallback);
+    { int px = wCurX, py = wCurY, ph = bCurH;
+      CharacterDB::GetInstance().GetCharPosition(dwActualCharID, px, py, ph);
+      wCurX = px; wCurY = py; bCurH = ph; }
 
     // Create or get the existing object
     CMapInstance* mapInst = nullptr;
@@ -102,20 +96,18 @@ void OnMapEnterReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
     }
     
     // Fetch szNickName and bCharType from CHAR_VISUAL
-    std::string nameQuery = "SELECT szNickName, bCharType FROM CHAR_VISUAL WHERE dwCharID = " + std::to_string(dwActualCharID);
-    DBHelper::GetInstance().ExecuteQuery(nameQuery, [&](SQLHSTMT hStmt) {
-        char szNameBuf[64] = {0};
-        char bCharType = 0;
-        SQLLEN cbName = 0, cbType = 0;
-        SQLGetData(hStmt, 1, SQL_C_CHAR, szNameBuf, sizeof(szNameBuf), &cbName);
-        SQLGetData(hStmt, 2, SQL_C_STINYINT, &bCharType, 0, &cbType);
-        std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-        sServerObject* pObj = mapInst->GetPlayer(dwObjectID);
-        if (pObj) {
-            pObj->szName = szNameBuf;
-            pObj->bPropType = bCharType;
+    {
+        std::string vizName;
+        BYTE vizType = 0;
+        if (CharacterDB::GetInstance().GetCharVisual(dwActualCharID, vizName, vizType)) {
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            sServerObject* pObj = mapInst->GetPlayer(dwObjectID);
+            if (pObj) {
+                pObj->szName = vizName;
+                pObj->bPropType = vizType;
+            }
         }
-    });
+    }
 
     // Fetch Player's learned Mugongs BEFORE RecalcStats (passive bonuses need this data)
     {

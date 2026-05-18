@@ -79,6 +79,12 @@ public:
     };
     bool GetExpData(DWORD dwCharID, ExpData& out);
 
+    // Get current position from CHAR_STATUS
+    bool GetCharPosition(DWORD dwCharID, int& wPosX, int& wPosY, int& bHeight);
+
+    // Get name and char type from CHAR_VISUAL view
+    bool GetCharVisual(DWORD dwCharID, std::string& szNickName, BYTE& bCharType);
+
     // Save position on disconnect
     void SavePosition(DWORD dwCharID, WORD wPosX, WORD wPosY, DWORD dwMapID);
 

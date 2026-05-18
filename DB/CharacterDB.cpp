@@ -307,3 +307,33 @@ DWORD CharacterDB::AuthenticateUser(const std::string& username, const std::stri
     });
     return accountId;
 }
+
+bool CharacterDB::GetCharPosition(DWORD dwCharID, int& wPosX, int& wPosY, int& bHeight) {
+    bool found = false;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT wPosX, wPosY, bHeight FROM CHAR_STATUS WHERE dwCharID = " + std::to_string(dwCharID),
+        [&](SQLHSTMT hStmt) {
+            SQLLEN cb1, cb2, cb3;
+            SQLGetData(hStmt, 1, SQL_C_SLONG, &wPosX, 0, &cb1);
+            SQLGetData(hStmt, 2, SQL_C_SLONG, &wPosY, 0, &cb2);
+            SQLGetData(hStmt, 3, SQL_C_SLONG, &bHeight, 0, &cb3);
+            found = true;
+        });
+    return found;
+}
+
+bool CharacterDB::GetCharVisual(DWORD dwCharID, std::string& szNickName, BYTE& bCharType) {
+    bool found = false;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT szNickName, bCharType FROM CHAR_VISUAL WHERE dwCharID = " + std::to_string(dwCharID),
+        [&](SQLHSTMT hStmt) {
+            char szNameBuf[64] = {0}; SQLLEN cbName = 0, cbType = 0;
+            SQLGetData(hStmt, 1, SQL_C_CHAR, szNameBuf, sizeof(szNameBuf), &cbName);
+            char ct = 0;
+            SQLGetData(hStmt, 2, SQL_C_STINYINT, &ct, 0, &cbType);
+            if (cbName != SQL_NULL_DATA) szNickName = szNameBuf;
+            bCharType = (BYTE)ct;
+            found = true;
+        });
+    return found;
+}
