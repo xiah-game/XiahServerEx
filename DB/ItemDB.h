@@ -99,6 +99,9 @@ public:
     // Update item amount/stack
     void UpdateItemAmount(DWORD dwItemID, WORD wAmount);
 
+    // Decrement item amount by 1
+    void DecrementItemAmount(DWORD dwItemID);
+
     // Get item amount
     WORD GetItemAmount(DWORD dwItemID);
 

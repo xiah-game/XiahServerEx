@@ -417,12 +417,7 @@ void OnItemDropReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
     }
     
     // Delete from all child FK tables first, then ITEM (avoids FK constraint violations)
-    std::string idStr = std::to_string(dwItemID);
-    DBHelper::GetInstance().ExecuteUpdate("DELETE FROM SACKITEM WHERE dwItemID = " + idStr);
-    DBHelper::GetInstance().ExecuteUpdate("DELETE FROM ITEMDATA WHERE dwItemID = " + idStr);
-    DBHelper::GetInstance().ExecuteUpdate("DELETE FROM BANKITEM WHERE dwItemID = " + idStr);
-    DBHelper::GetInstance().ExecuteUpdate("DELETE FROM MAPITEM WHERE dwItemID = " + idStr);
-    DBHelper::GetInstance().ExecuteUpdate("DELETE FROM ITEM WHERE dwItemID = " + idStr);
+    ItemDB::GetInstance().DeleteItemCascade(dwItemID);
     
     // Send CS_IM_REMOVESACK_ACK (0x4208) to remove from client inventory
     {
@@ -538,8 +533,7 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
 
     // 1. Amount Deduction
     if (wAmount > 1) {
-        std::string upQ = "UPDATE ITEM SET wAmount = wAmount - 1 WHERE dwItemID = " + std::to_string(dwItemID);
-        DBHelper::GetInstance().ExecuteUpdate(upQ);
+        ItemDB::GetInstance().DecrementItemAmount(dwItemID);
 
         std::vector<BYTE> ackBuf(4);
         ackBuf.push_back(bSackID);
@@ -587,8 +581,7 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
 
 
 
-        std::string statusUpd = "UPDATE CHAR_STATUS SET dwMapID = " + std::to_string(destMap) + ", wPosX = " + std::to_string(startX) + ", wPosY = " + std::to_string(startY) + " WHERE dwCharID = " + std::to_string(charID);
-        DBHelper::GetInstance().ExecuteUpdate(statusUpd);
+        CharacterDB::GetInstance().SavePosition(charID, startX, startY, destMap);
 
         DWORD oldMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
         PlayerData objToMove;
@@ -648,8 +641,7 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
             }
         }
 
-        std::string hpUpd = "UPDATE CHAR_POWER SET dwHpCur = " + std::to_string(curHp) + ", wIpCur = " + std::to_string(curIp) + " WHERE dwCharID = " + std::to_string(charID);
-        DBHelper::GetInstance().ExecuteUpdate(hpUpd);
+        CharacterDB::GetInstance().UpdateHpIp(charID, curHp, curIp);
 
         std::vector<BYTE> hpBuf(4);
         pushDWord(hpBuf, maxHp);
