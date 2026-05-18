@@ -1,6 +1,8 @@
 #include <vector>
 #include <string>
 #include "RebuildItemHandler.h"
+#include "../DB/ItemDB.h"
+#include "../DB/CharacterDB.h"
 #include "../Network/SessionMgr.h"
 #include "../DBHelper.h"
 #include "../Network/SystemMessage.h"
@@ -241,7 +243,7 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
         EncryptPacket(ackBuf.data(), 0x42); SafeSend(clientSocket, (const char*)ackBuf.data(), ackBuf.size(), 0); return;
     }
     
-    DBHelper::GetInstance().ExecuteUpdate("UPDATE CHAR_DATA SET dwMoney = dwMoney - " + std::to_string(rebuildCost) + " WHERE dwCharID = " + std::to_string(charID));
+    CharacterDB::GetInstance().SubtractMoney(charID, rebuildCost);
     DBHelper::GetInstance().ExecuteQuery("SELECT dwMoney FROM CHAR_DATA WHERE dwCharID = " + std::to_string(charID), [&](SQLHSTMT hStmt) {
         INT64 currentMoney = 0; SQLLEN cb;
         SQLGetData(hStmt, 1, SQL_C_SBIGINT, &currentMoney, 0, &cb);
@@ -260,7 +262,7 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
                 SQLGetData(hStmt, 1, SQL_C_SLONG, &amount, 0, &c);
                 if (amount > 1) {
                     amountDecreased = true;
-                    DBHelper::GetInstance().ExecuteUpdate("UPDATE ITEM SET wAmount = wAmount - 1 WHERE dwItemID = " + resIdStr);
+                    ItemDB::GetInstance().DecrementItemAmount(dwResourceID[i]);
                     std::vector<BYTE> ackBuf(4); ackBuf.push_back(bResourceSackID[i]); ackBuf.push_back(bResourcePos[i]);
                     pushDWord(ackBuf, dwResourceID[i]); pushWord(ackBuf, amount - 1);
                     PACKET_HEADER* ah = (PACKET_HEADER*)ackBuf.data(); ah->id = 0x4216; ah->payloadSize = ackBuf.size() - 4;
@@ -339,7 +341,7 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
                 SQLGetData(hStmt, 1, SQL_C_SLONG, &amount, 0, &c);
                 if (amount > 1) {
                     amountDecreased = true;
-                    DBHelper::GetInstance().ExecuteUpdate("UPDATE ITEM SET wAmount = wAmount - 1 WHERE dwItemID = " + resIdStr);
+                    ItemDB::GetInstance().DecrementItemAmount(dwResourceID[i]);
                     // Prepare 0x4216 packet (amount update)
                     std::vector<BYTE> amtBuf(4); amtBuf.push_back(bResourceSackID[i]); amtBuf.push_back(bResourcePos[i]);
                     pushDWord(amtBuf, dwResourceID[i]); pushWord(amtBuf, amount - 1);
@@ -370,9 +372,9 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
     
     if (didBreak) {
         std::string idStr = std::to_string(dwItemID);
-        DBHelper::GetInstance().ExecuteUpdate("DELETE FROM SACKITEM WHERE dwItemID = " + idStr);
-        DBHelper::GetInstance().ExecuteUpdate("DELETE FROM ITEMDATA WHERE dwItemID = " + idStr);
-        DBHelper::GetInstance().ExecuteUpdate("DELETE FROM ITEM WHERE dwItemID = " + idStr);
+        ItemDB::GetInstance().RemoveFromSack(charID, dwItemID);
+        ItemDB::GetInstance().DeleteItemData(dwItemID);
+        ItemDB::GetInstance().DeleteItem(dwItemID);
         
         itemBreakPacket.resize(7); PACKET_HEADER* rmHead = (PACKET_HEADER*)itemBreakPacket.data();
         rmHead->id = 0x4208; rmHead->payloadSize = 3;
