@@ -180,3 +180,16 @@ void CharacterDB::UpdateMugongLevel(DWORD dwCharID, DWORD dwMugongID, BYTE bLeve
         + " WHERE dwCharID = " + std::to_string(dwCharID) + " AND dwMugongID = " + std::to_string(dwMugongID);
     DBHelper::GetInstance().ExecuteUpdate(q);
 }
+
+void CharacterDB::InitializeSlot(DWORD dwCharID) {
+    std::string q = "INSERT INTO CHAR_SLOT (dwCharID, dwValue1, dwValue2, dwValue3, dwValue4, dwValue5, dwValue6, dwValue7, dwValue8, dwValue9, dwValue10) VALUES ("
+        + std::to_string(dwCharID) + ", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)";
+    DBHelper::GetInstance().ExecuteUpdate(q);
+}
+
+void CharacterDB::SetSlotValue(DWORD dwCharID, BYTE bSlot, DWORD dwValue) {
+    if (bSlot < 1 || bSlot > 10) return;
+    std::string q = "UPDATE CHAR_SLOT SET dwValue" + std::to_string(bSlot) + " = " + std::to_string(dwValue)
+        + " WHERE dwCharID = " + std::to_string(dwCharID);
+    DBHelper::GetInstance().ExecuteUpdate(q);
+}

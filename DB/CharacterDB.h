@@ -102,6 +102,14 @@ public:
     // Update mugong skill level
     void UpdateMugongLevel(DWORD dwCharID, DWORD dwMugongID, BYTE bLevel);
 
+    // ---- Slot (Quick Bar) ----
+    
+    // Initialize empty slot row
+    void InitializeSlot(DWORD dwCharID);
+
+    // Set a specific slot value (bSlot 1-10)
+    void SetSlotValue(DWORD dwCharID, BYTE bSlot, DWORD dwValue);
+
 private:
     CharacterDB() {}
     ~CharacterDB() {}

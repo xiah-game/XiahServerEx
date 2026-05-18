@@ -1,4 +1,5 @@
 #include "SlotHandler.h"
+#include "../DB/CharacterDB.h"
 #include "../Network/SessionMgr.h"
 #include <vector>
 #include <string>
@@ -23,8 +24,7 @@ void SendCharSlotInfoAck(SOCKET clientSocket, DWORD dwCharID) {
     });
 
     if (!found) {
-        std::string insQ = "INSERT INTO CHAR_SLOT (dwCharID, dwValue1, dwValue2, dwValue3, dwValue4, dwValue5, dwValue6, dwValue7, dwValue8, dwValue9, dwValue10) VALUES (" + std::to_string(dwCharID) + ", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)";
-        DBHelper::GetInstance().ExecuteUpdate(insQ);
+        CharacterDB::GetInstance().InitializeSlot(dwCharID);
     }
 
     auto pushDword = [&](DWORD val) {
@@ -56,8 +56,7 @@ void OnSetSlotReq(SOCKET clientSocket, std::string& clientAccountName, BYTE* pay
     BYTE bSlot = payload[4];
     
     if (bSlot >= 1 && bSlot <= 10) {
-        std::string updateQ = "UPDATE CHAR_SLOT SET dwValue" + std::to_string(bSlot) + " = " + std::to_string(dwValue) + " WHERE dwCharID = " + std::to_string(dwCharID);
-        DBHelper::GetInstance().ExecuteUpdate(updateQ);
+        CharacterDB::GetInstance().SetSlotValue(dwCharID, bSlot, dwValue);
     }
     
     std::vector<BYTE> ackBuf(4);
