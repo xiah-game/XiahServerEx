@@ -22,6 +22,19 @@ void ItemDB::DeleteItem(DWORD dwItemID) {
     DBHelper::GetInstance().ExecuteUpdate("DELETE FROM ITEM WHERE dwItemID = " + std::to_string(dwItemID));
 }
 
+void ItemDB::DeleteItemData(DWORD dwItemID) {
+    DBHelper::GetInstance().ExecuteUpdate("DELETE FROM ITEMDATA WHERE dwItemID = " + std::to_string(dwItemID));
+}
+
+void ItemDB::DeleteItemCascade(DWORD dwItemID) {
+    std::string id = std::to_string(dwItemID);
+    DBHelper::GetInstance().ExecuteUpdate("DELETE FROM SACKITEM WHERE dwItemID = " + id);
+    DBHelper::GetInstance().ExecuteUpdate("DELETE FROM ITEMDATA WHERE dwItemID = " + id);
+    DBHelper::GetInstance().ExecuteUpdate("DELETE FROM BANKITEM WHERE dwItemID = " + id);
+    DBHelper::GetInstance().ExecuteUpdate("DELETE FROM MAPITEM WHERE dwItemID = " + id);
+    DBHelper::GetInstance().ExecuteUpdate("DELETE FROM ITEM WHERE dwItemID = " + id);
+}
+
 WORD ItemDB::GetItemRefID(DWORD dwItemID) {
     WORD refID = 0;
     DBHelper::GetInstance().ExecuteQuery(
@@ -170,6 +183,12 @@ void ItemDB::RemoveFromBankByAccount(const std::string& account, DWORD dwItemID)
 void ItemDB::RemoveFromMallByAccount(const std::string& account, DWORD dwItemID) {
     std::string q = "DELETE FROM MALLITEM WHERE szAccount = '" + account + "' AND dwItemID = " + std::to_string(dwItemID);
     DBHelper::GetInstance().ExecuteQuery(q, nullptr);
+}
+
+void ItemDB::UpdateSackPos(DWORD dwItemID, BYTE bSackPos) {
+    std::string q = "UPDATE SACKITEM SET bSackPos = " + std::to_string(bSackPos)
+        + " WHERE dwItemID = " + std::to_string(dwItemID);
+    DBHelper::GetInstance().ExecuteUpdate(q);
 }
 
 void ItemDB::UpdateItemAmount(DWORD dwItemID, WORD wAmount) {

@@ -1,4 +1,6 @@
 #include "ItemHandler.h"
+#include "../DB/CharacterDB.h"
+#include "../DB/ItemDB.h"
 #include "../GameObjects/MugongManager.h"
 #include "../GameObjects/DropManager.h"
 #include <set>
@@ -365,12 +367,12 @@ void OnItemMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
             
             if (dwDesObjID != 0) {
                 // Swap: move dest item to temp pos first (using dwItemID), then source to dest, then temp to source
-                DBHelper::GetInstance().ExecuteUpdate("UPDATE SACKITEM SET bSackPos = 254 WHERE dwItemID = " + std::to_string(dwDesObjID));
-                DBHelper::GetInstance().ExecuteUpdate("UPDATE SACKITEM SET bSackPos = " + std::to_string(realDes) + " WHERE dwItemID = " + std::to_string(dwSrcObjID));
-                DBHelper::GetInstance().ExecuteUpdate("UPDATE SACKITEM SET bSackPos = " + std::to_string(realSrc) + " WHERE dwItemID = " + std::to_string(dwDesObjID));
+                ItemDB::GetInstance().UpdateSackPos(dwDesObjID, 254);
+                ItemDB::GetInstance().UpdateSackPos(dwSrcObjID, (BYTE)realDes);
+                ItemDB::GetInstance().UpdateSackPos(dwDesObjID, (BYTE)realSrc);
             } else {
                 // Simple move: no item at destination, just update position of source item.
-                DBHelper::GetInstance().ExecuteUpdate("UPDATE SACKITEM SET bSackPos = " + std::to_string(realDes) + " WHERE dwItemID = " + std::to_string(dwSrcObjID));
+                ItemDB::GetInstance().UpdateSackPos(dwSrcObjID, (BYTE)realDes);
             }
             
             UpdatePlayerStatsAndSend(clientSocket, charID);
@@ -554,9 +556,9 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
         std::string delSack = "DELETE FROM SACKITEM WHERE dwItemID = " + std::to_string(dwItemID);
         std::string delData = "DELETE FROM ITEMDATA WHERE dwItemID = " + std::to_string(dwItemID);
         std::string delItem = "DELETE FROM ITEM WHERE dwItemID = " + std::to_string(dwItemID);
-        DBHelper::GetInstance().ExecuteUpdate(delSack);
-        DBHelper::GetInstance().ExecuteUpdate(delData);
-        DBHelper::GetInstance().ExecuteUpdate(delItem);
+        ItemDB::GetInstance().RemoveFromSack(charID, dwItemID);
+        ItemDB::GetInstance().DeleteItemData(dwItemID);
+        ItemDB::GetInstance().DeleteItem(dwItemID);
 
         std::vector<BYTE> ackBuf(4);
         ackBuf.push_back(bSackID);

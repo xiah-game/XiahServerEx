@@ -21,6 +21,12 @@ public:
     // Delete an item from ITEM table
     void DeleteItem(DWORD dwItemID);
 
+    // Delete item data from ITEMDATA table
+    void DeleteItemData(DWORD dwItemID);
+
+    // Cascade delete: SACKITEM + ITEMDATA + BANKITEM + MAPITEM + ITEM
+    void DeleteItemCascade(DWORD dwItemID);
+
     // Get item's wRefID
     WORD GetItemRefID(DWORD dwItemID);
 
@@ -86,6 +92,9 @@ public:
     void RemoveFromMallByAccount(const std::string& account, DWORD dwItemID);
 
     // ---- Item Amount ----
+
+    // Update sack item position
+    void UpdateSackPos(DWORD dwItemID, BYTE bSackPos);
 
     // Update item amount/stack
     void UpdateItemAmount(DWORD dwItemID, WORD wAmount);

@@ -1,4 +1,5 @@
 #include "MapHandler.h"
+#include "../DB/CharacterDB.h"
 #include <unordered_set>
 #include "../GameObjects/MugongManager.h"
 #include "../GameObjects/PlayerManager.h"
@@ -470,7 +471,7 @@ void OnCharStatusInfoReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD 
     }
 }
 
-// Handler for CS_IT_CHARINFO_REQ (0x440F) â€?single character info request
+// Handler for CS_IT_CHARINFO_REQ (0x440F) ï¿½?single character info request
 // Client sends this via ValidateObject when it sees a movement packet for an unknown player.
 // We respond with CHARINFOLIST_ACK (0x4412) format containing 1 player, since that format is proven to work.
 void OnCharInfoReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
@@ -495,7 +496,7 @@ void OnCharInfoReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
         return;
     }
     
-    // Use CHARINFOLIST_ACK (0x4412) format with count=1 â€?this format is proven to work
+    // Use CHARINFOLIST_ACK (0x4412) format with count=1 ï¿½?this format is proven to work
     std::vector<BYTE> ackBuf; ackBuf.reserve(256);
     ackBuf.push_back(0); // bResult = success
     
@@ -701,7 +702,7 @@ void OnMapMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
         
         LOG("[MapHandler] Portal check: player at (" + std::to_string(playerX) + "," + std::to_string(playerY) + ") on map " + std::to_string(oldMapID));
         
-        // Check LINKMAPLIST for portal zones â€?includes wStartPosX/wStartPosY for destination spawn
+        // Check LINKMAPLIST for portal zones ï¿½?includes wStartPosX/wStartPosY for destination spawn
         bool foundPortal = false;
         std::string portalQ = "SELECT dwLinkMapID, wPosX, wPosY, wWidth, wHeight, wStartPosX, wStartPosY FROM LINKMAPLIST WHERE dwMapID = " + std::to_string(oldMapID);
         DBHelper::GetInstance().ExecuteQuery(portalQ, [&](SQLHSTMT hStmt) {
@@ -734,7 +735,7 @@ void OnMapMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
         }
     }
     
-    // Fallback: death respawn or explicit pos â€?use LOCATION table
+    // Fallback: death respawn or explicit pos ï¿½?use LOCATION table
     if (!posResolved) {
         if (wReqPosX != 0 || wReqPosY != 0) {
             startX = wReqPosX;

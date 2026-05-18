@@ -1,4 +1,6 @@
 #include "NpcHandler.h"
+#include "../DB/CharacterDB.h"
+#include "../DB/ItemDB.h"
 #include "../GameObjects/MugongManager.h"
 #include <unordered_set>
 #include "../Network/SessionMgr.h"
@@ -341,8 +343,7 @@ void OnBuyItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
         else if (bCharSackCnt == 2) absolutePos = 60 + bCharSackPos;
         else if (bCharSackCnt == 3) absolutePos = 100 + bCharSackPos;
         
-        std::string insSack = "INSERT INTO SACKITEM (dwCharID, bSackPos, dwItemID) VALUES (" + std::to_string(charID) + ", " + std::to_string(absolutePos) + ", " + std::to_string(newDbItemID) + ")";
-        DBHelper::GetInstance().ExecuteUpdate(insSack);
+        ItemDB::GetInstance().AddToSack(charID, absolutePos, newDbItemID);
 
         std::vector<BYTE> ackBuf;
         ackBuf.resize(4);
@@ -504,9 +505,9 @@ void OnSellItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
         std::string delSack = "DELETE FROM SACKITEM WHERE dwCharID = " + std::to_string(charID) + " AND bSackPos = " + std::to_string(absolutePos) + " AND dwItemID = " + std::to_string(dwItemID);
         std::string delItemData = "DELETE FROM ITEMDATA WHERE dwItemID = " + std::to_string(dwItemID);
         std::string delItem = "DELETE FROM ITEM WHERE dwItemID = " + std::to_string(dwItemID);
-        DBHelper::GetInstance().ExecuteUpdate(delSack);
-        DBHelper::GetInstance().ExecuteUpdate(delItemData);
-        DBHelper::GetInstance().ExecuteUpdate(delItem);
+        ItemDB::GetInstance().RemoveFromSack(charID, dwItemID);
+        ItemDB::GetInstance().DeleteItemData(dwItemID);
+        ItemDB::GetInstance().DeleteItem(dwItemID);
 
         std::vector<BYTE> rBuf(7);
         PACKET_HEADER* rHead = (PACKET_HEADER*)rBuf.data();
