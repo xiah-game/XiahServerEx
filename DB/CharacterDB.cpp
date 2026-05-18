@@ -193,3 +193,60 @@ void CharacterDB::SetSlotValue(DWORD dwCharID, BYTE bSlot, DWORD dwValue) {
         + " WHERE dwCharID = " + std::to_string(dwCharID);
     DBHelper::GetInstance().ExecuteUpdate(q);
 }
+int CharacterDB::CountActiveCharacters(const std::string& accountName) {
+    int count = 0;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT COUNT(*) FROM CHAR_ACCOUNT WHERE szAccount = '" + accountName + "' AND bActive = 1",
+        [&](SQLHSTMT hStmt) { SQLLEN cb; SQLGetData(hStmt, 1, SQL_C_SLONG, &count, 0, &cb); });
+    return count;
+}
+
+bool CharacterDB::NicknameExists(const std::string& nickName) {
+    bool exists = false;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT dwCharID FROM CHAR_BASIC WHERE szNickName = '" + nickName + "'",
+        [&](SQLHSTMT hStmt) { exists = true; });
+    return exists;
+}
+
+bool CharacterDB::AccountOwnsCharacter(DWORD dwCharID, const std::string& accountName) {
+    bool owns = false;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT dwCharID FROM CHAR_ACCOUNT WHERE dwCharID = " + std::to_string(dwCharID) + " AND szAccount = '" + accountName + "' AND bActive = 1",
+        [&](SQLHSTMT hStmt) { owns = true; });
+    return owns;
+}
+
+bool CharacterDB::SoftDeleteCharacter(DWORD dwCharID, const std::string& accountName) {
+    return DBHelper::GetInstance().ExecuteUpdate(
+        "UPDATE CHAR_ACCOUNT SET bActive = 9, dateReg = GETDATE() WHERE dwCharID = " + std::to_string(dwCharID) + " AND szAccount = '" + accountName + "'");
+}
+
+DWORD CharacterDB::CreateCharacterRecord(const std::string& accountName, const std::string& nickName, BYTE bCharType,
+                                          WORD wStr, WORD wSus, WORD wDex, WORD wVit,
+                                          int wHp, int wIp, WORD wPosX, WORD wPosY) {
+    // Insert CHAR_BASIC
+    DBHelper::GetInstance().ExecuteUpdate(
+        "INSERT INTO CHAR_BASIC (szNickName, bCharType, dwBirthDate, dwFatherID, dwMotherID, dwSpouseID, dwFamilyID, dwSchoolID, dwTeacherOrder, dwSchoolOrder, dwSchoolDepth, dwMunpaID, dwMunpaOrder, DateConnect) "
+        "VALUES ('" + nickName + "', " + std::to_string(bCharType) + ", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, GETDATE())");
+    DWORD newCharID = 0;
+    DBHelper::GetInstance().ExecuteQuery("SELECT @@IDENTITY AS NewID",
+        [&](SQLHSTMT hStmt) { SQLLEN cb; int id = 0; SQLGetData(hStmt, 1, SQL_C_SLONG, &id, 0, &cb); newCharID = (DWORD)id; });
+    if (newCharID == 0) return 0;
+    // Insert CHAR_ACCOUNT
+    DBHelper::GetInstance().ExecuteUpdate(
+        "INSERT INTO CHAR_ACCOUNT (szAccount, dwCharID, dateCreate, dateReg, bActive) VALUES ('" + accountName + "', " + std::to_string(newCharID) + ", GETDATE(), GETDATE(), 1)");
+    // Insert CHAR_STATUS
+    DBHelper::GetInstance().ExecuteUpdate(
+        "INSERT INTO CHAR_STATUS (dwCharID, dwMapID, wPosX, wPosY, bHeight, bStatusFlag, dwPkCnt, dwDieCnt, dwFlagInform, bTraining, dwConnecting) VALUES (" + std::to_string(newCharID) + ", 6, " + std::to_string(wPosX) + ", " + std::to_string(wPosY) + ", 0, 0, 0, 0, 0, 0, 0)");
+    // Insert CHAR_POWER
+    DBHelper::GetInstance().ExecuteUpdate(
+        "INSERT INTO CHAR_POWER (dwCharID, wLevel, wTpLevel, wStr, wSus, wDex, wVit, dwHpCur, dwHpMax, wIpCur, wIpMax, dwTotalTp, dwTotalSp, wRemainTp, wRemainSp, dwExp, dwMoney) VALUES (" + std::to_string(newCharID) + ", 1, 0, " + std::to_string(wStr) + ", " + std::to_string(wSus) + ", " + std::to_string(wDex) + ", " + std::to_string(wVit) + ", " + std::to_string(wHp) + ", " + std::to_string(wHp) + ", " + std::to_string(wIp) + ", " + std::to_string(wIp) + ", 0, 0, 0, 0, 0, 0)");
+    // Insert CHAR_OPTION
+    DBHelper::GetInstance().ExecuteUpdate(
+        "INSERT INTO CHAR_OPTION (dwCharID, bWisperFlag, bRelationFlag, bTradeFlag) VALUES (" + std::to_string(newCharID) + ", 1, 1, 1)");
+    // Insert CHAR_RANK
+    DBHelper::GetInstance().ExecuteUpdate(
+        "INSERT INTO CHAR_RANK (dwCharID, szCharName) VALUES(" + std::to_string(newCharID) + ", '" + nickName + "')");
+    return newCharID;
+}

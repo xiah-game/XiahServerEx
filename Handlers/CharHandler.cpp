@@ -48,20 +48,14 @@ void OnNewCharacterReq(SOCKET clientSocket, const std::string& clientAccountName
     LOG("[CharHandler] Creating character: Name='" + szNickName + "' Type=" + std::to_string(bCharType));
 
     // 1. Check max 3 characters per account
-    int charCount = 0;
-    DBHelper::GetInstance().ExecuteQuery(
-        "SELECT COUNT(*) FROM CHAR_ACCOUNT WHERE szAccount = '" + clientAccountName + "' AND bActive = 1",
-        [&](SQLHSTMT hStmt) { SQLLEN cb; SQLGetData(hStmt, 1, SQL_C_SLONG, &charCount, 0, &cb); });
+    int charCount = CharacterDB::GetInstance().CountActiveCharacters(clientAccountName);
     if (charCount >= 3) {
         LOG("[CharHandler] Account already has " + std::to_string(charCount) + " characters");
         sendAck(9, 0); return;
     }
 
     // 2. Check duplicate nickname
-    bool duplicated = false;
-    DBHelper::GetInstance().ExecuteQuery(
-        "SELECT dwCharID FROM CHAR_BASIC WHERE szNickName = '" + szNickName + "'",
-        [&](SQLHSTMT hStmt) { duplicated = true; });
+    bool duplicated = CharacterDB::GetInstance().NicknameExists(szNickName);
     if (duplicated) {
         LOG("[CharHandler] Duplicate nickname: " + szNickName);
         sendAck(2, 0); return;
@@ -87,44 +81,15 @@ void OnNewCharacterReq(SOCKET clientSocket, const std::string& clientAccountName
     int wHp = wVit * bIncHp;
     int wIp = wSus * bIncIp;
 
-    // 5. Insert CHAR_BASIC, then query @@IDENTITY separately (ODBC doesn't support multi-statement)
-    int dwBirthDate = 0;
-    DWORD newCharID = 0;
-    DBHelper::GetInstance().ExecuteUpdate(
-        "INSERT INTO CHAR_BASIC (szNickName, bCharType, dwBirthDate, dwFatherID, dwMotherID, dwSpouseID, dwFamilyID, dwSchoolID, dwTeacherOrder, dwSchoolOrder, dwSchoolDepth, dwMunpaID, dwMunpaOrder, DateConnect) "
-        "VALUES ('" + szNickName + "', " + std::to_string(bCharType) + ", " + std::to_string(dwBirthDate) + ", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, GETDATE())");
-    DBHelper::GetInstance().ExecuteQuery(
-        "SELECT @@IDENTITY AS NewID",
-        [&](SQLHSTMT hStmt) { SQLLEN cb; int id = 0; SQLGetData(hStmt, 1, SQL_C_SLONG, &id, 0, &cb); newCharID = (DWORD)id; });
-
+    // 5-9. Create all character tables via DAO
+    DWORD newCharID = CharacterDB::GetInstance().CreateCharacterRecord(
+        clientAccountName, szNickName, bCharType, wStr, wSus, wDex, wVit, wHp, wIp, wPosX, wPosY);
     if (newCharID == 0) {
         LOG("[CharHandler] Failed to insert CHAR_BASIC!");
         sendAck(5, 0); return;
     }
-    LOG("[CharHandler] New CharID from CHAR_BASIC: " + std::to_string(newCharID));
-
-    // 6. Insert CHAR_ACCOUNT
-    DBHelper::GetInstance().ExecuteUpdate(
-        "INSERT INTO CHAR_ACCOUNT (szAccount, dwCharID, dateCreate, dateReg, bActive) "
-        "VALUES ('" + clientAccountName + "', " + std::to_string(newCharID) + ", GETDATE(), GETDATE(), 1)");
-
-    // 7. Insert CHAR_STATUS
-    DBHelper::GetInstance().ExecuteUpdate(
-        "INSERT INTO CHAR_STATUS (dwCharID, dwMapID, wPosX, wPosY, bHeight, bStatusFlag, dwPkCnt, dwDieCnt, dwFlagInform, bTraining, dwConnecting) "
-        "VALUES (" + std::to_string(newCharID) + ", 6, " + std::to_string(wPosX) + ", " + std::to_string(wPosY) + ", 0, 0, 0, 0, 0, 0, 0)");
-
-    // 8. Insert CHAR_POWER
-    DBHelper::GetInstance().ExecuteUpdate(
-        "INSERT INTO CHAR_POWER (dwCharID, wLevel, wTpLevel, wStr, wSus, wDex, wVit, dwHpCur, dwHpMax, wIpCur, wIpMax, dwTotalTp, dwTotalSp, wRemainTp, wRemainSp, dwExp, dwMoney) "
-        "VALUES (" + std::to_string(newCharID) + ", 1, 0, " + std::to_string(wStr) + ", " + std::to_string(wSus) + ", " + std::to_string(wDex) + ", " + std::to_string(wVit) + ", "
-        + std::to_string(wHp) + ", " + std::to_string(wHp) + ", " + std::to_string(wIp) + ", " + std::to_string(wIp) + ", 0, 0, 0, 0, 0, 0)");
-
-    // 9. Insert CHAR_OPTION, CHAR_SLOT, CHAR_RANK
-    DBHelper::GetInstance().ExecuteUpdate(
-        "INSERT INTO CHAR_OPTION (dwCharID, bWisperFlag, bRelationFlag, bTradeFlag) VALUES (" + std::to_string(newCharID) + ", 1, 1, 1)");
     CharacterDB::GetInstance().InitializeSlot(newCharID);
-    DBHelper::GetInstance().ExecuteUpdate(
-        "INSERT INTO CHAR_RANK (dwCharID, szCharName) VALUES(" + std::to_string(newCharID) + ", '" + szNickName + "')");
+    LOG("[CharHandler] New CharID from CHAR_BASIC: " + std::to_string(newCharID));
 
     // 10. Create initial equipment per class
     // Weapon at SackPos=0, Armor at SackPos=2
@@ -171,10 +136,7 @@ void OnDelCharacterReq(SOCKET clientSocket, const std::string& clientAccountName
     LOG("[CharHandler] Deleting CharID: " + std::to_string(dwCharID));
 
     // Verify this character belongs to this account and is active
-    bool ownsChar = false;
-    DBHelper::GetInstance().ExecuteQuery(
-        "SELECT dwCharID FROM CHAR_ACCOUNT WHERE dwCharID = " + std::to_string(dwCharID) + " AND szAccount = '" + clientAccountName + "' AND bActive = 1",
-        [&](SQLHSTMT hStmt) { ownsChar = true; });
+    bool ownsChar = CharacterDB::GetInstance().AccountOwnsCharacter(dwCharID, clientAccountName);
     if (!ownsChar) {
         LOG("[CharHandler] Character does not belong to this account or already deleted!");
         sendAck(1); return;
@@ -183,8 +145,7 @@ void OnDelCharacterReq(SOCKET clientSocket, const std::string& clientAccountName
     // Soft delete: mark bActive = 9 (same as original game design)
     // The CHAR_VISUAL view filters bActive=9, so the character disappears from the list immediately.
     // The Delete_Character stored procedure handles the actual cascade data cleanup later.
-    bool ok = DBHelper::GetInstance().ExecuteUpdate(
-        "UPDATE CHAR_ACCOUNT SET bActive = 9, dateReg = GETDATE() WHERE dwCharID = " + std::to_string(dwCharID) + " AND szAccount = '" + clientAccountName + "'");
+    bool ok = CharacterDB::GetInstance().SoftDeleteCharacter(dwCharID, clientAccountName);
 
     if (ok) {
         LOG("[CharHandler] Character " + std::to_string(dwCharID) + " soft-deleted (bActive=9) successfully.");

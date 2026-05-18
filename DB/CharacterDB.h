@@ -103,6 +103,28 @@ public:
     void UpdateMugongLevel(DWORD dwCharID, DWORD dwMugongID, BYTE bLevel);
 
     // ---- Slot (Quick Bar) ----
+
+    // ---- Character Lifecycle ----
+
+    // Create full character record (CHAR_BASIC+ACCOUNT+STATUS+POWER+OPTION+RANK)
+    // Returns new dwCharID, or 0 on failure
+    DWORD CreateCharacterRecord(const std::string& accountName, const std::string& nickName, BYTE bCharType,
+                                WORD wStr, WORD wSus, WORD wDex, WORD wVit,
+                                int wHp, int wIp, WORD wPosX, WORD wPosY);
+
+    // Soft-delete character (set bActive=9)
+    bool SoftDeleteCharacter(DWORD dwCharID, const std::string& accountName);
+
+    // Check if account owns character
+    bool AccountOwnsCharacter(DWORD dwCharID, const std::string& accountName);
+
+    // Count active characters for account
+    int CountActiveCharacters(const std::string& accountName);
+
+    // Check duplicate nickname
+    bool NicknameExists(const std::string& nickName);
+
+    // ---- Slot (Quick Bar) ----
     
     // Initialize empty slot row
     void InitializeSlot(DWORD dwCharID);
