@@ -80,6 +80,11 @@ public:
     // Withdraw item from bank
     void RemoveFromBank(DWORD dwCharID, DWORD dwItemID);
 
+    // Bank by account name (used by BankHandler)
+    void AddToBankByAccount(const std::string& account, BYTE bBankPos, DWORD dwItemID);
+    void RemoveFromBankByAccount(const std::string& account, DWORD dwItemID);
+    void RemoveFromMallByAccount(const std::string& account, DWORD dwItemID);
+
     // ---- Item Amount ----
 
     // Update item amount/stack

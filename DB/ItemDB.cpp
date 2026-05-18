@@ -156,6 +156,22 @@ void ItemDB::RemoveFromBank(DWORD dwCharID, DWORD dwItemID) {
     DBHelper::GetInstance().ExecuteUpdate(q);
 }
 
+void ItemDB::AddToBankByAccount(const std::string& account, BYTE bBankPos, DWORD dwItemID) {
+    std::string q = "INSERT INTO BANKITEM (szAccount, bSackPos, dwItemID) VALUES ('"
+        + account + "', " + std::to_string(bBankPos) + ", " + std::to_string(dwItemID) + ")";
+    DBHelper::GetInstance().ExecuteQuery(q, nullptr);
+}
+
+void ItemDB::RemoveFromBankByAccount(const std::string& account, DWORD dwItemID) {
+    std::string q = "DELETE FROM BANKITEM WHERE szAccount = '" + account + "' AND dwItemID = " + std::to_string(dwItemID);
+    DBHelper::GetInstance().ExecuteQuery(q, nullptr);
+}
+
+void ItemDB::RemoveFromMallByAccount(const std::string& account, DWORD dwItemID) {
+    std::string q = "DELETE FROM MALLITEM WHERE szAccount = '" + account + "' AND dwItemID = " + std::to_string(dwItemID);
+    DBHelper::GetInstance().ExecuteQuery(q, nullptr);
+}
+
 void ItemDB::UpdateItemAmount(DWORD dwItemID, WORD wAmount) {
     std::string q = "UPDATE ITEM SET wAmount = " + std::to_string(wAmount)
         + " WHERE dwItemID = " + std::to_string(dwItemID);

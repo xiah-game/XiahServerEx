@@ -1,4 +1,5 @@
 #include "BankHandler.h"
+#include "../DB/ItemDB.h"
 #include "../GameObjects/MugongManager.h"
 #include <set>
 
@@ -238,12 +239,8 @@ void OnDrawInBankReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tota
     }
 
     if (result == 0) {
-        std::string qDel = "DELETE FROM SACKITEM WHERE dwCharID = " + std::to_string(charID) + " AND dwItemID = " + std::to_string(dwItemID);
-        DBHelper::GetInstance().ExecuteQuery(qDel, nullptr);
-        
-        std::string qIns = "INSERT INTO BANKITEM (szAccount, bSackPos, dwItemID) VALUES ('" + 
-                           account + "', " + std::to_string(bBankPos) + ", " + std::to_string(dwItemID) + ")";
-        DBHelper::GetInstance().ExecuteQuery(qIns, nullptr);
+        ItemDB::GetInstance().RemoveFromSack(charID, dwItemID);
+        ItemDB::GetInstance().AddToBankByAccount(account, bBankPos, dwItemID);
     }
 
     // CS_EC_DRAWINBANK_ACK = 0x3DA4
@@ -452,13 +449,11 @@ static void ProcessDrawOut(SOCKET clientSocket, DWORD charID, BYTE* payload, WOR
     }
 
     if (result == 0) {
-        std::string tableName = isBank ? "BANKITEM" : "MALLITEM";
-        std::string qDel = "DELETE FROM " + tableName + " WHERE szAccount = '" + account + "' AND dwItemID = " + std::to_string(dwItemID);
-        DBHelper::GetInstance().ExecuteQuery(qDel, nullptr);
-        
-        std::string qIns = "INSERT INTO SACKITEM (dwCharID, bSackPos, dwItemID) VALUES (" + 
-                           std::to_string(charID) + ", " + std::to_string(absolutePos) + ", " + std::to_string(dwItemID) + ")";
-        DBHelper::GetInstance().ExecuteQuery(qIns, nullptr);
+        if (isBank)
+            ItemDB::GetInstance().RemoveFromBankByAccount(account, dwItemID);
+        else
+            ItemDB::GetInstance().RemoveFromMallByAccount(account, dwItemID);
+        ItemDB::GetInstance().AddToSack(charID, absolutePos, dwItemID);
         LOG("[BankHandler] ProcessDrawOut: SUCCESS! Moved item " + std::to_string(dwItemID) + " to sackPos=" + std::to_string(absolutePos));
     }
     
