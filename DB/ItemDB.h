@@ -105,6 +105,9 @@ public:
     // Decrement item amount by N
     void DecrementItemAmountBy(DWORD dwItemID, WORD amount);
 
+    // Update item name
+    void UpdateItemName(DWORD dwItemID, const std::string& name);
+
     // Get item amount
     WORD GetItemAmount(DWORD dwItemID);
 

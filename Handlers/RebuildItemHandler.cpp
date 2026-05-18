@@ -231,11 +231,11 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
 
     DWORD rebuildCost = 10000;
     bool hasMoney = false;
-    DBHelper::GetInstance().ExecuteQuery("SELECT dwMoney FROM CHAR_DATA WHERE dwCharID = " + std::to_string(charID), [&](SQLHSTMT hStmt) {
-        INT64 money = 0; SQLLEN c;
-        SQLGetData(hStmt, 1, SQL_C_SBIGINT, &money, 0, &c);
-        if (money >= rebuildCost) hasMoney = true;
-    });
+    {
+        CharacterDB::CharPower cp;
+        CharacterDB::GetInstance().GetCharData(charID, cp);
+        if (cp.dwMoney >= rebuildCost) hasMoney = true;
+    }
     
     if (!hasMoney) {
         std::vector<BYTE> ackBuf(5); PACKET_HEADER* head = (PACKET_HEADER*)ackBuf.data();
@@ -270,9 +270,7 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
                 }
             });
             if (!amountDecreased) {
-                DBHelper::GetInstance().ExecuteUpdate("DELETE FROM SACKITEM WHERE dwItemID = " + resIdStr);
-                DBHelper::GetInstance().ExecuteUpdate("DELETE FROM ITEMDATA WHERE dwItemID = " + resIdStr);
-                DBHelper::GetInstance().ExecuteUpdate("DELETE FROM ITEM WHERE dwItemID = " + resIdStr);
+                ItemDB::GetInstance().DeleteItemCascade(dwResourceID[i]);
                 std::vector<BYTE> ackBuf(4); ackBuf.push_back(bResourceSackID[i]); ackBuf.push_back(bResourcePos[i]);
                 pushDWord(ackBuf, dwResourceID[i]); ackBuf.push_back(0);
                 PACKET_HEADER* ah = (PACKET_HEADER*)ackBuf.data(); ah->id = 0x4208; ah->payloadSize = ackBuf.size() - 4;
@@ -352,9 +350,7 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
                 }
             });
             if (!amountDecreased) {
-                DBHelper::GetInstance().ExecuteUpdate("DELETE FROM SACKITEM WHERE dwItemID = " + resIdStr);
-                DBHelper::GetInstance().ExecuteUpdate("DELETE FROM ITEMDATA WHERE dwItemID = " + resIdStr);
-                DBHelper::GetInstance().ExecuteUpdate("DELETE FROM ITEM WHERE dwItemID = " + resIdStr);
+                ItemDB::GetInstance().DeleteItemCascade(dwResourceID[i]);
                 // Prepare 0x4208 packet (full remove)
                 std::vector<BYTE> rmBuf(7); PACKET_HEADER* ah = (PACKET_HEADER*)rmBuf.data();
                 ah->id = 0x4208; ah->payloadSize = 3;
@@ -411,7 +407,7 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
             std::to_string(dwItemID) + ", " + std::to_string(finalData4) + ", " + std::to_string(finalData5) + 
             ", " + std::to_string(finalData9) + ", " + std::to_string(currentRebuild) + ", " + std::to_string(currentAppend) + ", " + std::to_string(currentAttempts) + ")");
 
-        DBHelper::GetInstance().ExecuteUpdate("UPDATE ITEM SET szName = '" + newName + "' WHERE dwItemID = " + std::to_string(dwItemID));
+        ItemDB::GetInstance().UpdateItemName(dwItemID, newName);
     }
 
     // =====================================================================
