@@ -255,19 +255,16 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
     for (int i=0; i<3; i++) {
         if (dwResourceID[i] != 0) {
             std::string resIdStr = std::to_string(dwResourceID[i]);
+            int amount = (int)ItemDB::GetInstance().GetItemAmount(dwResourceID[i]);
             bool amountDecreased = false;
-            DBHelper::GetInstance().ExecuteQuery("SELECT wAmount FROM ITEM WHERE dwItemID = " + resIdStr, [&](SQLHSTMT hStmt) {
-                int amount = 0; SQLLEN c;
-                SQLGetData(hStmt, 1, SQL_C_SLONG, &amount, 0, &c);
-                if (amount > 1) {
-                    amountDecreased = true;
-                    ItemDB::GetInstance().DecrementItemAmount(dwResourceID[i]);
-                    std::vector<BYTE> ackBuf(4); ackBuf.push_back(bResourceSackID[i]); ackBuf.push_back(bResourcePos[i]);
-                    pushDWord(ackBuf, dwResourceID[i]); pushWord(ackBuf, amount - 1);
-                    PACKET_HEADER* ah = (PACKET_HEADER*)ackBuf.data(); ah->id = 0x4216; ah->payloadSize = ackBuf.size() - 4;
-                    EncryptPacket(ackBuf.data(), 0x42); SafeSend(clientSocket, (char*)ackBuf.data(), ackBuf.size(), 0);
-                }
-            });
+            if (amount > 1) {
+                amountDecreased = true;
+                ItemDB::GetInstance().DecrementItemAmount(dwResourceID[i]);
+                std::vector<BYTE> ackBuf(4); ackBuf.push_back(bResourceSackID[i]); ackBuf.push_back(bResourcePos[i]);
+                pushDWord(ackBuf, dwResourceID[i]); pushWord(ackBuf, amount - 1);
+                PACKET_HEADER* ah = (PACKET_HEADER*)ackBuf.data(); ah->id = 0x4216; ah->payloadSize = ackBuf.size() - 4;
+                EncryptPacket(ackBuf.data(), 0x42); SafeSend(clientSocket, (char*)ackBuf.data(), ackBuf.size(), 0);
+            }
             if (!amountDecreased) {
                 ItemDB::GetInstance().DeleteItemCascade(dwResourceID[i]);
                 std::vector<BYTE> ackBuf(4); ackBuf.push_back(bResourceSackID[i]); ackBuf.push_back(bResourcePos[i]);
@@ -332,22 +329,19 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
         resRemoves[i].valid = false;
         if (dwResourceID[i] != 0) {
             std::string resIdStr = std::to_string(dwResourceID[i]);
+            int amount = (int)ItemDB::GetInstance().GetItemAmount(dwResourceID[i]);
             bool amountDecreased = false;
-            DBHelper::GetInstance().ExecuteQuery("SELECT wAmount FROM ITEM WHERE dwItemID = " + resIdStr, [&](SQLHSTMT hStmt) {
-                int amount = 0; SQLLEN c;
-                SQLGetData(hStmt, 1, SQL_C_SLONG, &amount, 0, &c);
-                if (amount > 1) {
-                    amountDecreased = true;
-                    ItemDB::GetInstance().DecrementItemAmount(dwResourceID[i]);
-                    // Prepare 0x4216 packet (amount update)
-                    std::vector<BYTE> amtBuf(4); amtBuf.push_back(bResourceSackID[i]); amtBuf.push_back(bResourcePos[i]);
-                    pushDWord(amtBuf, dwResourceID[i]); pushWord(amtBuf, amount - 1);
-                    PACKET_HEADER* ah = (PACKET_HEADER*)amtBuf.data(); ah->id = 0x4216; ah->payloadSize = amtBuf.size() - 4;
-                    EncryptPacket(amtBuf.data(), 0x42);
-                    resRemoves[i].packet = amtBuf;
-                    resRemoves[i].valid = true;
-                }
-            });
+            if (amount > 1) {
+                amountDecreased = true;
+                ItemDB::GetInstance().DecrementItemAmount(dwResourceID[i]);
+                // Prepare 0x4216 packet (amount update)
+                std::vector<BYTE> amtBuf(4); amtBuf.push_back(bResourceSackID[i]); amtBuf.push_back(bResourcePos[i]);
+                pushDWord(amtBuf, dwResourceID[i]); pushWord(amtBuf, amount - 1);
+                PACKET_HEADER* ah = (PACKET_HEADER*)amtBuf.data(); ah->id = 0x4216; ah->payloadSize = amtBuf.size() - 4;
+                EncryptPacket(amtBuf.data(), 0x42);
+                resRemoves[i].packet = amtBuf;
+                resRemoves[i].valid = true;
+            }
             if (!amountDecreased) {
                 ItemDB::GetInstance().DeleteItemCascade(dwResourceID[i]);
                 // Prepare 0x4208 packet (full remove)
