@@ -337,3 +337,15 @@ bool CharacterDB::GetCharVisual(DWORD dwCharID, std::string& szNickName, BYTE& b
         });
     return found;
 }
+
+DWORD CharacterDB::GetCharMapID(DWORD dwCharID) {
+    DWORD mapID = 6; // default
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT dwMapID FROM CHAR_STATUS WHERE dwCharID = " + std::to_string(dwCharID),
+        [&](SQLHSTMT hStmt) {
+            int m = 0; SQLLEN cb;
+            SQLGetData(hStmt, 1, SQL_C_SLONG, &m, 0, &cb);
+            if (cb != SQL_NULL_DATA) mapID = (DWORD)m;
+        });
+    return mapID;
+}

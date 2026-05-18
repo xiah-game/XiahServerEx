@@ -1,4 +1,5 @@
 #include "LoginHandler.h"
+#include "../DB/CharacterDB.h"
 #include "../Network/SessionMgr.h"
 #include "../GameObjects/PlayerManager.h"
 #include "SlotHandler.h"
@@ -136,15 +137,8 @@ void OnStartGameReq(SOCKET clientSocket, std::string& clientAccountName, BYTE* p
 
     SessionMgr::GetInstance().SetCharID(clientSocket, dwCharID);
 
-    DWORD dwMapID = 6;
-    std::string q = "SELECT dwMapID FROM CHAR_STATUS WHERE dwCharID = " + std::to_string(dwCharID);
-    auto mapCallback = [&](SQLHSTMT hStmt) {
-        int map; SQLLEN cbMap;
-        SQLGetData(hStmt, 1, SQL_C_SLONG, &map, 0, &cbMap);
-        if (cbMap != SQL_NULL_DATA) dwMapID = map;
-        LOG("[LoginHandler] Found real Map ID: " + std::to_string(dwMapID) + " for Character: " + std::to_string(dwCharID));
-    };
-    DBHelper::GetInstance().ExecuteQuery(q, mapCallback);
+    DWORD dwMapID = CharacterDB::GetInstance().GetCharMapID(dwCharID);
+    LOG("[LoginHandler] Found real Map ID: " + std::to_string(dwMapID) + " for Character: " + std::to_string(dwCharID));
 
     std::vector<BYTE> ackBuf; ackBuf.resize(4); 
     ackBuf.push_back(0); // Success

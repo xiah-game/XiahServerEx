@@ -82,6 +82,9 @@ public:
     // Get current position from CHAR_STATUS
     bool GetCharPosition(DWORD dwCharID, int& wPosX, int& wPosY, int& bHeight);
 
+    // Get current map ID from CHAR_STATUS
+    DWORD GetCharMapID(DWORD dwCharID);
+
     // Get name and char type from CHAR_VISUAL view
     bool GetCharVisual(DWORD dwCharID, std::string& szNickName, BYTE& bCharType);
 
