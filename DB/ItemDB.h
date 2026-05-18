@@ -102,6 +102,9 @@ public:
     // Decrement item amount by 1
     void DecrementItemAmount(DWORD dwItemID);
 
+    // Decrement item amount by N
+    void DecrementItemAmountBy(DWORD dwItemID, WORD amount);
+
     // Get item amount
     WORD GetItemAmount(DWORD dwItemID);
 

@@ -308,8 +308,7 @@ void OnBuyItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
     if (currentMoney == -1) return;
 
     if (currentMoney >= totalCost || totalCost == 0) {
-        std::string qUpd = "UPDATE CHAR_DATA SET dwMoney = dwMoney - " + std::to_string(totalCost) + " WHERE dwCharID = " + std::to_string(charID);
-        DBHelper::GetInstance().ExecuteUpdate(qUpd);
+        CharacterDB::GetInstance().SubtractMoney(charID, totalCost);
 
         std::vector<BYTE> mBuf(13);
         PACKET_HEADER* mHead = (PACKET_HEADER*)mBuf.data();
@@ -476,8 +475,7 @@ void OnSellItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
         sellPrice = g_ItemTemplates[wRefID].dwCost * amountToSell;
     }
 
-    std::string qUpd = "UPDATE CHAR_DATA SET dwMoney = dwMoney + " + std::to_string(sellPrice) + " WHERE dwCharID = " + std::to_string(charID);
-    DBHelper::GetInstance().ExecuteUpdate(qUpd);
+    CharacterDB::GetInstance().AddMoney(charID, sellPrice);
 
     INT64 currentMoney = 0;
     std::string qMoney = "SELECT dwMoney FROM CHAR_DATA WHERE dwCharID = " + std::to_string(charID);
@@ -519,8 +517,7 @@ void OnSellItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
         EncryptPacket(rBuf.data(), 0x42);
         SafeSend(clientSocket, (const char*)rBuf.data(), rBuf.size(), 0);
     } else {
-        std::string updItem = "UPDATE ITEM SET wAmount = wAmount - " + std::to_string(amountToSell) + " WHERE dwItemID = " + std::to_string(dwItemID);
-        DBHelper::GetInstance().ExecuteUpdate(updItem);
+        ItemDB::GetInstance().DecrementItemAmountBy(dwItemID, (WORD)amountToSell);
         // Do not send 0x4208, client handles amount deduction internally or needs an amount update packet
     }
 

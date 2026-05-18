@@ -66,6 +66,11 @@ void CharacterDB::AddMoney(DWORD dwCharID, DWORD amount) {
     DBHelper::GetInstance().ExecuteUpdate(q);
 }
 
+void CharacterDB::SubtractMoney(DWORD dwCharID, DWORD amount) {
+    std::string q = "UPDATE CHAR_DATA SET dwMoney = dwMoney - " + std::to_string(amount) + " WHERE dwCharID = " + std::to_string(dwCharID);
+    DBHelper::GetInstance().ExecuteUpdate(q);
+}
+
 void CharacterDB::UpdateHpIp(DWORD dwCharID, DWORD dwHpCur, WORD wIpCur) {
     std::string q = "UPDATE CHAR_POWER SET dwHpCur=" + std::to_string(dwHpCur)
         + ", wIpCur=" + std::to_string(wIpCur)

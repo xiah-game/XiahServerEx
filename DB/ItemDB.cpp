@@ -202,6 +202,11 @@ void ItemDB::DecrementItemAmount(DWORD dwItemID) {
         "UPDATE ITEM SET wAmount = wAmount - 1 WHERE dwItemID = " + std::to_string(dwItemID));
 }
 
+void ItemDB::DecrementItemAmountBy(DWORD dwItemID, WORD amount) {
+    DBHelper::GetInstance().ExecuteUpdate(
+        "UPDATE ITEM SET wAmount = wAmount - " + std::to_string(amount) + " WHERE dwItemID = " + std::to_string(dwItemID));
+}
+
 WORD ItemDB::GetItemAmount(DWORD dwItemID) {
     WORD amount = 0;
     DBHelper::GetInstance().ExecuteQuery(

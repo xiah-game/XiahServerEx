@@ -41,9 +41,12 @@ public:
     // Update stat points after SP spend
     void UpdateStatPoints(DWORD dwCharID, WORD wStr, WORD wSus, WORD wDex, WORD wVit, WORD wRemainSp);
 
-    // Update money
+    // Set absolute money
     void SetMoney(DWORD dwCharID, DWORD dwMoney);
+
+    // Relative money operations
     void AddMoney(DWORD dwCharID, DWORD amount);
+    void SubtractMoney(DWORD dwCharID, DWORD amount);
 
     // Update HP/IP in database
     void UpdateHpIp(DWORD dwCharID, DWORD dwHpCur, WORD wIpCur);
