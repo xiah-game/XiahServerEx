@@ -1,6 +1,7 @@
 #include "PlayerManager.h"
 #include "MugongManager.h"
 #include "../DBHelper.h"
+#include "../DB/CharacterDB.h"
 #include "../../XiahClient/csprotocol.h"
 #include "../Network/SessionMgr.h"
 #include "../GameObjects/MapInstance.h"
@@ -238,16 +239,8 @@ void PlayerManager::SavePlayer(DWORD dwCharID) {
         std::lock_guard<std::mutex> lock(mapInst->GetMutex());
         sServerObject* pObj = mapInst->GetPlayer(dwObjectID);
         if (pObj) {
-            std::string qStat = "UPDATE CHAR_STATUS SET dwMapID = " + std::to_string(mapID) +
-                                ", wPosX = " + std::to_string(pObj->wPosX) +
-                                ", wPosY = " + std::to_string(pObj->wPosY) +
-                                " WHERE dwCharID = " + std::to_string(dwCharID);
-            DBHelper::GetInstance().ExecuteUpdate(qStat);
-
-            std::string qPower = "UPDATE CHAR_POWER SET dwHpCur = " + std::to_string(pObj->dwHpCur) +
-                                 ", wIpCur = " + std::to_string(pObj->wIpCur) +
-                                 " WHERE dwCharID = " + std::to_string(dwCharID);
-            DBHelper::GetInstance().ExecuteUpdate(qPower);
+            CharacterDB::GetInstance().SavePosition(dwCharID, pObj->wPosX, pObj->wPosY, mapID);
+            CharacterDB::GetInstance().UpdateHpIp(dwCharID, pObj->dwHpCur, pObj->wIpCur);
 
             LOG("[PlayerManager] Saved player " + std::to_string(dwCharID) + " data. POS: " + std::to_string(pObj->wPosX) + "," + std::to_string(pObj->wPosY) + " MAP: " + std::to_string(mapID));
         }
