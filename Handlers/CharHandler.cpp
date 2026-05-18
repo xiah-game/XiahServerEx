@@ -63,21 +63,16 @@ void OnNewCharacterReq(SOCKET clientSocket, const std::string& clientAccountName
 
     // 3. Get spawn position from LOCATION
     int wPosX = 412, wPosY = 615;
-    DBHelper::GetInstance().ExecuteQuery(
-        "SELECT TOP 1 wStartPosX, wStartPosY FROM LOCATION WHERE dwMapID = 6",
-        [&](SQLHSTMT hStmt) { SQLLEN cb[2]; SQLGetData(hStmt, 1, SQL_C_SSHORT, &wPosX, 0, &cb[0]); SQLGetData(hStmt, 2, SQL_C_SSHORT, &wPosY, 0, &cb[1]); });
+    CharacterDB::GetInstance().GetSpawnPosition(6, wPosX, wPosY);
     wPosX += rand() % 10; wPosY += rand() % 10;
 
     // 4. Get default stats from CHAR_DEFAULT
     int wStr = 1, wDex = 1, wVit = 1, wSus = 1, bIncHp = 8, bIncIp = 4;
-    DBHelper::GetInstance().ExecuteQuery(
-        "SELECT wStr, wDex, wVit, wSus, bIncHp, bIncIp FROM CHAR_DEFAULT WHERE bCharType = " + std::to_string(bCharType),
-        [&](SQLHSTMT hStmt) {
-            SQLLEN cb[6];
-            SQLGetData(hStmt, 1, SQL_C_SSHORT, &wStr, 0, &cb[0]); SQLGetData(hStmt, 2, SQL_C_SSHORT, &wDex, 0, &cb[1]);
-            SQLGetData(hStmt, 3, SQL_C_SSHORT, &wVit, 0, &cb[2]); SQLGetData(hStmt, 4, SQL_C_SSHORT, &wSus, 0, &cb[3]);
-            SQLGetData(hStmt, 5, SQL_C_SLONG, &bIncHp, 0, &cb[4]); SQLGetData(hStmt, 6, SQL_C_SLONG, &bIncIp, 0, &cb[5]);
-        });
+    CharacterDB::CharDefault cd;
+    if (CharacterDB::GetInstance().GetCharDefault(bCharType, cd)) {
+        wStr = cd.wStr; wDex = cd.wDex; wVit = cd.wVit; wSus = cd.wSus;
+        bIncHp = cd.bIncHp; bIncIp = cd.bIncIp;
+    }
     int wHp = wVit * bIncHp;
     int wIp = wSus * bIncIp;
 

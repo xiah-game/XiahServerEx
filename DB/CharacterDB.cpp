@@ -258,3 +258,34 @@ DWORD CharacterDB::CreateCharacterRecord(const std::string& accountName, const s
         "INSERT INTO CHAR_RANK (dwCharID, szCharName) VALUES(" + std::to_string(newCharID) + ", '" + nickName + "')");
     return newCharID;
 }
+
+void CharacterDB::GetSpawnPosition(DWORD dwMapID, int& wPosX, int& wPosY) {
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT TOP 1 wStartPosX, wStartPosY FROM LOCATION WHERE dwMapID = " + std::to_string(dwMapID),
+        [&](SQLHSTMT hStmt) { SQLLEN cb[2]; SQLGetData(hStmt, 1, SQL_C_SSHORT, &wPosX, 0, &cb[0]); SQLGetData(hStmt, 2, SQL_C_SSHORT, &wPosY, 0, &cb[1]); });
+}
+
+bool CharacterDB::GetCharDefault(BYTE bCharType, CharDefault& out) {
+    bool found = false;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT wStr, wDex, wVit, wSus, bIncHp, bIncIp FROM CHAR_DEFAULT WHERE bCharType = " + std::to_string(bCharType),
+        [&](SQLHSTMT hStmt) {
+            found = true; SQLLEN cb[6];
+            SQLGetData(hStmt, 1, SQL_C_SSHORT, &out.wStr, 0, &cb[0]); SQLGetData(hStmt, 2, SQL_C_SSHORT, &out.wDex, 0, &cb[1]);
+            SQLGetData(hStmt, 3, SQL_C_SSHORT, &out.wVit, 0, &cb[2]); SQLGetData(hStmt, 4, SQL_C_SSHORT, &out.wSus, 0, &cb[3]);
+            SQLGetData(hStmt, 5, SQL_C_SLONG, &out.bIncHp, 0, &cb[4]); SQLGetData(hStmt, 6, SQL_C_SLONG, &out.bIncIp, 0, &cb[5]);
+        });
+    return found;
+}
+
+bool CharacterDB::GetSlotValues(DWORD dwCharID, std::vector<DWORD>& slots) {
+    bool found = false;
+    slots.resize(10, 0);
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT dwValue1, dwValue2, dwValue3, dwValue4, dwValue5, dwValue6, dwValue7, dwValue8, dwValue9, dwValue10 FROM CHAR_SLOT WHERE dwCharID = " + std::to_string(dwCharID),
+        [&](SQLHSTMT hStmt) {
+            found = true; SQLLEN c;
+            for (int i = 0; i < 10; ++i) { SQLGetData(hStmt, i + 1, SQL_C_ULONG, &slots[i], 0, &c); }
+        });
+    return found;
+}

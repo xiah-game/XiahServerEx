@@ -107,6 +107,16 @@ public:
 
     // ---- Slot (Quick Bar) ----
 
+    // Get spawn position from LOCATION table
+    void GetSpawnPosition(DWORD dwMapID, int& wPosX, int& wPosY);
+
+    // Get default stats from CHAR_DEFAULT
+    struct CharDefault { int wStr, wDex, wVit, wSus, bIncHp, bIncIp; };
+    bool GetCharDefault(BYTE bCharType, CharDefault& out);
+
+    // Get slot values
+    bool GetSlotValues(DWORD dwCharID, std::vector<DWORD>& slots);
+
     // ---- Character Lifecycle ----
 
     // Create full character record (CHAR_BASIC+ACCOUNT+STATUS+POWER+OPTION+RANK)

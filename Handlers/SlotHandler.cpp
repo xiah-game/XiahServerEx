@@ -12,16 +12,8 @@ void SendCharSlotInfoAck(SOCKET clientSocket, DWORD dwCharID) {
     
     std::string q = "SELECT dwValue1, dwValue2, dwValue3, dwValue4, dwValue5, dwValue6, dwValue7, dwValue8, dwValue9, dwValue10 FROM CHAR_SLOT WHERE dwCharID = " + std::to_string(dwCharID);
     
-    bool found = false;
     std::vector<DWORD> slots(10, 0);
-
-    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
-        found = true;
-        SQLLEN c;
-        for (int i = 0; i < 10; ++i) {
-            SQLGetData(hStmt, i + 1, SQL_C_ULONG, &slots[i], 0, &c);
-        }
-    });
+    bool found = CharacterDB::GetInstance().GetSlotValues(dwCharID, slots);
 
     if (!found) {
         CharacterDB::GetInstance().InitializeSlot(dwCharID);
