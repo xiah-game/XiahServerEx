@@ -108,6 +108,10 @@ public:
     // Update item name
     void UpdateItemName(DWORD dwItemID, const std::string& name);
 
+    // Create item from template: INSERT ITEM + ITEMDATA from ITEMTEMPLATE, INSERT SACKITEM
+    // Returns new dwItemID, or 0 on failure
+    DWORD InsertItemFromTemplate(DWORD dwCharID, WORD wRefID, BYTE bSackPos);
+
     // Get item amount
     WORD GetItemAmount(DWORD dwItemID);
 

@@ -212,6 +212,28 @@ void ItemDB::UpdateItemName(DWORD dwItemID, const std::string& name) {
         "UPDATE ITEM SET szName = '" + name + "' WHERE dwItemID = " + std::to_string(dwItemID));
 }
 
+DWORD ItemDB::InsertItemFromTemplate(DWORD dwCharID, WORD wRefID, BYTE bSackPos) {
+    // Step A: Insert ITEM from ITEMTEMPLATE
+    DBHelper::GetInstance().ExecuteUpdate(
+        "INSERT INTO ITEM (wRefID, bType, bKind, wVisualID, szName, dwCost, wLevel, bCharType, wAmount, nBasicData1, nBasicData2, nBasicData3, nBasicData4, nBasicData5) "
+        "SELECT wRefID, bType, bKind, wVisualID, szName, 0, wLevel, bCharType, 1, nBasicData1, nBasicData2, nBasicData3, nBasicData4, nBasicData5 "
+        "FROM ITEMTEMPLATE WHERE wRefID = " + std::to_string(wRefID));
+    // Step B: Get new dwItemID
+    DWORD dwNewItemID = 0;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT @@IDENTITY AS NewItemID",
+        [&](SQLHSTMT hStmt) { SQLLEN cb; int id = 0; SQLGetData(hStmt, 1, SQL_C_SLONG, &id, 0, &cb); dwNewItemID = (DWORD)id; });
+    if (dwNewItemID == 0) return 0;
+    // Step C: Insert ITEMDATA from ITEMTEMPLATE
+    DBHelper::GetInstance().ExecuteUpdate(
+        "INSERT INTO ITEMDATA (dwItemID, nData1, nData2, nData3, nData4, nData5, nData6, nData7, nData8) "
+        "SELECT " + std::to_string(dwNewItemID) + ", nData1, nData2, nData3, nData4, nData5, nData6, nData7, nData8 FROM ITEMTEMPLATE WHERE wRefID = " + std::to_string(wRefID));
+    // Step D: Insert SACKITEM
+    DBHelper::GetInstance().ExecuteUpdate(
+        "INSERT INTO SACKITEM (dwCharID, bSackPos, dwItemID) VALUES (" + std::to_string(dwCharID) + ", " + std::to_string(bSackPos) + ", " + std::to_string(dwNewItemID) + ")");
+    return dwNewItemID;
+}
+
 WORD ItemDB::GetItemAmount(DWORD dwItemID) {
     WORD amount = 0;
     DBHelper::GetInstance().ExecuteQuery(

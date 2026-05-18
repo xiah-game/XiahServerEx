@@ -1,4 +1,6 @@
 #include "CharHandler.h"
+#include "../DB/ItemDB.h"
+#include "../DB/CharacterDB.h"
 #include "../ServerCore.h"
 #include "../XiahClient/csprotocol.h"
 #include "../DBHelper.h"
@@ -120,8 +122,7 @@ void OnNewCharacterReq(SOCKET clientSocket, const std::string& clientAccountName
     // 9. Insert CHAR_OPTION, CHAR_SLOT, CHAR_RANK
     DBHelper::GetInstance().ExecuteUpdate(
         "INSERT INTO CHAR_OPTION (dwCharID, bWisperFlag, bRelationFlag, bTradeFlag) VALUES (" + std::to_string(newCharID) + ", 1, 1, 1)");
-    DBHelper::GetInstance().ExecuteUpdate(
-        "INSERT INTO CHAR_SLOT VALUES(" + std::to_string(newCharID) + ", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)");
+    CharacterDB::GetInstance().InitializeSlot(newCharID);
     DBHelper::GetInstance().ExecuteUpdate(
         "INSERT INTO CHAR_RANK (dwCharID, szCharName) VALUES(" + std::to_string(newCharID) + ", '" + szNickName + "')");
 
@@ -137,24 +138,8 @@ void OnNewCharacterReq(SOCKET clientSocket, const std::string& clientAccountName
     }
 
     for (const auto& si : items) {
-        // Step A: Insert into ITEM from template
-        DBHelper::GetInstance().ExecuteUpdate(
-            "INSERT INTO ITEM (wRefID, bType, bKind, wVisualID, szName, dwCost, wLevel, bCharType, wAmount, nBasicData1, nBasicData2, nBasicData3, nBasicData4, nBasicData5) "
-            "SELECT wRefID, bType, bKind, wVisualID, szName, 0, wLevel, bCharType, 1, nBasicData1, nBasicData2, nBasicData3, nBasicData4, nBasicData5 "
-            "FROM ITEMTEMPLATE WHERE wRefID = " + std::to_string(si.wRefID));
-        // Step B: Get the new dwItemID
-        DWORD dwNewItemID = 0;
-        DBHelper::GetInstance().ExecuteQuery(
-            "SELECT @@IDENTITY AS NewItemID",
-            [&](SQLHSTMT hStmt) { SQLLEN cb; int id = 0; SQLGetData(hStmt, 1, SQL_C_SLONG, &id, 0, &cb); dwNewItemID = (DWORD)id; });
+        DWORD dwNewItemID = ItemDB::GetInstance().InsertItemFromTemplate(newCharID, si.wRefID, si.bSackPos);
         if (dwNewItemID == 0) { LOG("[CharHandler] Failed to create item wRefID=" + std::to_string(si.wRefID)); continue; }
-        // Step C: Insert ITEMDATA
-        DBHelper::GetInstance().ExecuteUpdate(
-            "INSERT INTO ITEMDATA (dwItemID, nData1, nData2, nData3, nData4, nData5, nData6, nData7, nData8) "
-            "SELECT " + std::to_string(dwNewItemID) + ", nData1, nData2, nData3, nData4, nData5, nData6, nData7, nData8 FROM ITEMTEMPLATE WHERE wRefID = " + std::to_string(si.wRefID));
-        // Step D: Insert SACKITEM
-        DBHelper::GetInstance().ExecuteUpdate(
-            "INSERT INTO SACKITEM (dwCharID, bSackPos, dwItemID) VALUES (" + std::to_string(newCharID) + ", " + std::to_string(si.bSackPos) + ", " + std::to_string(dwNewItemID) + ")");
         LOG("[CharHandler] Created item wRefID=" + std::to_string(si.wRefID) + " dwItemID=" + std::to_string(dwNewItemID) + " at pos=" + std::to_string(si.bSackPos));
     }
 
