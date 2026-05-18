@@ -18,6 +18,7 @@ public:
 
     struct CharPower {
         WORD wLevel = 0, wStr = 0, wSus = 0, wDex = 0, wVit = 0;
+        BYTE bCharType = 0;
         WORD wIpMax = 0, wIpCur = 0;
         DWORD dwHpMax = 0, dwHpCur = 0;
         long long int dwExp = 0;

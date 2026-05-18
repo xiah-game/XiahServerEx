@@ -117,12 +117,10 @@ bool MugongManager::CanLearnMugong(DWORD charID, DWORD dwMugongID, BYTE targetLe
     if (!lst) return false;
 
     int playerLevel = 0, playerType = 0;
-    std::string pQ = "SELECT wLevel, bCharType FROM CHAR_DATA WHERE dwCharID = " + std::to_string(charID);
-    DBHelper::GetInstance().ExecuteQuery(pQ, [&](SQLHSTMT hStmt) {
-        SQLLEN c1, c2;
-        SQLGetData(hStmt, 1, SQL_C_SLONG, &playerLevel, 0, &c1);
-        SQLGetData(hStmt, 2, SQL_C_SLONG, &playerType, 0, &c2);
-    });
+    CharacterDB::CharPower cp;
+    if (CharacterDB::GetInstance().GetCharData(charID, cp)) {
+        playerLevel = cp.wLevel; playerType = cp.bCharType;
+    }
     
     // 1. Check Char Type (Assuming 0 is universal, or 5 is universal, adjust as needed)
     if (mg->bCharType != 0 && mg->bCharType != playerType && mg->bCharType != 5) {
@@ -194,12 +192,10 @@ void MugongManager::UpgradeMugong(SOCKET clientSocket, DWORD charID, DWORD dwMug
     }
     
     int playerLevel = 0, playerTP = 0;
-    std::string pQ = "SELECT wLevel, wRemainTp FROM CHAR_DATA WHERE dwCharID = " + std::to_string(charID);
-    DBHelper::GetInstance().ExecuteQuery(pQ, [&](SQLHSTMT hStmt) {
-        SQLLEN c1, c2;
-        SQLGetData(hStmt, 1, SQL_C_SLONG, &playerLevel, 0, &c1);
-        SQLGetData(hStmt, 2, SQL_C_SLONG, &playerTP, 0, &c2);
-    });
+    CharacterDB::CharPower cp2;
+    if (CharacterDB::GetInstance().GetCharData(charID, cp2)) {
+        playerLevel = cp2.wLevel; playerTP = cp2.wRemainTp;
+    }
     
     if (playerLevel < targetData->bLimitLevel) {
         LOG("[MugongManager] Player level too low to upgrade! Required: " + std::to_string(targetData->bLimitLevel));

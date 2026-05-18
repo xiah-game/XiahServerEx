@@ -4,7 +4,7 @@
 
 bool CharacterDB::GetCharData(DWORD dwCharID, CharPower& out) {
     std::string q = "SELECT wLevel, wStr, wSus, wDex, wVit, wIpMax, wIpCur, dwHpMax, dwHpCur, "
-                    "dwExp, dwTotalSp, wRemainSp, dwTotalTp, wRemainTp, dwMoney, dwFame "
+                    "dwExp, dwTotalSp, wRemainSp, dwTotalTp, wRemainTp, dwMoney, dwFame, bCharType "
                     "FROM CHAR_DATA WHERE dwCharID = " + std::to_string(dwCharID);
     bool found = false;
     DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
@@ -26,6 +26,7 @@ bool CharacterDB::GetCharData(DWORD dwCharID, CharPower& out) {
         SQLGetData(hStmt, 14, SQL_C_SLONG, &tmp, 0, &c); out.wRemainTp = (WORD)tmp;
         SQLGetData(hStmt, 15, SQL_C_ULONG, &out.dwMoney, 0, &c);
         SQLGetData(hStmt, 16, SQL_C_ULONG, &out.dwFame, 0, &c);
+        SQLGetData(hStmt, 17, SQL_C_SLONG, &tmp, 0, &c); out.bCharType = (BYTE)tmp;
         found = true;
     });
     return found;
