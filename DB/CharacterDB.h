@@ -32,6 +32,10 @@ public:
         std::string szCharName;
     };
 
+    // Authenticate user login (returns accountId, sets exists/passMatch)
+    DWORD AuthenticateUser(const std::string& username, const std::string& password,
+                           const std::string& dbAccount, bool& accountExists, bool& passMatch);
+
     // Fetch full CHAR_DATA view (joins CHAR_POWER + CHAR_BASIC)
     bool GetCharData(DWORD dwCharID, CharPower& out);
 

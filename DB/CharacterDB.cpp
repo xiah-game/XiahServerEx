@@ -289,3 +289,20 @@ bool CharacterDB::GetSlotValues(DWORD dwCharID, std::vector<DWORD>& slots) {
         });
     return found;
 }
+
+DWORD CharacterDB::AuthenticateUser(const std::string& username, const std::string& password,
+                                     const std::string& dbAccount, bool& accountExists, bool& passMatch) {
+    DWORD accountId = 0;
+    accountExists = false;
+    passMatch = false;
+    std::string query = "SELECT id, CASE WHEN szPasswd = '" + password + "' THEN 1 ELSE 0 END FROM " + dbAccount + ".dbo.Account WHERE szAccount = '" + username + "'";
+    DBHelper::GetInstance().ExecuteQuery(query, [&](SQLHSTMT hStmt) {
+        SQLLEN cbId = 0, cbMatch = 0;
+        SQLGetData(hStmt, 1, SQL_C_ULONG, &accountId, 0, &cbId);
+        int match = 0;
+        SQLGetData(hStmt, 2, SQL_C_LONG, &match, 0, &cbMatch);
+        if (match == 1) passMatch = true;
+        accountExists = true;
+    });
+    return accountId;
+}

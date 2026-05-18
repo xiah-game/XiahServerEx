@@ -2,6 +2,7 @@
 #include "ServerCore.h"
 #include "../XiahClient/csprotocol.h"
 #include "DBHelper.h"
+#include "DB/CharacterDB.h"
 #include <thread>
 
 void RunAuthSvr() {
@@ -110,18 +111,9 @@ void RunAuthSvr() {
                         BYTE bLoginResult = 1; // 1 = LOGINFAIL
                         DWORD accountId = 0;
                         if (!username.empty() && !password.empty()) {
-                            std::string query = "SELECT id, CASE WHEN szPasswd = '" + password + "' THEN 1 ELSE 0 END FROM " + g_Config.dbAccount + ".dbo.Account WHERE szAccount = '" + username + "'";
                             bool accountExists = false;
                             bool passMatch = false;
-                            DBHelper::GetInstance().ExecuteQuery(query, [&](SQLHSTMT hStmt) {
-                                SQLLEN cbId = 0, cbMatch = 0;
-                                SQLGetData(hStmt, 1, SQL_C_ULONG, &accountId, 0, &cbId);
-                                
-                                int match = 0;
-                                SQLGetData(hStmt, 2, SQL_C_LONG, &match, 0, &cbMatch);
-                                if (match == 1) passMatch = true;
-                                accountExists = true;
-                            });
+                            accountId = CharacterDB::GetInstance().AuthenticateUser(username, password, g_Config.dbAccount, accountExists, passMatch);
                             
                             if (!accountExists) {
                                 bLoginResult = 1; // LOGINFAIL (Account doesn't exist)
