@@ -41,7 +41,8 @@ enum class TradeState {
 struct TradeSlot {
     DWORD dwItemID = 0;
     DWORD dwAmount = 0;
-    BYTE  bSrcSackPos = 0;    // original sack position
+    BYTE  bSrcSackID = 0;     // original sack ID (1/2/3)
+    BYTE  bSrcSackPos = 0;    // original sack position (relative within sack page)
     BYTE  bTradePos = 0;      // position in trade grid
 };
 

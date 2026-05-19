@@ -20,6 +20,9 @@ static void SendPacket(SOCKET s, WORD id, const std::vector<BYTE>& payload) {
     SafeSend(s, (const char*)pkt.data(), (int)pkt.size(), 0);
 }
 
+// Forward declaration — full definition after CompleteTrade
+static void SendAddOnSackAck(SOCKET s, BYTE bSackID, BYTE bSackPos, DWORD dwItemID);
+
 // ============================================================
 // AskTrade: Player A Ctrl+clicks Player B to request trade
 // Payload: dwTargetObjectID(4)
@@ -119,6 +122,7 @@ void TradeManager::OnTradeSackOnItemReq(SOCKET s, DWORD charID, BYTE* payload, W
     TradeSlot slot;
     slot.dwItemID = dwItemID;
     slot.dwAmount = wAmount;
+    slot.bSrcSackID = bSackID;
     slot.bSrcSackPos = bSackPos;
     slot.bTradePos = (BYTE)mySlots.size();
     mySlots.push_back(slot);
@@ -331,7 +335,9 @@ bool TradeManager::IsTrading(DWORD charID) {
 }
 
 // ============================================================
-// Cancel: return all items to original owners
+// Cancel: return all items to original owners' UI
+// Items were never removed from DB, only visually via REMOVESACK.
+// We must send ADDONSACK_ACK to restore each item in the client UI.
 // ============================================================
 void TradeManager::CancelTrade(std::shared_ptr<TradeSession> session, DWORD cancellerID) {
     // Send cancel ACK to both players
@@ -344,11 +350,31 @@ void TradeManager::CancelTrade(std::shared_ptr<TradeSession> session, DWORD canc
     if (session->sockB != INVALID_SOCKET)
         SendPacket(session->sockB, PKT_TRADECOMPLETE_ACK, cancelPayload);
     
+    // Restore items to UI: send ADDONSACK_ACK for each item back to its owner
+    for (auto& slot : session->slotsA) {
+        if (session->sockA != INVALID_SOCKET)
+            SendAddOnSackAck(session->sockA, slot.bSrcSackID, slot.bSrcSackPos, slot.dwItemID);
+    }
+    for (auto& slot : session->slotsB) {
+        if (session->sockB != INVALID_SOCKET)
+            SendAddOnSackAck(session->sockB, slot.bSrcSackID, slot.bSrcSackPos, slot.dwItemID);
+    }
+    
     // Clean up
     m_activeTrades.erase(session->dwPlayerA);
     m_activeTrades.erase(session->dwPlayerB);
     
     LOG("[Trade] Trade cancelled by " + std::to_string(cancellerID));
+}
+
+// ============================================================
+// Helper: convert absolute DB position to (sackID, relative pos)
+// ============================================================
+static void AbsPosToSackPos(BYTE absPos, BYTE& outSackID, BYTE& outRelPos) {
+    if (absPos < 20) { outSackID = 0; outRelPos = absPos; }
+    else if (absPos < 60) { outSackID = 1; outRelPos = absPos - 20; }
+    else if (absPos < 100) { outSackID = 2; outRelPos = absPos - 60; }
+    else { outSackID = 3; outRelPos = absPos - 100; }
 }
 
 // ============================================================
@@ -358,11 +384,13 @@ void TradeManager::CompleteTrade(std::shared_ptr<TradeSession> session) {
     DWORD charA = session->dwPlayerA;
     DWORD charB = session->dwPlayerB;
     
+    // Track positions for UI sync
+    struct TransferResult { DWORD dwItemID; BYTE absSackPos; };
+    std::vector<TransferResult> itemsForB, itemsForA;
+    
     // Transfer items from A to B
     for (auto& slot : session->slotsA) {
-        // Remove from A's sack
         ItemDB::GetInstance().RemoveFromSack(charA, slot.dwItemID);
-        // Find free position in B's sack
         BYTE bCX = 1, bCY = 1;
         ItemDB::ItemBasicInfo ib;
         if (ItemDB::GetInstance().GetItemBasicInfo(slot.dwItemID, ib) && g_ItemTemplates.count(ib.wRefID)) {
@@ -376,6 +404,9 @@ void TradeManager::CompleteTrade(std::shared_ptr<TradeSession> session) {
         }
         if (freePos != 255) {
             ItemDB::GetInstance().AddToSack(charB, freePos, slot.dwItemID);
+            itemsForB.push_back({slot.dwItemID, freePos});
+        } else {
+            LOG("[Trade] WARNING: No free sack space for B to receive item " + std::to_string(slot.dwItemID));
         }
     }
     
@@ -395,6 +426,9 @@ void TradeManager::CompleteTrade(std::shared_ptr<TradeSession> session) {
         }
         if (freePos != 255) {
             ItemDB::GetInstance().AddToSack(charA, freePos, slot.dwItemID);
+            itemsForA.push_back({slot.dwItemID, freePos});
+        } else {
+            LOG("[Trade] WARNING: No free sack space for A to receive item " + std::to_string(slot.dwItemID));
         }
     }
     
@@ -408,9 +442,21 @@ void TradeManager::CompleteTrade(std::shared_ptr<TradeSession> session) {
         CharacterDB::GetInstance().AddMoney(charA, session->dwMoneyB);
     }
     
-    // Send complete ACK to both
+    // Send complete ACK to both (this closes the trade window)
     SendTradeCompleteAck(session->sockA, session->dwPlayerB + 400000000);
     SendTradeCompleteAck(session->sockB, session->dwPlayerA + 400000000);
+    
+    // Send ADDONSACK_ACK (0x420A) for each received item so they appear in the UI
+    for (auto& tr : itemsForA) {
+        BYTE sackID, relPos;
+        AbsPosToSackPos(tr.absSackPos, sackID, relPos);
+        SendAddOnSackAck(session->sockA, sackID, relPos, tr.dwItemID);
+    }
+    for (auto& tr : itemsForB) {
+        BYTE sackID, relPos;
+        AbsPosToSackPos(tr.absSackPos, sackID, relPos);
+        SendAddOnSackAck(session->sockB, sackID, relPos, tr.dwItemID);
+    }
     
     // Send updated money to both
     SendMoneyUpdate(session->sockA, charA);
@@ -473,6 +519,105 @@ void TradeManager::BuildAndSendItemData(SOCKET targetSocket, DWORD ownerObjectID
     pushWord(payload, (WORD)dwAmount);
     
     SendPacket(targetSocket, PKT_TRADESACKONITEM_ACK, payload);
+}
+
+// ============================================================
+// SendAddOnSackAck: Full item serialization for 0x420A
+// Same GetItemData format as BankHandler/ItemHandler
+// ============================================================
+static void SendAddOnSackAck(SOCKET s, BYTE bSackID, BYTE bSackPos, DWORD dwItemID) {
+    ItemDB::FullItemRow row;
+    if (!ItemDB::GetInstance().GetFullItemData(dwItemID, row)) return;
+    
+    int vis=row.wVisualID, type=row.bType, kind=row.bKind, lvl=row.wLevel, cost=row.dwCost;
+    int dat18=row.nData18, dat19=row.nData19, dat20=row.nData20;
+    int refid=row.wRefID, amount=row.wAmount;
+    int d1=row.d[0], d2=row.d[1], d3=row.d[2], d4=row.d[3], d5=row.d[4], d6=row.d[5], d7=row.d[6];
+    int d8=row.d[7], d9=row.d[8], d10=row.d[9], d11=row.d[10], d12=row.d[11], d13=row.d[12];
+    int d14=row.d[13], d15=row.d[14], d16=row.d[15], d17=row.d[16];
+    char szName[128]; memcpy(szName, row.szName, sizeof(szName));
+    
+    int nd1=0, nd2=0, nd3=0, nd4=0, nd5=0;
+    BYTE charType = 1;
+    if (g_ItemTemplates.count(refid)) {
+        if (type == 0) type = g_ItemTemplates[refid].bType;
+        if (kind == 0) kind = g_ItemTemplates[refid].bKind;
+        if (vis == 0) vis = g_ItemTemplates[refid].wVisualID;
+        if (lvl == 0) lvl = g_ItemTemplates[refid].wLevel;
+        if (cost == 0) cost = g_ItemTemplates[refid].dwCost;
+        if (amount == 0) amount = g_ItemTemplates[refid].wAmount;
+        charType = g_ItemTemplates[refid].bCharType;
+        nd1 = g_ItemTemplates[refid].nBasicData1;
+        nd2 = g_ItemTemplates[refid].nBasicData2;
+        nd3 = g_ItemTemplates[refid].nBasicData3;
+        nd4 = g_ItemTemplates[refid].nBasicData4;
+        nd5 = g_ItemTemplates[refid].nBasicData5;
+        if (d1 == -9999) d1 = g_ItemTemplates[refid].nData1;
+        if (d2 == -9999) d2 = g_ItemTemplates[refid].nData2;
+        if (d3 == -9999) d3 = g_ItemTemplates[refid].nData3;
+        if (d4 == -9999) d4 = g_ItemTemplates[refid].nData4;
+        if (d5 == -9999) d5 = g_ItemTemplates[refid].nData5;
+        if (d6 == -9999) d6 = g_ItemTemplates[refid].nData6;
+        if (d7 == -9999) d7 = g_ItemTemplates[refid].nData7;
+        if (d8 == -9999) d8 = g_ItemTemplates[refid].nData8;
+        if (d9 == -9999) d9 = g_ItemTemplates[refid].nData9;
+        if (d10 == -9999) d10 = g_ItemTemplates[refid].nData10;
+    }
+    for (int* p : {&d1,&d2,&d3,&d4,&d5,&d6,&d7,&d8,&d9,&d10,&d11,&d12,&d13,&d14,&d15,&d16,&d17}) {
+        if (*p == -9999) *p = 0;
+    }
+    
+    std::vector<BYTE> bi;
+    bi.resize(4); // header
+    pushByte(bi, bSackID);
+    pushByte(bi, bSackPos);
+    pushDWord(bi, dwItemID); pushWord(bi, refid);
+    pushByte(bi, type); pushByte(bi, kind); pushWord(bi, vis);
+    std::string itemName(szName);
+    if (itemName.empty() && g_ItemTemplates.count(refid)) itemName = g_ItemTemplates[refid].szName;
+    pushWord(bi, (WORD)itemName.length());
+    for (char ch : itemName) pushByte(bi, ch);
+    pushDWord(bi, cost); pushWord(bi, lvl); pushByte(bi, charType);
+    pushWord(bi, amount);
+    
+    if (type >= 1 && type <= 9) {
+        pushWord(bi, nd1); pushWord(bi, nd2); pushWord(bi, nd3); pushWord(bi, nd4); pushWord(bi, nd5);
+        pushByte(bi, d1);
+        pushWord(bi, d2); pushWord(bi, d3);
+        pushWord(bi, d4); pushWord(bi, d5); pushWord(bi, d6); pushWord(bi, d7); pushWord(bi, d8);
+        pushWord(bi, d9); pushWord(bi, d10); pushWord(bi, d11); pushWord(bi, d12); pushWord(bi, d13);
+        pushByte(bi, dat18); pushByte(bi, dat19);
+        pushByte(bi, d14); pushByte(bi, d15); pushByte(bi, d16); pushByte(bi, d17);
+        if (type == 9) { pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); }
+        else if (type == 8) { for(int i=0;i<8;i++) pushByte(bi, 0); }
+        else { pushByte(bi, 0); }
+        if (type >= 1 && type <= 4) { pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushWord(bi, dat20); }
+    } else {
+        switch (type) {
+            case 11: case 12: case 13: case 14: case 17: pushByte(bi, 0); pushWord(bi, d2); pushWord(bi, d3); break;
+            case 15: pushByte(bi, d1); pushWord(bi, d2); pushWord(bi, d3); pushByte(bi, 0); pushByte(bi, 0); break;
+            case 16: pushWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); break;
+            case 18: pushByte(bi, 0); pushDWord(bi, 0); pushWord(bi, d2); pushWord(bi, d3); pushByte(bi, 0); break;
+            case 19: pushWord(bi, 0); pushWord(bi, 0); break;
+            case 20: pushByte(bi, 0); pushDWord(bi, 0); break;
+            case 21: { DWORD mid=nd2; sMugongTemplate* mg=MugongManager::GetInstance()->GetTemplate(mid); pushWord(bi, lvl); pushDWord(bi, mid); pushByte(bi, mg?mg->bType:0); pushByte(bi, mg?mg->bKind:0); pushByte(bi, 1); break; }
+            case 22: pushDWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
+            case 23: pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); break;
+            case 25: pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
+            case 27: pushByte(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushDWord(bi, 0); break;
+            case 29: pushWord(bi, 0); pushWord(bi, 0); break;
+            case 32: pushWord(bi, 0); pushWord(bi, d2); pushWord(bi, d3); pushDWord(bi, 0); break;
+            case 31: pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
+            case 34: pushDWord(bi, 0); pushByte(bi, 0); break;
+        }
+    }
+    pushWord(bi, (WORD)dat20); // wRebuithValue
+    
+    PACKET_HEADER* head = (PACKET_HEADER*)bi.data();
+    head->id = 0x420A; // ADDONSACK_ACK
+    head->payloadSize = (WORD)(bi.size() - 4);
+    EncryptPacket(bi.data(), 0x42);
+    SafeSend(s, (const char*)bi.data(), (int)bi.size(), 0);
 }
 
 // ============================================================
