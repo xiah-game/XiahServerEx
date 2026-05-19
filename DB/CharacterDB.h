@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <string>
 #include <vector>
+#include <map>
 #include <functional>
 
 // CharacterDB: Abstracts all CHAR_DATA, CHAR_POWER, CHAR_BASIC, CHAR_STATUS queries.
@@ -102,6 +103,9 @@ public:
         long long int dwExp=0;
     };
     bool GetCharFullStatus(DWORD dwCharID, CharFullStatus& out);
+
+    // Get learned mugongs for a character
+    void GetCharMugongs(DWORD dwCharID, std::map<DWORD, BYTE>& out);
 
     // ---- Character List / Login ----
     

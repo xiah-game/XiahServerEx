@@ -43,6 +43,7 @@ set(SOURCES
     GameObjects/ExpSystem.cpp
     DB/CharacterDB.cpp
     DB/ItemDB.cpp
+    DB/GameDataDB.cpp
     GameObjects/MugongManager.cpp
     GameObjects/PlayerManager.cpp
     GameObjects/MapInstance.cpp

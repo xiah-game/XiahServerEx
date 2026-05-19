@@ -84,17 +84,7 @@ sMugongList* MugongManager::GetMugongLevelData(DWORD dwMugongID, BYTE bLevel) {
 }
 
 void MugongManager::LoadPlayerMugongs(DWORD dwActualCharID, std::map<DWORD, BYTE>& learnedMugongs) {
-    learnedMugongs.clear();
-    std::string qMg = "SELECT dwMugongID, bMugongLevel FROM CHAR_MUGONG WHERE dwCharID = " + std::to_string(dwActualCharID);
-    auto mgCallback = [&](SQLHSTMT hStmt) {
-        int mid = 0; int lvl = 0; SQLLEN c1, c2;
-        SQLGetData(hStmt, 1, SQL_C_SLONG, &mid, 0, &c1);
-        SQLGetData(hStmt, 2, SQL_C_SLONG, &lvl, 0, &c2);
-        if (c1 != SQL_NULL_DATA && c2 != SQL_NULL_DATA) {
-            learnedMugongs[mid] = (BYTE)lvl;
-        }
-    };
-    DBHelper::GetInstance().ExecuteQuery(qMg, mgCallback);
+    CharacterDB::GetInstance().GetCharMugongs(dwActualCharID, learnedMugongs);
 }
 
 int MugongManager::GetPlayerMugongLevel(DWORD charID, DWORD dwMugongID) {

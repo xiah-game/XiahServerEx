@@ -88,6 +88,9 @@
     <ClCompile Include="D:\xiahold\XiahServerEx\DB\ItemDB.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\xiahold\XiahServerEx\DB\GameDataDB.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="D:\xiahold\XiahServerEx\GameObjects\MugongManager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

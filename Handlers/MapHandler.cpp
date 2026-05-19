@@ -1,5 +1,6 @@
 #include "MapHandler.h"
 #include "../DB/CharacterDB.h"
+#include "../DB/GameDataDB.h"
 #include <unordered_set>
 #include "../GameObjects/MugongManager.h"
 #include "../GameObjects/PlayerManager.h"
@@ -249,19 +250,10 @@ void OnMapInfoReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
     WORD wWidth = 2048, wHeight = 2048;
     BYTE bType = 1;
 
-    std::string mapQ = "SELECT szName, wWidth, wHeight, bType FROM LINKMAP WHERE dwMapID = " + std::to_string(reqMapID);
-    DBHelper::GetInstance().ExecuteQuery(mapQ, [&](SQLHSTMT hStmt) {
-        char name[256] = {0}; SQLLEN cb1, cb2, cb3, cb4;
-        SQLGetData(hStmt, 1, SQL_C_CHAR, name, sizeof(name), &cb1);
-        if (cb1 != SQL_NULL_DATA) mapName = name;
-        int w, h, t;
-        SQLGetData(hStmt, 2, SQL_C_SLONG, &w, 0, &cb2);
-        if (cb2 != SQL_NULL_DATA) wWidth = w;
-        SQLGetData(hStmt, 3, SQL_C_SLONG, &h, 0, &cb3);
-        if (cb3 != SQL_NULL_DATA) wHeight = h;
-        SQLGetData(hStmt, 4, SQL_C_SLONG, &t, 0, &cb4);
-        if (cb4 != SQL_NULL_DATA) bType = t;
-    });
+    GameDataDB::MapInfo mi;
+    if (GameDataDB::GetInstance().GetMapInfo(reqMapID, mi)) {
+        mapName = mi.szName; wWidth = mi.wWidth; wHeight = mi.wHeight; bType = mi.bType;
+    }
 
     WORD nameLen = mapName.length();
     ackBuf.push_back(nameLen & 0xFF);
@@ -272,32 +264,8 @@ void OnMapInfoReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
     ackBuf.push_back(wHeight & 0xFF); ackBuf.push_back((wHeight >> 8) & 0xFF);
     ackBuf.push_back(bType);
 
-    struct sLinkMap {
-        DWORD dwLinkMapID;
-        WORD wPortalPosX;
-        WORD wPortalPosY;
-        WORD wPortalWidth;
-        WORD wPortalHeight;
-        BYTE bLinkType;
-    };
-    std::vector<sLinkMap> links;
-
-    DBHelper::GetInstance().ExecuteQuery(
-        "SELECT dwLinkMapID, wPosX, wPosY, wWidth, wHeight, bLinkType FROM LINKMAPLIST WHERE dwMapID = " + std::to_string(reqMapID),
-        [&](SQLHSTMT hStmt) {
-            sLinkMap lm;
-            SQLLEN cb;
-            SQLBindCol(hStmt, 1, SQL_C_ULONG, &lm.dwLinkMapID, 0, &cb);
-            SQLBindCol(hStmt, 2, SQL_C_USHORT, &lm.wPortalPosX, 0, &cb);
-            SQLBindCol(hStmt, 3, SQL_C_USHORT, &lm.wPortalPosY, 0, &cb);
-            SQLBindCol(hStmt, 4, SQL_C_USHORT, &lm.wPortalWidth, 0, &cb);
-            SQLBindCol(hStmt, 5, SQL_C_USHORT, &lm.wPortalHeight, 0, &cb);
-            SQLBindCol(hStmt, 6, SQL_C_TINYINT, &lm.bLinkType, 0, &cb);
-            while (SQLFetch(hStmt) == SQL_SUCCESS) {
-                links.push_back(lm);
-            }
-        }
-    );
+    std::vector<GameDataDB::LinkMapEntry> links;
+    GameDataDB::GetInstance().GetLinkMapList(reqMapID, links);
 
     // bNumLinkMap
     BYTE bNumLinkMap = links.size();
@@ -693,18 +661,13 @@ void OnMapMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
         
         // Check LINKMAPLIST for portal zones �?includes wStartPosX/wStartPosY for destination spawn
         bool foundPortal = false;
-        std::string portalQ = "SELECT dwLinkMapID, wPosX, wPosY, wWidth, wHeight, wStartPosX, wStartPosY FROM LINKMAPLIST WHERE dwMapID = " + std::to_string(oldMapID);
-        DBHelper::GetInstance().ExecuteQuery(portalQ, [&](SQLHSTMT hStmt) {
-            if (foundPortal) return;
-            int linkMap = 0, px = 0, py = 0, pw = 0, ph = 0, spx = 0, spy = 0;
-            SQLLEN c[7];
-            SQLGetData(hStmt, 1, SQL_C_SLONG, &linkMap, 0, &c[0]);
-            SQLGetData(hStmt, 2, SQL_C_SLONG, &px, 0, &c[1]);
-            SQLGetData(hStmt, 3, SQL_C_SLONG, &py, 0, &c[2]);
-            SQLGetData(hStmt, 4, SQL_C_SLONG, &pw, 0, &c[3]);
-            SQLGetData(hStmt, 5, SQL_C_SLONG, &ph, 0, &c[4]);
-            SQLGetData(hStmt, 6, SQL_C_SLONG, &spx, 0, &c[5]);
-            SQLGetData(hStmt, 7, SQL_C_SLONG, &spy, 0, &c[6]);
+        std::vector<GameDataDB::LinkMapEntry> portalLinks;
+        GameDataDB::GetInstance().GetLinkMapList(oldMapID, portalLinks);
+        for (auto& pl : portalLinks) {
+            if (foundPortal) break;
+            int px = pl.wPortalPosX, py = pl.wPortalPosY, pw = pl.wPortalWidth, ph = pl.wPortalHeight;
+            int spx = pl.wStartPosX, spy = pl.wStartPosY;
+            int linkMap = pl.dwLinkMapID;
             
             LOG("[MapHandler] Portal zone: (" + std::to_string(px) + "," + std::to_string(py) + " " + std::to_string(pw) + "x" + std::to_string(ph) + ") -> Map " + std::to_string(linkMap) + " spawn(" + std::to_string(spx) + "," + std::to_string(spy) + ")");
             
@@ -716,7 +679,7 @@ void OnMapMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
                 posResolved = true;
                 LOG("[MapHandler] Portal HIT! -> Map " + std::to_string(linkMap) + " at (" + std::to_string(spx) + "," + std::to_string(spy) + ")");
             }
-        });
+        }
         
         if (!foundPortal) {
             LOG("[MapHandler] OnMapMoveReq: No portal found at player position (" + std::to_string(playerX) + "," + std::to_string(playerY) + ")");

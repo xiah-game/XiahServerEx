@@ -444,3 +444,14 @@ bool CharacterDB::GetCharFullStatus(DWORD dwCharID, CharFullStatus& out) {
     });
     return found;
 }
+
+void CharacterDB::GetCharMugongs(DWORD dwCharID, std::map<DWORD, BYTE>& out) {
+    out.clear();
+    std::string q = "SELECT dwMugongID, bMugongLevel FROM CHAR_MUGONG WHERE dwCharID = " + std::to_string(dwCharID);
+    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+        int mid = 0, lvl = 0; SQLLEN c1, c2;
+        SQLGetData(hStmt, 1, SQL_C_SLONG, &mid, 0, &c1);
+        SQLGetData(hStmt, 2, SQL_C_SLONG, &lvl, 0, &c2);
+        if (c1 != SQL_NULL_DATA && c2 != SQL_NULL_DATA) out[mid] = (BYTE)lvl;
+    });
+}
