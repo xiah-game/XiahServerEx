@@ -163,26 +163,34 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
     int currentRebuild = 0, currentAppend = 0, currentAttempts = 0, itemType = 0, reqLevel = 1;
     int baseData1 = 0, baseData2 = 0, baseData3 = 0, baseData4 = 0, baseData5 = 0;
     
-    std::string qItem = "SELECT I.szName, ISNULL(D.nData14, 0), ISNULL(D.nData15, 0), I.bType, T.nBasicData1, T.szName, ISNULL(T.nData1, 0), ISNULL(T.nData3, 0), ISNULL(T.nData5, 0), ISNULL(T.nData2, 0), ISNULL(T.nData4, 0), ISNULL(D.nData17, 0) FROM SACKITEM S JOIN ITEM I ON S.dwItemID = I.dwItemID LEFT JOIN ITEMDATA D ON S.dwItemID = D.dwItemID JOIN ITEMTEMPLATE T ON I.wRefID = T.wRefID WHERE S.dwCharID = " + std::to_string(charID) + " AND S.dwItemID = " + std::to_string(dwItemID);
-    DBHelper::GetInstance().ExecuteQuery(qItem, [&](SQLHSTMT hStmt) {
-        char szName[128] = {0}, szBaseName[128] = {0};
-        SQLLEN c[12];
-        SQLGetData(hStmt, 1, SQL_C_CHAR, szName, sizeof(szName), &c[0]);
-        SQLGetData(hStmt, 2, SQL_C_SLONG, &currentRebuild, 0, &c[1]);
-        SQLGetData(hStmt, 3, SQL_C_SLONG, &currentAppend, 0, &c[2]);
-        SQLGetData(hStmt, 4, SQL_C_SLONG, &itemType, 0, &c[3]);
-        SQLGetData(hStmt, 5, SQL_C_SLONG, &reqLevel, 0, &c[4]);
-        SQLGetData(hStmt, 6, SQL_C_CHAR, szBaseName, sizeof(szBaseName), &c[5]);
-        SQLGetData(hStmt, 7, SQL_C_SLONG, &baseData1, 0, &c[6]);
-        SQLGetData(hStmt, 8, SQL_C_SLONG, &baseData3, 0, &c[7]);
-        SQLGetData(hStmt, 9, SQL_C_SLONG, &baseData5, 0, &c[8]);
-        SQLGetData(hStmt, 10, SQL_C_SLONG, &baseData2, 0, &c[9]);
-        SQLGetData(hStmt, 11, SQL_C_SLONG, &baseData4, 0, &c[10]);
-        SQLGetData(hStmt, 12, SQL_C_SLONG, &currentAttempts, 0, &c[11]);
-        if(c[0] != SQL_NULL_DATA) itemName = szName;
-        if(c[5] != SQL_NULL_DATA) baseItemName = szBaseName;
+    // Verify ownership and load item data
+    if (!ItemDB::GetInstance().IsSackItemOwned(charID, dwItemID)) {
+        std::vector<BYTE> ackBuf(5);
+        PACKET_HEADER* head = (PACKET_HEADER*)ackBuf.data();
+        head->id = 0x4244; head->payloadSize = 1; ackBuf[4] = 2;
+        EncryptPacket(ackBuf.data(), 0x42);
+        SafeSend(clientSocket, (const char*)ackBuf.data(), ackBuf.size(), 0);
+        return;
+    }
+    ItemDB::FullItemRow fir;
+    if (ItemDB::GetInstance().GetFullItemData(dwItemID, fir)) {
+        itemName = fir.szName;
+        currentRebuild = fir.d[13]; // nData14
+        currentAppend = fir.d[14];  // nData15
+        currentAttempts = fir.d[16]; // nData17
+        itemType = fir.bType;
+        int refid = fir.wRefID;
+        if (g_ItemTemplates.count(refid)) {
+            reqLevel = g_ItemTemplates[refid].nBasicData1;
+            baseItemName = g_ItemTemplates[refid].szName;
+            baseData1 = g_ItemTemplates[refid].nData1;
+            baseData2 = g_ItemTemplates[refid].nData2;
+            baseData3 = g_ItemTemplates[refid].nData3;
+            baseData4 = g_ItemTemplates[refid].nData4;
+            baseData5 = g_ItemTemplates[refid].nData5;
+        }
         itemValid = true;
-    });
+    }
     
     if (!itemValid) {
         std::vector<BYTE> ackBuf(5);
@@ -264,15 +272,12 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
 
     int wAttr = 0, sAttr = 0, lMulti = 0, baseRate = 0, breakChance = 0;
     bool configFound = false;
-    DBHelper::GetInstance().ExecuteQuery("SELECT Wujing_Attr, Sujing_Attr, LevelMultiplier, BaseRate, BreakChance FROM REBUILD_CONFIG WHERE RebuildLevel = " + std::to_string(targetLevel), [&](SQLHSTMT hStmt) {
-        SQLLEN c[5];
-        SQLGetData(hStmt, 1, SQL_C_SLONG, &wAttr, 0, &c[0]);
-        SQLGetData(hStmt, 2, SQL_C_SLONG, &sAttr, 0, &c[1]);
-        SQLGetData(hStmt, 3, SQL_C_SLONG, &lMulti, 0, &c[2]);
-        SQLGetData(hStmt, 4, SQL_C_SLONG, &baseRate, 0, &c[3]);
-        SQLGetData(hStmt, 5, SQL_C_SLONG, &breakChance, 0, &c[4]);
+    if (g_RebuildConfig.count(targetLevel)) {
+        auto& cfg = g_RebuildConfig[targetLevel];
+        wAttr = cfg.wAttr; sAttr = cfg.sAttr; lMulti = cfg.lMulti;
+        baseRate = cfg.baseRate; breakChance = cfg.breakChance;
         configFound = true;
-    });
+    }
 
     if (!configFound) return;
 

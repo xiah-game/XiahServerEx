@@ -135,9 +135,24 @@ std::map<DWORD, sWorldMap> g_WorldMaps;
 std::map<DWORD, CMapInstance*> g_MapInstances;
 std::map<WORD, sItemTemplate> g_ItemTemplates;
 std::map<WORD, std::map<BYTE, sLevelTemplate>> g_LevelTemplates;
+std::map<int, sRebuildConfig> g_RebuildConfig;
 
 void LoadGameData() {
     g_NpcTemplates.clear();
+
+    // Load REBUILD_CONFIG into memory
+    g_RebuildConfig.clear();
+    DBHelper::GetInstance().ExecuteQuery("SELECT RebuildLevel, Wujing_Attr, Sujing_Attr, LevelMultiplier, BaseRate, BreakChance FROM REBUILD_CONFIG", [&](SQLHSTMT hStmt) {
+        int lvl = 0; sRebuildConfig cfg; SQLLEN c[6];
+        SQLGetData(hStmt, 1, SQL_C_SLONG, &lvl, 0, &c[0]);
+        SQLGetData(hStmt, 2, SQL_C_SLONG, &cfg.wAttr, 0, &c[1]);
+        SQLGetData(hStmt, 3, SQL_C_SLONG, &cfg.sAttr, 0, &c[2]);
+        SQLGetData(hStmt, 4, SQL_C_SLONG, &cfg.lMulti, 0, &c[3]);
+        SQLGetData(hStmt, 5, SQL_C_SLONG, &cfg.baseRate, 0, &c[4]);
+        SQLGetData(hStmt, 6, SQL_C_SLONG, &cfg.breakChance, 0, &c[5]);
+        g_RebuildConfig[lvl] = cfg;
+    });
+    LOG("[ServerCore] Loaded " + std::to_string(g_RebuildConfig.size()) + " REBUILD_CONFIG entries");
     g_ItemTemplates.clear();
     g_LevelTemplates.clear();
     

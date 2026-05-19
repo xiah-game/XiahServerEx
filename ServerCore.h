@@ -234,6 +234,11 @@ extern std::map<DWORD, CMapInstance*> g_MapInstances; // NEW: Replaces globals
 extern std::map<WORD, sItemTemplate> g_ItemTemplates;
 extern std::map<WORD, std::map<BYTE, sLevelTemplate>> g_LevelTemplates;
 
+struct sRebuildConfig {
+    int wAttr=0, sAttr=0, lMulti=0, baseRate=0, breakChance=0;
+};
+extern std::map<int, sRebuildConfig> g_RebuildConfig;
+
 
 
 void LOG(const std::string& msg);
