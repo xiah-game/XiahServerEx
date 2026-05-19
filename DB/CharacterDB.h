@@ -162,6 +162,9 @@ public:
     // Set a specific slot value (bSlot 1-10)
     void SetSlotValue(DWORD dwCharID, BYTE bSlot, DWORD dwValue);
 
+    // Get mugong level for a character's skill
+    int GetMugongLevel(DWORD dwCharID, DWORD dwMugongID);
+
 private:
     CharacterDB() {}
     ~CharacterDB() {}

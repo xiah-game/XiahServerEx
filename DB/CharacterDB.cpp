@@ -362,3 +362,11 @@ std::string CharacterDB::GetAccountName(DWORD dwCharID) {
         });
     return result;
 }
+
+int CharacterDB::GetMugongLevel(DWORD dwCharID, DWORD dwMugongID) {
+    int level = 0;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT bMugongLevel FROM CHAR_MUGONG WHERE dwCharID = " + std::to_string(dwCharID) + " AND dwMugongID = " + std::to_string(dwMugongID),
+        [&](SQLHSTMT hStmt) { SQLLEN c; SQLGetData(hStmt, 1, SQL_C_SLONG, &level, 0, &c); });
+    return level;
+}

@@ -394,26 +394,20 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
         CharacterDB::GetInstance().AddMoney(playerID, drop.amount);
         
         // Fetch new balance
-        std::string qSelect = "SELECT dwMoney FROM CHAR_DATA WHERE dwCharID = " + std::to_string(playerID);
-        auto moneyCallback = [clientSocket, drop](SQLHSTMT hStmt) {
-            INT64 currentMoney = 0;
-            SQLLEN cbMoney = 0;
-            SQLGetData(hStmt, 1, SQL_C_SBIGINT, &currentMoney, 0, &cbMoney);
-            
-            std::vector<BYTE> moneyBuf(13);
-            PACKET_HEADER* mHead = (PACKET_HEADER*)moneyBuf.data();
-            mHead->id = 0x3B13; // CS_IF_CHARMONEY_ACK in 1080 client
-            mHead->payloadSize = 9;
-            *((INT64*)(moneyBuf.data() + 4)) = (INT64)currentMoney;
-            moneyBuf[12] = 0; // bFreeUser
-            EncryptPacket(moneyBuf.data(), 0x42);
-            SafeSend(clientSocket, (const char*)moneyBuf.data(), moneyBuf.size(), 0);
-            LOG("[DropManager] Picked up money. Sent new balance using 0x3B13.");
-            
-            // Send the system message for gaining money
-            SystemMessage::SendHelpMessage(clientSocket, SystemMessage::MsgType::PICK_ITEM, "\xC1\xBD", drop.amount);
-        };
-        DBHelper::GetInstance().ExecuteQuery(qSelect, moneyCallback);
+        INT64 currentMoney = (INT64)CharacterDB::GetInstance().GetMoney(playerID);
+        
+        std::vector<BYTE> moneyBuf(13);
+        PACKET_HEADER* mHead = (PACKET_HEADER*)moneyBuf.data();
+        mHead->id = 0x3B13; // CS_IF_CHARMONEY_ACK in 1080 client
+        mHead->payloadSize = 9;
+        *((INT64*)(moneyBuf.data() + 4)) = (INT64)currentMoney;
+        moneyBuf[12] = 0; // bFreeUser
+        EncryptPacket(moneyBuf.data(), 0x42);
+        SafeSend(clientSocket, (const char*)moneyBuf.data(), moneyBuf.size(), 0);
+        LOG("[DropManager] Picked up money. Sent new balance using 0x3B13.");
+        
+        // Send the system message for gaining money
+        SystemMessage::SendHelpMessage(clientSocket, SystemMessage::MsgType::PICK_ITEM, "\xC1\xBD", drop.amount);
         
     } else {
         // Get new item's grid dimensions
