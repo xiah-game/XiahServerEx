@@ -108,6 +108,18 @@ public:
     };
     void GetCharacterList(const std::string& accountName, std::vector<CharListEntry>& out);
 
+    // Full character select screen data
+    struct EquipSlot { WORD wVis = 0; BYTE bRar = 0; BYTE bStx = 0; };
+    struct CharSelectEntry {
+        int dwCharID = 0; char szNickName[256] = {0}; char bCharType = 0;
+        int dwBirthDate = 0; int dwMapID = 0; short wLevel = 0;
+        int dwHpCur = 0; int dwHpMax = 0; short wIpCur = 0; short wIpMax = 0;
+        short wVit = 0; short wStr = 0; short wSus = 0; short wDex = 0;
+        char bRebirth = 0;
+        EquipSlot items[9];
+    };
+    bool GetCharSelectList(const std::string& accountName, std::vector<CharSelectEntry>& out);
+
     // ---- Mugong (Skill Learning) ----
     
     // Deduct TP for skill learning

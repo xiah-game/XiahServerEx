@@ -370,3 +370,51 @@ int CharacterDB::GetMugongLevel(DWORD dwCharID, DWORD dwMugongID) {
         [&](SQLHSTMT hStmt) { SQLLEN c; SQLGetData(hStmt, 1, SQL_C_SLONG, &level, 0, &c); });
     return level;
 }
+
+bool CharacterDB::GetCharSelectList(const std::string& accountName, std::vector<CharSelectEntry>& out) {
+    std::string q = "SELECT TOP 3 dwCharID, szNickName, bCharType, dwBirthDate, dwMapID, wLevel, dwHpCur, dwHpMax, wIpCur, wIpMax, wVit, wStr, wSus, wDex, bRebirth FROM CHAR_VISUAL WHERE szAccount = '" + accountName + "' ORDER BY dwCharID ASC";
+    bool ok = DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+        CharSelectEntry d; SQLLEN cb[15];
+        SQLGetData(hStmt, 1, SQL_C_SLONG, &d.dwCharID, 0, &cb[0]);
+        SQLGetData(hStmt, 2, SQL_C_CHAR, d.szNickName, sizeof(d.szNickName), &cb[1]);
+        SQLGetData(hStmt, 3, SQL_C_STINYINT, &d.bCharType, 0, &cb[2]);
+        SQLGetData(hStmt, 4, SQL_C_SLONG, &d.dwBirthDate, 0, &cb[3]);
+        SQLGetData(hStmt, 5, SQL_C_SLONG, &d.dwMapID, 0, &cb[4]);
+        SQLGetData(hStmt, 6, SQL_C_SSHORT, &d.wLevel, 0, &cb[5]);
+        SQLGetData(hStmt, 7, SQL_C_SLONG, &d.dwHpCur, 0, &cb[6]);
+        SQLGetData(hStmt, 8, SQL_C_SLONG, &d.dwHpMax, 0, &cb[7]);
+        SQLGetData(hStmt, 9, SQL_C_SSHORT, &d.wIpCur, 0, &cb[8]);
+        SQLGetData(hStmt, 10, SQL_C_SSHORT, &d.wIpMax, 0, &cb[9]);
+        SQLGetData(hStmt, 11, SQL_C_SSHORT, &d.wVit, 0, &cb[10]);
+        SQLGetData(hStmt, 12, SQL_C_SSHORT, &d.wStr, 0, &cb[11]);
+        SQLGetData(hStmt, 13, SQL_C_SSHORT, &d.wSus, 0, &cb[12]);
+        SQLGetData(hStmt, 14, SQL_C_SSHORT, &d.wDex, 0, &cb[13]);
+        SQLGetData(hStmt, 15, SQL_C_STINYINT, &d.bRebirth, 0, &cb[14]);
+        out.push_back(d);
+    });
+    if (!ok) return false;
+    for (auto& ch : out) {
+        DBHelper::GetInstance().ExecuteQuery(
+            "SELECT bSackPos, wVisualID FROM vCHAR_EQUIPITEM WHERE szAccount = '" + accountName + "' AND dwCharID = " + std::to_string(ch.dwCharID),
+            [&](SQLHSTMT hStmt) {
+                char pos = 0; short vis = 0; SQLLEN c1, c2;
+                SQLGetData(hStmt, 1, SQL_C_STINYINT, &pos, 0, &c1);
+                if (c1 == SQL_NULL_DATA) pos = 0;
+                SQLGetData(hStmt, 2, SQL_C_SSHORT, &vis, 0, &c2);
+                if (c2 == SQL_NULL_DATA) vis = 0;
+                if (pos >= 0 && pos < 9) ch.items[pos].wVis = vis;
+            });
+        DBHelper::GetInstance().ExecuteQuery(
+            "SELECT bSackPos, bStxType, bRarity FROM vCHAR_EQUIPITEMDATA WHERE szAccount = '" + accountName + "' AND dwCharID = " + std::to_string(ch.dwCharID),
+            [&](SQLHSTMT hStmt) {
+                char pos = 0, stx = 0, rar = 0; SQLLEN c1, c2, c3;
+                SQLGetData(hStmt, 1, SQL_C_STINYINT, &pos, 0, &c1);
+                SQLGetData(hStmt, 2, SQL_C_STINYINT, &stx, 0, &c2);
+                if (c2 == SQL_NULL_DATA) stx = 0;
+                SQLGetData(hStmt, 3, SQL_C_STINYINT, &rar, 0, &c3);
+                if (c3 == SQL_NULL_DATA) rar = 0;
+                if (pos >= 0 && pos < 9) { ch.items[pos].bStx = stx; ch.items[pos].bRar = rar; }
+            });
+    }
+    return true;
+}
