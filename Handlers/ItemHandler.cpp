@@ -209,10 +209,7 @@ void OnItemMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
             if (bDesSackID > 0 && bDesSackPos != 255) {
                 BYTE bcx = 1, bcy = 1;
                 WORD wRefID = 0;
-                std::string qItem = "SELECT wRefID FROM ITEM WHERE dwItemID = " + std::to_string(dwSrcObjID);
-                DBHelper::GetInstance().ExecuteQuery(qItem, [&](SQLHSTMT hStmt) {
-                    SQLLEN len; SQLGetData(hStmt, 1, SQL_C_USHORT, &wRefID, 0, &len);
-                });
+                { ItemDB::ItemBasicInfo ib; if (ItemDB::GetInstance().GetItemBasicInfo(dwSrcObjID, ib)) wRefID = ib.wRefID; }
                 if (g_ItemTemplates.count(wRefID)) {
                     bcx = g_ItemTemplates[wRefID].bCX;
                     bcy = g_ItemTemplates[wRefID].bCY;
@@ -274,10 +271,7 @@ void OnItemMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
             if (bDesSackPos == 255 && bDesSackID > 0) {
                 BYTE bcx = 1, bcy = 1;
                 WORD wRefID = 0;
-                std::string qItem = "SELECT wRefID FROM ITEM WHERE dwItemID = " + std::to_string(dwSrcObjID);
-                DBHelper::GetInstance().ExecuteQuery(qItem, [&](SQLHSTMT hStmt) {
-                    SQLLEN len; SQLGetData(hStmt, 1, SQL_C_USHORT, &wRefID, 0, &len);
-                });
+                { ItemDB::ItemBasicInfo ib; if (ItemDB::GetInstance().GetItemBasicInfo(dwSrcObjID, ib)) wRefID = ib.wRefID; }
                 if (g_ItemTemplates.count(wRefID)) {
                     bcx = g_ItemTemplates[wRefID].bCX;
                     bcy = g_ItemTemplates[wRefID].bCY;
@@ -316,10 +310,7 @@ void OnItemMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
 
             if (bDesSackID == 0) { // Moving to Equip Sack
                 WORD wRefID = 0;
-                std::string qItem = "SELECT wRefID FROM ITEM WHERE dwItemID = " + std::to_string(dwSrcObjID);
-                DBHelper::GetInstance().ExecuteQuery(qItem, [&](SQLHSTMT hStmt) {
-                    SQLLEN len; SQLGetData(hStmt, 1, SQL_C_USHORT, &wRefID, 0, &len);
-                });
+                { ItemDB::ItemBasicInfo ib; if (ItemDB::GetInstance().GetItemBasicInfo(dwSrcObjID, ib)) wRefID = ib.wRefID; }
 
                 if (g_ItemTemplates.count(wRefID)) {
                     sItemTemplate* pTpl = &g_ItemTemplates[wRefID];
@@ -341,16 +332,11 @@ void OnItemMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
                     }
 
                     int pLevel = 0, pCharType = 0, pStr = 0, pDex = 0, pVit = 0, pSus = 0;
-                    std::string qStats = "SELECT wLevel, bCharType, wStr, wDex, wVit, wSus FROM CHAR_DATA WHERE dwCharID = " + std::to_string(dbCharID);
-                    DBHelper::GetInstance().ExecuteQuery(qStats, [&](SQLHSTMT hStmt) {
-                        SQLLEN c[6];
-                        SQLGetData(hStmt, 1, SQL_C_SLONG, &pLevel, 0, &c[0]);
-                        SQLGetData(hStmt, 2, SQL_C_SLONG, &pCharType, 0, &c[1]);
-                        SQLGetData(hStmt, 3, SQL_C_SLONG, &pStr, 0, &c[2]);
-                        SQLGetData(hStmt, 4, SQL_C_SLONG, &pDex, 0, &c[3]);
-                        SQLGetData(hStmt, 5, SQL_C_SLONG, &pVit, 0, &c[4]);
-                        SQLGetData(hStmt, 6, SQL_C_SLONG, &pSus, 0, &c[5]);
-                    });
+                    CharacterDB::CharPower cpEq;
+                    if (CharacterDB::GetInstance().GetCharData(dbCharID, cpEq)) {
+                        pLevel = cpEq.wLevel; pCharType = cpEq.bCharType;
+                        pStr = cpEq.wStr; pDex = cpEq.wDex; pVit = cpEq.wVit; pSus = cpEq.wSus;
+                    }
 
                     if (pLevel < pTpl->nBasicData1 || 
                         (pTpl->bCharType != 0 && pCharType != pTpl->bCharType) ||
@@ -570,14 +556,9 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
     if (tpl.bType == 22) { // Scroll
         DWORD destMap = tpl.nBasicData2;
         WORD startX = 1024, startY = 1024;
-        std::string locQ = "SELECT TOP 1 wStartPosX, wStartPosY FROM LOCATION WHERE dwMapID = " + std::to_string(destMap);
-        DBHelper::GetInstance().ExecuteQuery(locQ, [&](SQLHSTMT hStmt) {
-            int x, y; SQLLEN cb1, cb2;
-            SQLGetData(hStmt, 1, SQL_C_SLONG, &x, 0, &cb1);
-            if (cb1 != SQL_NULL_DATA) startX = x;
-            SQLGetData(hStmt, 2, SQL_C_SLONG, &y, 0, &cb2);
-            if (cb2 != SQL_NULL_DATA) startY = y;
-        });
+        { int spX = startX, spY = startY;
+          CharacterDB::GetInstance().GetSpawnPosition(destMap, spX, spY);
+          startX = spX; startY = spY; }
 
 
 
