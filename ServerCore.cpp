@@ -1,5 +1,6 @@
 #include "ServerCore.h"
 #include "DBHelper.h"
+#include "DB/ItemDB.h"
 #include "GameObjects/DropManager.h"
 #include "GameObjects/MugongManager.h"
 #include "GameObjects/MapInstance.h"
@@ -548,17 +549,15 @@ BYTE FindFreeSackPos(DWORD charID, BYTE sackID, BYTE bCX, BYTE bCY) {
     // Build 6x6 occupancy grid: grid[row][col]
     bool grid[6][6] = {false};
     
-    std::string q = "SELECT S.bSackPos, I.wRefID FROM SACKITEM S JOIN ITEM I ON S.dwItemID = I.dwItemID WHERE S.dwCharID = " + std::to_string(charID) + " AND S.bSackPos >= " + std::to_string(startPos) + " AND S.bSackPos <= " + std::to_string(endPos);
-    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
-        int pos = 0; WORD ref = 0; SQLLEN c1, c2;
-        SQLGetData(hStmt, 1, SQL_C_SLONG, &pos, 0, &c1);
-        SQLGetData(hStmt, 2, SQL_C_USHORT, &ref, 0, &c2);
-        int x = (pos - startPos) % 6;
-        int y = (pos - startPos) / 6;
+    std::vector<ItemDB::SackOccupancy> occ;
+    ItemDB::GetInstance().GetSackOccupancy(charID, startPos, endPos, occ);
+    for (auto& r : occ) {
+        int x = (r.bSackPos - startPos) % 6;
+        int y = (r.bSackPos - startPos) / 6;
         int cx = 1, cy = 1;
-        if (g_ItemTemplates.count(ref)) {
-            cx = g_ItemTemplates[ref].bCX;
-            cy = g_ItemTemplates[ref].bCY;
+        if (g_ItemTemplates.count(r.wRefID)) {
+            cx = g_ItemTemplates[r.wRefID].bCX;
+            cy = g_ItemTemplates[r.wRefID].bCY;
         }
         if (cx < 1) cx = 1;
         if (cy < 1) cy = 1;
@@ -566,7 +565,7 @@ BYTE FindFreeSackPos(DWORD charID, BYTE sackID, BYTE bCX, BYTE bCY) {
             for (int dx = 0; dx < cx; dx++)
                 if (y + dy < 6 && x + dx < 6)
                     grid[y + dy][x + dx] = true;
-    });
+    }
     
     // Find first position where bCX x bCY fits
     for (int y = 0; y <= 6 - bCY; y++) {

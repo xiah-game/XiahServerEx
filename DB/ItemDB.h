@@ -145,6 +145,10 @@ public:
     struct EquipStatRow { WORD wRefID = 0; int d4=0, d5=0, d6=0, d7=0, d9=0, d10=0, d11=0, d12=0, d13=0; };
     void GetEquippedItemStats(DWORD dwCharID, std::vector<EquipStatRow>& out);
 
+    // Get sack occupancy data (bSackPos + wRefID) for a range
+    struct SackOccupancy { int bSackPos = 0; WORD wRefID = 0; DWORD dwItemID = 0; };
+    void GetSackOccupancy(DWORD dwCharID, int startPos, int endPos, std::vector<SackOccupancy>& out);
+
     // Get item amount
     WORD GetItemAmount(DWORD dwItemID);
 

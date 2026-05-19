@@ -233,27 +233,24 @@ void OnItemMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
                     bool grid[6][6] = {false};
 
                     // Build occupancy grid, excluding the two items being swapped
-                    std::string qOcc = "SELECT S.bSackPos, I.wRefID, S.dwItemID FROM SACKITEM S JOIN ITEM I ON S.dwItemID = I.dwItemID WHERE S.dwCharID = " + std::to_string(charID) + " AND S.bSackPos >= " + std::to_string(startPos) + " AND S.bSackPos <= " + std::to_string(endPos);
-                    DBHelper::GetInstance().ExecuteQuery(qOcc, [&](SQLHSTMT hStmt) {
-                        int oPos = 0; WORD oRef = 0; DWORD oItemID = 0; SQLLEN c1, c2, c3;
-                        SQLGetData(hStmt, 1, SQL_C_SLONG, &oPos, 0, &c1);
-                        SQLGetData(hStmt, 2, SQL_C_USHORT, &oRef, 0, &c2);
-                        SQLGetData(hStmt, 3, SQL_C_ULONG, &oItemID, 0, &c3);
+                    std::vector<ItemDB::SackOccupancy> occRows;
+                    ItemDB::GetInstance().GetSackOccupancy(charID, startPos, endPos, occRows);
+                    for (auto& r : occRows) {
                         // Skip the two items involved in the swap
-                        if (oItemID == dwSrcObjID || oItemID == dwDesObjID) return;
-                        int ox = (oPos - startPos) % 6;
-                        int oy = (oPos - startPos) / 6;
+                        if (r.dwItemID == dwSrcObjID || r.dwItemID == dwDesObjID) continue;
+                        int ox = (r.bSackPos - startPos) % 6;
+                        int oy = (r.bSackPos - startPos) / 6;
                         int ocx = 1, ocy = 1;
-                        if (g_ItemTemplates.count(oRef)) {
-                            ocx = g_ItemTemplates[oRef].bCX;
-                            ocy = g_ItemTemplates[oRef].bCY;
+                        if (g_ItemTemplates.count(r.wRefID)) {
+                            ocx = g_ItemTemplates[r.wRefID].bCX;
+                            ocy = g_ItemTemplates[r.wRefID].bCY;
                         }
                         if (ocx < 1) ocx = 1; if (ocy < 1) ocy = 1;
                         for (int dy = 0; dy < ocy; dy++)
                             for (int dx = 0; dx < ocx; dx++)
                                 if (oy + dy < 6 && ox + dx < 6)
                                     grid[oy + dy][ox + dx] = true;
-                    });
+                    }
 
                     // Check if source item's footprint fits at the destination position
                     bool fits = true;
