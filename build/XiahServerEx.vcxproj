@@ -397,6 +397,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\RebuildItemHandler.cpp" />
     <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\BankHandler.cpp" />
     <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\StatHandler.cpp" />
+    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\TradeHandler.cpp" />
     <ClCompile Include="D:\xiahold\XiahServerEx\GameObjects\DropManager.cpp" />
     <ClCompile Include="D:\xiahold\XiahServerEx\GameObjects\ExpSystem.cpp" />
     <ClCompile Include="D:\xiahold\XiahServerEx\DB\CharacterDB.cpp" />

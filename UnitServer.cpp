@@ -10,6 +10,7 @@
 #include <mutex>
 #include <set>
 #include <mstcpip.h>
+#include "Handlers/TradeHandler.h"
 
 // All business logic (SendCharStatusInfoAck, UpdatePlayerStatsAndSend, 
 // GrantExpToPlayer, BroadcastPacketToMap) has been migrated to:
@@ -169,6 +170,7 @@ void RunUnitSvr() {
                     std::lock_guard<std::mutex> lockP(pMap->GetMutex());
                     pMap->RemovePlayer(charID + 400000000);
                 }
+                TradeManager::GetInstance().OnPlayerDisconnect(charID);
                 SessionMgr::GetInstance().RemoveConnection(clientSocket);
             }
             closesocket(clientSocket);

@@ -39,6 +39,7 @@ set(SOURCES
     Handlers/RebuildItemHandler.cpp
     Handlers/BankHandler.cpp
     Handlers/StatHandler.cpp
+    Handlers/TradeHandler.cpp
     GameObjects/DropManager.cpp
     GameObjects/ExpSystem.cpp
     DB/CharacterDB.cpp

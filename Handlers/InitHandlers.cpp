@@ -16,6 +16,7 @@
 #include "RebuildItemHandler.h"
 #include "BankHandler.h"
 #include "StatHandler.h"
+#include "TradeHandler.h"
 
 void InitPacketHandlers() {
     RegisterHandler(CS_IT_LOGINCHECK_REQ, [](SOCKET s, BYTE* p, WORD size) {
@@ -171,4 +172,5 @@ void InitPacketHandlers() {
 
     RegisterRebuildItemHandlers();
     RegisterBankMallHandlers();
+    RegisterTradeHandlers();
 }

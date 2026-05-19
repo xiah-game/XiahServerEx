@@ -83,6 +83,8 @@ public:
     // Check if player is currently trading
     bool IsTrading(DWORD charID);
 
+    friend void RegisterTradeHandlers();
+
 private:
     TradeManager() {}
 
