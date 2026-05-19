@@ -44,10 +44,7 @@ void OnItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
             int lvl = row.wLevel, cost = row.dwCost, dat18 = row.nData18, dat19 = row.nData19;
             int refid = row.wRefID, amount = row.wAmount;
             int dat20 = row.nData20, dat21 = row.nData21, dat25 = row.nData25;
-            int d1=row.d[0], d2=row.d[1], d3=row.d[2], d4=row.d[3], d5=row.d[4], d6=row.d[5], d7=row.d[6];
-            int d8=row.d[7], d9=row.d[8], d10=row.d[9], d11=row.d[10], d12=row.d[11], d13=row.d[12];
-            int d14=row.d[13], d15=row.d[14], d16=row.d[15], d17=row.d[16];
-            char szName[128]; memcpy(szName, row.szName, sizeof(szName));
+            int d[17]; for (int i=0;i<17;i++) d[i]=row.d[i];
             
             int nd1 = 0, nd2 = 0, nd3 = 0, nd4 = 0, nd5 = 0;
             BYTE charType = 1;
@@ -65,34 +62,30 @@ void OnItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
                 nd3 = g_ItemTemplates[refid].nBasicData3;
                 nd4 = g_ItemTemplates[refid].nBasicData4;
                 nd5 = g_ItemTemplates[refid].nBasicData5;
-                if (d1 == -9999) d1 = g_ItemTemplates[refid].nData1;
-                if (d2 == -9999) d2 = g_ItemTemplates[refid].nData2;
-                if (d3 == -9999) d3 = g_ItemTemplates[refid].nData3;
-                if (d4 == -9999) d4 = g_ItemTemplates[refid].nData4;
-                if (d5 == -9999) d5 = g_ItemTemplates[refid].nData5;
-                if (d6 == -9999) d6 = g_ItemTemplates[refid].nData6;
-                if (d7 == -9999) d7 = g_ItemTemplates[refid].nData7;
-                if (d8 == -9999) d8 = g_ItemTemplates[refid].nData8;
-                if (d9 == -9999) d9 = g_ItemTemplates[refid].nData9;
-                if (d10 == -9999) d10 = g_ItemTemplates[refid].nData10;
+                if (d[0] == -9999) d[0] = g_ItemTemplates[refid].nData1;
+                if (d[1] == -9999) d[1] = g_ItemTemplates[refid].nData2;
+                if (d[2] == -9999) d[2] = g_ItemTemplates[refid].nData3;
+                if (d[3] == -9999) d[3] = g_ItemTemplates[refid].nData4;
+                if (d[4] == -9999) d[4] = g_ItemTemplates[refid].nData5;
+                if (d[5] == -9999) d[5] = g_ItemTemplates[refid].nData6;
+                if (d[6] == -9999) d[6] = g_ItemTemplates[refid].nData7;
+                if (d[7] == -9999) d[7] = g_ItemTemplates[refid].nData8;
+                if (d[8] == -9999) d[8] = g_ItemTemplates[refid].nData9;
+                if (d[9] == -9999) d[9] = g_ItemTemplates[refid].nData10;
             }
-            if (d1 == -9999) d1 = 0; if (d2 == -9999) d2 = 0; if (d3 == -9999) d3 = 0;
-            if (d4 == -9999) d4 = 0; if (d5 == -9999) d5 = 0; if (d6 == -9999) d6 = 0;
-            if (d7 == -9999) d7 = 0; if (d8 == -9999) d8 = 0; if (d9 == -9999) d9 = 0;
-            if (d10 == -9999) d10 = 0; if (d11 == -9999) d11 = 0; if (d12 == -9999) d12 = 0;
-            if (d13 == -9999) d13 = 0; if (d14 == -9999) d14 = 0; if (d15 == -9999) d15 = 0;
-            if (d16 == -9999) d16 = 0; if (d17 == -9999) d17 = 0;
+            for (int i=0;i<17;i++) { if (d[i]==-9999) d[i]=0; }
             
+            std::string itemName(row.szName);
+            if (itemName.empty() && g_ItemTemplates.count(refid)) itemName = g_ItemTemplates[refid].szName;
+
             std::vector<BYTE> bi; 
-            auto pushDWord = [&](DWORD d) { bi.push_back(d & 0xFF); bi.push_back((d>>8)&0xFF); bi.push_back((d>>16)&0xFF); bi.push_back((d>>24)&0xFF); };
+            auto pushDWord = [&](DWORD dw) { bi.push_back(dw & 0xFF); bi.push_back((dw>>8)&0xFF); bi.push_back((dw>>16)&0xFF); bi.push_back((dw>>24)&0xFF); };
             auto pushWord = [&](WORD w) { bi.push_back(w & 0xFF); bi.push_back((w>>8)&0xFF); };
             auto pushByte = [&](BYTE b) { bi.push_back(b); };
             pushByte(sackId == 0 ? pos : (pos - 20 - (sackId - 1) * 40));
             pushDWord(itemid); pushWord(refid);
             pushByte(type); pushByte(kind); pushWord(vis);
             
-            std::string itemName(szName);
-            if (itemName.empty() && g_ItemTemplates.count(refid)) itemName = g_ItemTemplates[refid].szName;
             pushWord(itemName.length());
             for (char ch : itemName) pushByte(ch);
             
@@ -101,12 +94,12 @@ void OnItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
             
             if (type >= 1 && type <= 9) { // Weapon/Cloth..Bongin
                 pushWord(nd1); pushWord(nd2); pushWord(nd3); pushWord(nd4); pushWord(nd5); // BasicData 1-5
-                pushByte(d1); // DecrDurRate
-                pushWord(d2); pushWord(d3); // CurDur, MaxDur
-                pushWord(d4); pushWord(d5); pushWord(d6); pushWord(d7); pushWord(d8); // Attacks
-                pushWord(d9); pushWord(d10); pushWord(d11); pushWord(d12); pushWord(d13); // HP/IP
+                pushByte(d[0]); // DecrDurRate
+                pushWord(d[1]); pushWord(d[2]); // CurDur, MaxDur
+                pushWord(d[3]); pushWord(d[4]); pushWord(d[5]); pushWord(d[6]); pushWord(d[7]); // Attacks
+                pushWord(d[8]); pushWord(d[9]); pushWord(d[10]); pushWord(d[11]); pushWord(d[12]); // HP/IP
                 pushByte(dat18); pushByte(dat19); // bRarity, bStxType
-                pushByte(d14); pushByte(d15); pushByte(d16); pushByte(d17); // Limit/Modify/Repair/Discount
+                pushByte(d[13]); pushByte(d[14]); pushByte(d[15]); pushByte(d[16]); // Limit/Modify/Repair/Discount
                 
                 if (type == 9) { // BONGIN
                     pushDWord(0); pushWord(0); pushWord(0); pushWord(0); pushWord(0);
@@ -119,13 +112,13 @@ void OnItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
             } else {
                 switch (type) {
                     case 11: case 12: case 13: case 14: case 17:
-                        pushByte(0); pushWord(d2); pushWord(d3); break;
+                        pushByte(0); pushWord(d[1]); pushWord(d[2]); break;
                     case 15:
-                        pushByte(d1); pushWord(d2); pushWord(d3); pushByte(0); pushByte(0); break;
+                        pushByte(d[0]); pushWord(d[1]); pushWord(d[2]); pushByte(0); pushByte(0); break;
                     case 16:
                         pushWord(0); pushByte(0); pushWord(0); pushByte(0); pushWord(0); break;
                     case 18:
-                        pushByte(0); pushDWord(0); pushWord(d2); pushWord(d3); pushByte(0); break;
+                        pushByte(0); pushDWord(0); pushWord(d[1]); pushWord(d[2]); pushByte(0); break;
                     case 19:
                         pushWord(0); pushWord(0); break;
                     case 20:
@@ -148,7 +141,7 @@ void OnItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
                     case 29:
                         pushWord(0); pushWord(0); break;
                     case 32:
-                        pushWord(0); pushWord(d2); pushWord(d3); pushDWord(0); break;
+                        pushWord(0); pushWord(d[1]); pushWord(d[2]); pushDWord(0); break;
                     case 31:
                         pushByte(0); pushWord(0); pushWord(0); break;
                     case 34:

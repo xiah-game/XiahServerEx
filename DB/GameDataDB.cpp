@@ -124,8 +124,7 @@ void GameDataDB::LoadItemTemplates(std::map<WORD, sItemTemplate>& out) {
         SQLGetData(hStmt, 7, SQL_C_USHORT, &lvl, 0, &c[6]);
         SQLGetData(hStmt, 8, SQL_C_UTINYINT, &charType, 0, &c[7]);
         SQLGetData(hStmt, 9, SQL_C_USHORT, &amt, 0, &c[8]);
-        for (int i = 0; i < 11; i++) SQLGetData(hStmt, 10+i, SQL_C_SLONG, (i<10? (void*)&(&d1)[i] : (void*)&d13), 0, &c[9+i]);
-        // Fix: read individually since they're not contiguous
+        // Read nData columns individually (d1-d10 are separate stack vars, NOT a contiguous array)
         SQLGetData(hStmt, 10, SQL_C_SLONG, &d1, 0, &c[9]);
         SQLGetData(hStmt, 11, SQL_C_SLONG, &d2, 0, &c[10]);
         SQLGetData(hStmt, 12, SQL_C_SLONG, &d3, 0, &c[11]);

@@ -25,11 +25,18 @@ static void SendAddOnSackAck(SOCKET s, BYTE bSackID, BYTE bSackPos, DWORD dwItem
 
 // ============================================================
 // AskTrade: Player A Ctrl+clicks Player B to request trade
-// Payload: dwTargetObjectID(4)
+// Payload: bAction(1) + dwSelfObjectID(4) + dwTargetObjectID(4) = 9 bytes
 // ============================================================
 void TradeManager::OnAskTradeReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
-    if (size < 4) return;
-    DWORD dwTargetObjID = *(DWORD*)(payload);
+    if (size < 9) {
+        LOG("[Trade] OnAskTradeReq: payload too small (" + std::to_string(size) + " bytes)");
+        return;
+    }
+    // BYTE bAction = payload[0]; // 0 = request trade
+    // DWORD dwSelfObjID = *(DWORD*)(payload + 1); // requester's own ObjectID
+    DWORD dwTargetObjID = *(DWORD*)(payload + 5); // target's ObjectID
+    
+    LOG("[Trade] OnAskTradeReq: targetObjID=" + std::to_string(dwTargetObjID));
     
     // Convert ObjectID (800M format from map click) to CharID (400M format)
     DWORD targetCharID = dwTargetObjID;
@@ -81,8 +88,10 @@ void TradeManager::OnAskTradeReq(SOCKET s, DWORD charID, BYTE* payload, WORD siz
 // Helper to send TRADEOPENSACK_ACK to both players
 static void SendTradeOpenSack(SOCKET s, DWORD traderObjID) {
     std::vector<BYTE> payload;
+    pushByte(payload, 0); // bResult = success
     pushDWord(payload, traderObjID);
     SendPacket(s, PKT_TRADEOPENSACK_ACK, payload);
+    LOG("[Trade] Sent TRADEOPENSACK_ACK to socket, traderObjID=" + std::to_string(traderObjID));
 }
 
 // ============================================================
@@ -532,10 +541,7 @@ static void SendAddOnSackAck(SOCKET s, BYTE bSackID, BYTE bSackPos, DWORD dwItem
     int vis=row.wVisualID, type=row.bType, kind=row.bKind, lvl=row.wLevel, cost=row.dwCost;
     int dat18=row.nData18, dat19=row.nData19, dat20=row.nData20;
     int refid=row.wRefID, amount=row.wAmount;
-    int d1=row.d[0], d2=row.d[1], d3=row.d[2], d4=row.d[3], d5=row.d[4], d6=row.d[5], d7=row.d[6];
-    int d8=row.d[7], d9=row.d[8], d10=row.d[9], d11=row.d[10], d12=row.d[11], d13=row.d[12];
-    int d14=row.d[13], d15=row.d[14], d16=row.d[15], d17=row.d[16];
-    char szName[128]; memcpy(szName, row.szName, sizeof(szName));
+    int d[17]; for (int i=0;i<17;i++) d[i]=row.d[i];
     
     int nd1=0, nd2=0, nd3=0, nd4=0, nd5=0;
     BYTE charType = 1;
@@ -552,20 +558,21 @@ static void SendAddOnSackAck(SOCKET s, BYTE bSackID, BYTE bSackPos, DWORD dwItem
         nd3 = g_ItemTemplates[refid].nBasicData3;
         nd4 = g_ItemTemplates[refid].nBasicData4;
         nd5 = g_ItemTemplates[refid].nBasicData5;
-        if (d1 == -9999) d1 = g_ItemTemplates[refid].nData1;
-        if (d2 == -9999) d2 = g_ItemTemplates[refid].nData2;
-        if (d3 == -9999) d3 = g_ItemTemplates[refid].nData3;
-        if (d4 == -9999) d4 = g_ItemTemplates[refid].nData4;
-        if (d5 == -9999) d5 = g_ItemTemplates[refid].nData5;
-        if (d6 == -9999) d6 = g_ItemTemplates[refid].nData6;
-        if (d7 == -9999) d7 = g_ItemTemplates[refid].nData7;
-        if (d8 == -9999) d8 = g_ItemTemplates[refid].nData8;
-        if (d9 == -9999) d9 = g_ItemTemplates[refid].nData9;
-        if (d10 == -9999) d10 = g_ItemTemplates[refid].nData10;
+        if (d[0] == -9999) d[0] = g_ItemTemplates[refid].nData1;
+        if (d[1] == -9999) d[1] = g_ItemTemplates[refid].nData2;
+        if (d[2] == -9999) d[2] = g_ItemTemplates[refid].nData3;
+        if (d[3] == -9999) d[3] = g_ItemTemplates[refid].nData4;
+        if (d[4] == -9999) d[4] = g_ItemTemplates[refid].nData5;
+        if (d[5] == -9999) d[5] = g_ItemTemplates[refid].nData6;
+        if (d[6] == -9999) d[6] = g_ItemTemplates[refid].nData7;
+        if (d[7] == -9999) d[7] = g_ItemTemplates[refid].nData8;
+        if (d[8] == -9999) d[8] = g_ItemTemplates[refid].nData9;
+        if (d[9] == -9999) d[9] = g_ItemTemplates[refid].nData10;
     }
-    for (int* p : {&d1,&d2,&d3,&d4,&d5,&d6,&d7,&d8,&d9,&d10,&d11,&d12,&d13,&d14,&d15,&d16,&d17}) {
-        if (*p == -9999) *p = 0;
-    }
+    for (int i=0;i<17;i++) { if (d[i]==-9999) d[i]=0; }
+    
+    std::string itemName(row.szName);
+    if (itemName.empty() && g_ItemTemplates.count(refid)) itemName = g_ItemTemplates[refid].szName;
     
     std::vector<BYTE> bi;
     bi.resize(4); // header
@@ -573,8 +580,6 @@ static void SendAddOnSackAck(SOCKET s, BYTE bSackID, BYTE bSackPos, DWORD dwItem
     pushByte(bi, bSackPos);
     pushDWord(bi, dwItemID); pushWord(bi, refid);
     pushByte(bi, type); pushByte(bi, kind); pushWord(bi, vis);
-    std::string itemName(szName);
-    if (itemName.empty() && g_ItemTemplates.count(refid)) itemName = g_ItemTemplates[refid].szName;
     pushWord(bi, (WORD)itemName.length());
     for (char ch : itemName) pushByte(bi, ch);
     pushDWord(bi, cost); pushWord(bi, lvl); pushByte(bi, charType);
@@ -582,22 +587,22 @@ static void SendAddOnSackAck(SOCKET s, BYTE bSackID, BYTE bSackPos, DWORD dwItem
     
     if (type >= 1 && type <= 9) {
         pushWord(bi, nd1); pushWord(bi, nd2); pushWord(bi, nd3); pushWord(bi, nd4); pushWord(bi, nd5);
-        pushByte(bi, d1);
-        pushWord(bi, d2); pushWord(bi, d3);
-        pushWord(bi, d4); pushWord(bi, d5); pushWord(bi, d6); pushWord(bi, d7); pushWord(bi, d8);
-        pushWord(bi, d9); pushWord(bi, d10); pushWord(bi, d11); pushWord(bi, d12); pushWord(bi, d13);
+        pushByte(bi, d[0]);
+        pushWord(bi, d[1]); pushWord(bi, d[2]);
+        pushWord(bi, d[3]); pushWord(bi, d[4]); pushWord(bi, d[5]); pushWord(bi, d[6]); pushWord(bi, d[7]);
+        pushWord(bi, d[8]); pushWord(bi, d[9]); pushWord(bi, d[10]); pushWord(bi, d[11]); pushWord(bi, d[12]);
         pushByte(bi, dat18); pushByte(bi, dat19);
-        pushByte(bi, d14); pushByte(bi, d15); pushByte(bi, d16); pushByte(bi, d17);
+        pushByte(bi, d[13]); pushByte(bi, d[14]); pushByte(bi, d[15]); pushByte(bi, d[16]);
         if (type == 9) { pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); }
         else if (type == 8) { for(int i=0;i<8;i++) pushByte(bi, 0); }
         else { pushByte(bi, 0); }
         if (type >= 1 && type <= 4) { pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushWord(bi, dat20); }
     } else {
         switch (type) {
-            case 11: case 12: case 13: case 14: case 17: pushByte(bi, 0); pushWord(bi, d2); pushWord(bi, d3); break;
-            case 15: pushByte(bi, d1); pushWord(bi, d2); pushWord(bi, d3); pushByte(bi, 0); pushByte(bi, 0); break;
+            case 11: case 12: case 13: case 14: case 17: pushByte(bi, 0); pushWord(bi, d[1]); pushWord(bi, d[2]); break;
+            case 15: pushByte(bi, d[0]); pushWord(bi, d[1]); pushWord(bi, d[2]); pushByte(bi, 0); pushByte(bi, 0); break;
             case 16: pushWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); break;
-            case 18: pushByte(bi, 0); pushDWord(bi, 0); pushWord(bi, d2); pushWord(bi, d3); pushByte(bi, 0); break;
+            case 18: pushByte(bi, 0); pushDWord(bi, 0); pushWord(bi, d[1]); pushWord(bi, d[2]); pushByte(bi, 0); break;
             case 19: pushWord(bi, 0); pushWord(bi, 0); break;
             case 20: pushByte(bi, 0); pushDWord(bi, 0); break;
             case 21: { DWORD mid=nd2; sMugongTemplate* mg=MugongManager::GetInstance()->GetTemplate(mid); pushWord(bi, lvl); pushDWord(bi, mid); pushByte(bi, mg?mg->bType:0); pushByte(bi, mg?mg->bKind:0); pushByte(bi, 1); break; }
@@ -606,7 +611,7 @@ static void SendAddOnSackAck(SOCKET s, BYTE bSackID, BYTE bSackPos, DWORD dwItem
             case 25: pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
             case 27: pushByte(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushDWord(bi, 0); break;
             case 29: pushWord(bi, 0); pushWord(bi, 0); break;
-            case 32: pushWord(bi, 0); pushWord(bi, d2); pushWord(bi, d3); pushDWord(bi, 0); break;
+            case 32: pushWord(bi, 0); pushWord(bi, d[1]); pushWord(bi, d[2]); pushDWord(bi, 0); break;
             case 31: pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
             case 34: pushDWord(bi, 0); pushByte(bi, 0); break;
         }
@@ -627,44 +632,50 @@ void RegisterTradeHandlers() {
     // AskTrade REQ - initiates trade or accepts/rejects
     RegisterHandler(PKT_ASKTRADE_REQ, [](SOCKET s, BYTE* p, WORD size) {
         DWORD charID = SessionMgr::GetInstance().GetCharID(s);
-        if (size >= 5 && p[4] == 0) {
-            // Accept trade: find pending session and open it
-            DWORD askerObjID = *(DWORD*)(p);
-            DWORD askerCharID = askerObjID;
-            if (askerCharID >= 800000000) askerCharID -= 400000000;
-            
+        
+        // Debug: log the raw payload
+        std::string hexDump;
+        for (int i = 0; i < size; i++) { char tmp[8]; sprintf(tmp, "%02X ", p[i]); hexDump += tmp; }
+        LOG("[Trade] AskTrade REQ from charID=" + std::to_string(charID) + " size=" + std::to_string(size) + " hex: " + hexDump);
+        
+        // Packet format: bAction(1) + dwSelfObjID(4) + dwTargetObjID(4) = 9 bytes
+        // p[0]=0: initial trade request, p[0]=1: accept, p[0]=2: reject
+        BYTE bAction = p[0];
+        LOG("[Trade] AskTrade REQ bAction=" + std::to_string(bAction));
+        
+        if (bAction == 0) {
+            // Initial trade request
+            LOG("[Trade] Initial trade request from " + std::to_string(charID));
+            TradeManager::GetInstance().OnAskTradeReq(s, charID, p, size);
+        } else {
+            // Accept or Reject response
             auto& tm = TradeManager::GetInstance();
-            // The session was already created, just open it
             std::lock_guard<std::mutex> lock(tm.m_mutex);
             auto it = tm.m_activeTrades.find(charID);
-            if (it != tm.m_activeTrades.end()) {
-                auto session = it->second;
+            if (it == tm.m_activeTrades.end()) {
+                LOG("[Trade] No session found for charID=" + std::to_string(charID));
+                return;
+            }
+            auto session = it->second;
+            
+            if (bAction == 1) {
+                // Accept trade
                 session->stateA = TradeState::OPEN;
                 session->stateB = TradeState::OPEN;
-                // Send TRADEOPENSACK to both
                 SendTradeOpenSack(session->sockA, session->dwPlayerB + 400000000);
                 SendTradeOpenSack(session->sockB, session->dwPlayerA + 400000000);
                 LOG("[Trade] Trade opened between " + std::to_string(session->dwPlayerA) + " and " + std::to_string(session->dwPlayerB));
-            }
-        } else if (size >= 5 && p[4] == 1) {
-            // Reject trade
-            auto& tm = TradeManager::GetInstance();
-            std::lock_guard<std::mutex> lock(tm.m_mutex);
-            auto it = tm.m_activeTrades.find(charID);
-            if (it != tm.m_activeTrades.end()) {
-                auto session = it->second;
+            } else {
+                // Reject trade (bAction=2 or any other value)
                 SOCKET askerSock = (session->dwPlayerA == charID) ? session->sockB : session->sockA;
                 std::vector<BYTE> rejectAck;
-                pushByte(rejectAck, 1); // bResult = rejected
+                pushByte(rejectAck, 1);
                 pushDWord(rejectAck, charID + 400000000);
                 SendPacket(askerSock, PKT_ASKTRADE_ACK, rejectAck);
                 tm.m_activeTrades.erase(session->dwPlayerA);
                 tm.m_activeTrades.erase(session->dwPlayerB);
                 LOG("[Trade] Trade rejected by " + std::to_string(charID));
             }
-        } else {
-            // Initial trade request
-            TradeManager::GetInstance().OnAskTradeReq(s, charID, p, size);
         }
     });
     
