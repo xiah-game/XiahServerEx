@@ -1,5 +1,6 @@
 #include "DropManager.h"
 #include "../DBHelper.h"
+#include "../DB/GameDataDB.h"
 #include "PlayerManager.h"
 #include "../DB/ItemDB.h"
 #include "../DB/CharacterDB.h"
@@ -40,95 +41,24 @@ DropManager* DropManager::GetInstance() {
 
 void DropManager::LoadDropTables() {
     // Load legacy NPC_ROOTITEM (fallback for NPCs without drop groups)
-    m_rootItems.clear();
-    
-    std::string q = "SELECT bNpcType, dwItemID, wItemRatio FROM NPC_ROOTITEM";
-    int loadedCount = 0;
-    
-    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT stmt) {
-        BYTE bType;
-        DWORD itemID;
-        WORD ratio;
-        
-        SQLLEN cbType, cbItemID, cbRatio;
-        SQLGetData(stmt, 1, SQL_C_UTINYINT, &bType, 0, &cbType);
-        SQLGetData(stmt, 2, SQL_C_ULONG, &itemID, 0, &cbItemID);
-        SQLGetData(stmt, 3, SQL_C_USHORT, &ratio, 0, &cbRatio);
-        
-        sRootItem ri;
-        ri.dwItemID = itemID;
-        ri.wItemRatio = ratio;
-        m_rootItems[bType].push_back(ri);
-        loadedCount++;
-    });
-    
-    LOG("[DropManager] Loaded " + std::to_string(loadedCount) + " legacy NPC_ROOTITEM entries.");
+    GameDataDB::GetInstance().LoadRootItems(m_rootItems);
+    LOG("[DropManager] Loaded " + std::to_string(m_rootItems.size()) + " legacy NPC_ROOTITEM NPC types.");
     
     // Load new Drop Group system
     LoadDropGroups();
 }
 
 void DropManager::LoadDropGroups() {
-    m_dropGroups.clear();
+    GameDataDB::GetInstance().LoadDropGroups(m_dropGroups);
+    GameDataDB::GetInstance().LoadDropGroupItems(m_dropGroups);
     
-    // Load groups
-    std::string qGroup = "SELECT bNpcType, dwGroupID, wDropRate, bMinDrop, bMaxDrop FROM NPC_DROPGROUP ORDER BY bNpcType, dwGroupID";
-    int groupCount = 0;
-    
-    DBHelper::GetInstance().ExecuteQuery(qGroup, [&](SQLHSTMT stmt) {
-        BYTE bNpcType = 0;
-        int dwGroupID = 0, wDropRate = 1, bMinDrop = 1, bMaxDrop = 1;
-        SQLLEN c[5];
-        
-        SQLGetData(stmt, 1, SQL_C_UTINYINT, &bNpcType, 0, &c[0]);
-        SQLGetData(stmt, 2, SQL_C_SLONG, &dwGroupID, 0, &c[1]);
-        SQLGetData(stmt, 3, SQL_C_SLONG, &wDropRate, 0, &c[2]);
-        SQLGetData(stmt, 4, SQL_C_SLONG, &bMinDrop, 0, &c[3]);
-        SQLGetData(stmt, 5, SQL_C_SLONG, &bMaxDrop, 0, &c[4]);
-        
-        sDropGroup group;
-        group.bNpcType = bNpcType;
-        group.dwGroupID = (DWORD)dwGroupID;
-        group.wDropRate = (c[2] != SQL_NULL_DATA) ? (WORD)wDropRate : 1;
-        group.bMinDrop = (c[3] != SQL_NULL_DATA) ? (BYTE)bMinDrop : 1;
-        group.bMaxDrop = (c[4] != SQL_NULL_DATA) ? (BYTE)bMaxDrop : 1;
-        
-        m_dropGroups[bNpcType].push_back(group);
-        groupCount++;
-    });
-    
-    // Build index: dwGroupID -> pointer to loaded sDropGroup
-    std::map<DWORD, sDropGroup*> groupIndex;
+    int groupCount = 0, itemCount = 0;
     for (auto& pair : m_dropGroups) {
-        for (auto& group : pair.second) {
-            groupIndex[group.dwGroupID] = &group;
-        }
+        groupCount += (int)pair.second.size();
+        for (auto& g : pair.second) itemCount += (int)g.items.size();
     }
-    
-    // Load group items
-    std::string qItems = "SELECT dwGroupID, dwItemID, wWeight FROM NPC_DROPGROUPITEM ORDER BY dwGroupID";
-    int itemCount = 0;
-    
-    DBHelper::GetInstance().ExecuteQuery(qItems, [&](SQLHSTMT stmt) {
-        int gid = 0, iid = 0, w = 100;
-        SQLLEN c[3];
-        SQLGetData(stmt, 1, SQL_C_SLONG, &gid, 0, &c[0]);
-        SQLGetData(stmt, 2, SQL_C_SLONG, &iid, 0, &c[1]);
-        SQLGetData(stmt, 3, SQL_C_SLONG, &w, 0, &c[2]);
-        
-        auto it = groupIndex.find((DWORD)gid);
-        if (it != groupIndex.end()) {
-            sDropGroupItem item;
-            item.dwItemID = (DWORD)iid;
-            item.wWeight = (c[2] != SQL_NULL_DATA) ? (WORD)w : 100;
-            it->second->items.push_back(item);
-            itemCount++;
-        }
-    });
-    
     LOG("[DropManager] Loaded " + std::to_string(groupCount) + " drop groups with " + std::to_string(itemCount) + " items.");
 }
-
 // BroadcastPacketToMap now declared in PlayerManager.h
 
 // Helper: drop a single item to the map

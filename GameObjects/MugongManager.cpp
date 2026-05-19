@@ -1,71 +1,14 @@
 #include "MugongManager.h"
 #include "../DB/CharacterDB.h"
+#include "../DB/GameDataDB.h"
 #include "../DBHelper.h"
 #include <cstring>
 
 void MugongManager::LoadMugongData() {
-    m_MugongTemplates.clear();
-    m_MugongLists.clear();
-
-    std::string qMugongTpl = "SELECT dwMugongID, bCharType, bType, bKind, szName FROM MUGONG_TEMPLATE";
-    auto mtplCallback = [&](SQLHSTMT hStmt) {
-        int mid = 0; int ctype = 0, type = 0, kind = 0; char nameBuf[64]; SQLLEN c[5];
-        memset(nameBuf, 0, sizeof(nameBuf));
-        SQLGetData(hStmt, 1, SQL_C_SLONG, &mid, 0, &c[0]);
-        SQLGetData(hStmt, 2, SQL_C_SLONG, &ctype, 0, &c[1]);
-        SQLGetData(hStmt, 3, SQL_C_SLONG, &type, 0, &c[2]);
-        SQLGetData(hStmt, 4, SQL_C_SLONG, &kind, 0, &c[3]);
-        SQLGetData(hStmt, 5, SQL_C_CHAR, nameBuf, sizeof(nameBuf), &c[4]);
-        
-        sMugongTemplate tpl;
-        tpl.dwMugongID = mid; tpl.bCharType = (BYTE)ctype; tpl.bType = (BYTE)type; tpl.bKind = (BYTE)kind;
-        if (c[4] != SQL_NULL_DATA) tpl.szName = nameBuf;
-        m_MugongTemplates[mid] = tpl;
-    };
-    DBHelper::GetInstance().ExecuteQuery(qMugongTpl, mtplCallback);
+    GameDataDB::GetInstance().LoadMugongTemplates(m_MugongTemplates);
     LOG("[MugongManager] Loaded " + std::to_string(m_MugongTemplates.size()) + " Skills from MUGONG_TEMPLATE.");
 
-    std::string qMugongLst = "SELECT dwMugongID, bLevel, bLimitLevel, bReadOnlyBook, wNeedTP, wIncAtk, wDistance, wReduceIP, dwKeepUpTime, wIncAtkPerc, wIncDef, wIncDefPerc, wIncRate, wIncRatePerc, wIncHpMax, wIncHpCur, wIncHpCurPerc, wRecoverHp, wRecoverHpPerc, wIncIpMax, wIncIpCur, wIncIpCurPerc, wRecoverIp, wRecoverIpPerc, wIncCritical, wIncCriticalPerc FROM MUGONG_LIST";
-    auto mlstCallback = [&](SQLHSTMT hStmt) {
-        int vals[26] = {0}; SQLLEN c[26];
-        for (int i = 0; i < 26; i++) {
-            SQLGetData(hStmt, i + 1, SQL_C_SLONG, &vals[i], 0, &c[i]);
-            if (c[i] == SQL_NULL_DATA) vals[i] = 0;
-        }
-        
-        sMugongList lst;
-        lst.dwMugongID   = vals[0];
-        lst.bLevel       = (BYTE)vals[1];
-        lst.bLimitLevel  = (BYTE)vals[2];
-        lst.bReadOnlyBook= (BYTE)vals[3];
-        lst.dwNeedPoint  = (DWORD)vals[4];
-        lst.dwNeedMoney  = 0;
-        lst.dwDamageMul  = (DWORD)vals[5];  // wIncAtk used as flat damage for attacks
-        lst.wAttackRange = (WORD)vals[6];    // wDistance
-        lst.dwCostMp     = (DWORD)vals[7];   // wReduceIP
-        lst.dwKeepUpTime = (DWORD)vals[8];
-        lst.wIncAtk      = (WORD)vals[5];    // Same column, dual use
-        lst.wIncAtkPerc  = (WORD)vals[9];
-        lst.wIncDef      = (WORD)vals[10];
-        lst.wIncDefPerc  = (WORD)vals[11];
-        lst.wIncRate     = (WORD)vals[12];
-        lst.wIncRatePerc = (WORD)vals[13];
-        lst.wIncHpMax    = (WORD)vals[14];
-        lst.wIncHpCur    = (WORD)vals[15];
-        lst.wIncHpCurPerc= (WORD)vals[16];
-        lst.wRecoverHp   = (WORD)vals[17];
-        lst.wRecoverHpPerc=(WORD)vals[18];
-        lst.wIncIpMax    = (WORD)vals[19];
-        lst.wIncIpCur    = (WORD)vals[20];
-        lst.wIncIpCurPerc= (WORD)vals[21];
-        lst.wRecoverIp   = (WORD)vals[22];
-        lst.wRecoverIpPerc=(WORD)vals[23];
-        lst.wIncCritical = (WORD)vals[24];
-        lst.wIncCriticalPerc=(WORD)vals[25];
-
-        m_MugongLists[lst.dwMugongID][lst.bLevel] = lst;
-    };
-    DBHelper::GetInstance().ExecuteQuery(qMugongLst, mlstCallback);
+    GameDataDB::GetInstance().LoadMugongList(m_MugongLists);
     LOG("[MugongManager] Loaded skills levels from MUGONG_LIST.");
 }
 

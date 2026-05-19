@@ -1,8 +1,11 @@
 #pragma once
 #include "../ServerCore.h"
 #include "../DBHelper.h"
+#include "../GameObjects/DropManager.h"
+#include "../GameObjects/MugongManager.h"
 #include <vector>
 #include <string>
+#include <map>
 
 class GameDataDB {
 public:
@@ -32,6 +35,30 @@ public:
         WORD wDestX = 0, wDestY = 0;
     };
     bool GetPortalDest(DWORD dwMapID, DWORD dwLinkMapID, PortalDest& out);
+
+    // ---- Startup Loaders ----
+    // All methods below load data into the provided global containers.
+    // They are called once at server startup.
+
+    void LoadRebuildConfig(std::map<int, sRebuildConfig>& out);
+    void LoadRealm(const std::string& dbServerInfo, std::string& realmNameOut);
+    void LoadChannels(const std::string& dbServerInfo, const std::map<int, WORD>& channelPorts, std::vector<sChannelInfo>& out);
+    void LoadLevelTemplates(std::map<WORD, std::map<BYTE, sLevelTemplate>>& out);
+    void LoadItemTemplates(std::map<WORD, sItemTemplate>& out);
+    void LoadNpcTemplates(std::map<BYTE, sNpcTemplate>& out);
+    void LoadNpcMugongTemplates(std::map<BYTE, sNpcTemplate>& npcTemplates);
+    void LoadFunctionalNpcs(std::vector<MonsterData>& out);
+    void LoadNpcList(std::vector<MonsterData>& out, const std::map<BYTE, sNpcTemplate>& npcTemplates);
+    void LoadFunctionalNpcItems(std::vector<MonsterData>& worldObjects);
+
+    // DropManager startup loaders
+    void LoadRootItems(std::map<BYTE, std::vector<sRootItem>>& out);
+    void LoadDropGroups(std::map<BYTE, std::vector<sDropGroup>>& out);
+    void LoadDropGroupItems(std::map<BYTE, std::vector<sDropGroup>>& groups);
+
+    // MugongManager startup loaders
+    void LoadMugongTemplates(std::map<DWORD, sMugongTemplate>& out);
+    void LoadMugongList(std::map<DWORD, std::map<BYTE, sMugongList>>& out);
 
 private:
     GameDataDB() = default;
