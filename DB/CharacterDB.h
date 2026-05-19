@@ -85,6 +85,9 @@ public:
     // Get current map ID from CHAR_STATUS
     DWORD GetCharMapID(DWORD dwCharID);
 
+    // Get account name from CHAR_ACCOUNT
+    std::string GetAccountName(DWORD dwCharID);
+
     // Get name and char type from CHAR_VISUAL view
     bool GetCharVisual(DWORD dwCharID, std::string& szNickName, BYTE& bCharType);
 

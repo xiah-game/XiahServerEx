@@ -1,4 +1,5 @@
 #include "BankHandler.h"
+#include "../DB/CharacterDB.h"
 #include "../DB/ItemDB.h"
 #include "../GameObjects/MugongManager.h"
 #include <set>
@@ -12,13 +13,7 @@ static void pushDWord(std::vector<BYTE>& buf, DWORD d) { buf.push_back(d & 0xFF)
 static void SendBankOrMallList(SOCKET clientSocket, DWORD charID, WORD opCodeACK, bool isBank) {
     std::string account = SessionMgr::GetInstance().GetAccount(clientSocket);
     if (account.empty()) {
-        std::string qAcc = "SELECT szAccount FROM CHAR_ACCOUNT WHERE dwCharID = " + std::to_string(charID);
-        DBHelper::GetInstance().ExecuteQuery(qAcc, [&](SQLHSTMT hStmt) {
-            char buf[64] = {0}; SQLLEN cb;
-            if (SQL_SUCCEEDED(SQLGetData(hStmt, 1, SQL_C_CHAR, buf, sizeof(buf), &cb)) && cb != SQL_NULL_DATA) {
-                account = buf;
-            }
-        });
+        account = CharacterDB::GetInstance().GetAccountName(charID);
     }
 
     std::vector<BYTE> ackBuf; 
@@ -394,13 +389,7 @@ static void ProcessDrawOut(SOCKET clientSocket, DWORD charID, BYTE* payload, WOR
 
     std::string account = SessionMgr::GetInstance().GetAccount(clientSocket);
     if (account.empty()) {
-        std::string qAcc = "SELECT szAccount FROM CHAR_ACCOUNT WHERE dwCharID = " + std::to_string(charID);
-        DBHelper::GetInstance().ExecuteQuery(qAcc, [&](SQLHSTMT hStmt) {
-            char buf[64] = {0}; SQLLEN cb;
-            if (SQL_SUCCEEDED(SQLGetData(hStmt, 1, SQL_C_CHAR, buf, sizeof(buf), &cb)) && cb != SQL_NULL_DATA) {
-                account = buf;
-            }
-        });
+        account = CharacterDB::GetInstance().GetAccountName(charID);
     }
     
     if (account.empty()) return;
@@ -410,16 +399,12 @@ static void ProcessDrawOut(SOCKET clientSocket, DWORD charID, BYTE* payload, WOR
     
     if (bSackPos == 255) {
         BYTE bCX = 1, bCY = 1;
-        std::string qItem = "SELECT wRefID FROM ITEM WHERE dwItemID = " + std::to_string(dwItemID);
-        DBHelper::GetInstance().ExecuteQuery(qItem, [&](SQLHSTMT hStmt) {
-            int refid = 0; SQLLEN c;
-            if (SQL_SUCCEEDED(SQLGetData(hStmt, 1, SQL_C_SLONG, &refid, 0, &c))) {
-                if (g_ItemTemplates.count(refid)) {
-                    bCX = g_ItemTemplates[refid].bCX;
-                    bCY = g_ItemTemplates[refid].bCY;
-                }
-            }
-        });
+        { ItemDB::ItemBasicInfo ib;
+          if (ItemDB::GetInstance().GetItemBasicInfo(dwItemID, ib) && g_ItemTemplates.count(ib.wRefID)) {
+              bCX = g_ItemTemplates[ib.wRefID].bCX;
+              bCY = g_ItemTemplates[ib.wRefID].bCY;
+          }
+        }
         bSackPos = FindFreeSackPos(charID, bSackID, bCX, bCY);
         LOG("[BankHandler] ProcessDrawOut: FindFreeSackPos returned " + std::to_string(bSackPos));
         absolutePos = bSackPos;

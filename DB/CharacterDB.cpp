@@ -349,3 +349,16 @@ DWORD CharacterDB::GetCharMapID(DWORD dwCharID) {
         });
     return mapID;
 }
+
+std::string CharacterDB::GetAccountName(DWORD dwCharID) {
+    std::string result;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT szAccount FROM CHAR_ACCOUNT WHERE dwCharID = " + std::to_string(dwCharID),
+        [&](SQLHSTMT hStmt) {
+            char buf[64] = {0}; SQLLEN cb;
+            if (SQL_SUCCEEDED(SQLGetData(hStmt, 1, SQL_C_CHAR, buf, sizeof(buf), &cb)) && cb != SQL_NULL_DATA) {
+                result = buf;
+            }
+        });
+    return result;
+}
