@@ -418,3 +418,29 @@ bool CharacterDB::GetCharSelectList(const std::string& accountName, std::vector<
     }
     return true;
 }
+
+bool CharacterDB::GetCharFullStatus(DWORD dwCharID, CharFullStatus& out) {
+    bool found = false;
+    std::string q = "SELECT wLevel, wStr, wSus, wDex, wVit, wIpMax, wIpCur, dwHpMax, dwHpCur, dwExp, dwTotalSp, wRemainSp, dwTotalTp, wRemainTp, dwMoney, dwFame FROM CHAR_DATA WHERE dwCharID = " + std::to_string(dwCharID);
+    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+        LONG l[9]; SQLLEN c;
+        SQLGetData(hStmt, 1, SQL_C_SLONG, &l[0], 0, &c); out.wLevel = (WORD)l[0];
+        SQLGetData(hStmt, 2, SQL_C_SLONG, &l[1], 0, &c); out.wStr = (WORD)l[1];
+        SQLGetData(hStmt, 3, SQL_C_SLONG, &l[2], 0, &c); out.wSus = (WORD)l[2];
+        SQLGetData(hStmt, 4, SQL_C_SLONG, &l[3], 0, &c); out.wDex = (WORD)l[3];
+        SQLGetData(hStmt, 5, SQL_C_SLONG, &l[4], 0, &c); out.wVit = (WORD)l[4];
+        SQLGetData(hStmt, 6, SQL_C_SLONG, &l[5], 0, &c); out.wIpMax = (WORD)l[5];
+        SQLGetData(hStmt, 7, SQL_C_SLONG, &l[6], 0, &c); out.wIpCur = (WORD)l[6];
+        SQLGetData(hStmt, 8, SQL_C_ULONG, &out.dwHpMax, 0, &c);
+        SQLGetData(hStmt, 9, SQL_C_ULONG, &out.dwHpCur, 0, &c);
+        SQLGetData(hStmt, 10, SQL_C_SBIGINT, &out.dwExp, 0, &c);
+        SQLGetData(hStmt, 11, SQL_C_ULONG, &out.dwTotalSp, 0, &c);
+        SQLGetData(hStmt, 12, SQL_C_SLONG, &l[7], 0, &c); out.wRemainSp = (WORD)l[7];
+        SQLGetData(hStmt, 13, SQL_C_ULONG, &out.dwTotalTp, 0, &c);
+        SQLGetData(hStmt, 14, SQL_C_SLONG, &l[8], 0, &c); out.wRemainTp = (WORD)l[8];
+        SQLGetData(hStmt, 15, SQL_C_ULONG, &out.dwMoney, 0, &c);
+        SQLGetData(hStmt, 16, SQL_C_ULONG, &out.dwFame, 0, &c);
+        found = true;
+    });
+    return found;
+}

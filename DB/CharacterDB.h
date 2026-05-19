@@ -94,6 +94,15 @@ public:
     // Save position on disconnect
     void SavePosition(DWORD dwCharID, WORD wPosX, WORD wPosY, DWORD dwMapID);
 
+    // Full status data from CHAR_DATA (for SendCharStatusInfoAck)
+    struct CharFullStatus {
+        WORD wLevel=0, wStr=0, wSus=0, wDex=0, wVit=0;
+        WORD wIpMax=0, wIpCur=0, wRemainSp=0, wRemainTp=0;
+        DWORD dwHpMax=0, dwHpCur=0, dwTotalSp=0, dwTotalTp=0, dwMoney=0, dwFame=0;
+        long long int dwExp=0;
+    };
+    bool GetCharFullStatus(DWORD dwCharID, CharFullStatus& out);
+
     // ---- Character List / Login ----
     
     // Get all characters for an account

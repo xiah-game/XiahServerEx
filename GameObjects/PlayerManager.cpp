@@ -271,44 +271,29 @@ void SendCharStatusInfoAck(SOCKET clientSocket, DWORD dwCharID, WORD opCode) {
 
     std::vector<BYTE> ackBuf; ackBuf.resize(4);
     
-    std::string q = "SELECT P.wLevel, P.wStr, P.wSus, P.wDex, P.wVit, P.wIpMax, P.wIpCur, P.dwHpMax, P.dwHpCur, P.dwExp, P.dwTotalSp, P.wRemainSp, P.dwTotalTp, P.wRemainTp, P.dwMoney, P.dwFame FROM CHAR_DATA P WHERE P.dwCharID = " + std::to_string(dwCharID);
+    std::string q_unused = ""; // kept for reference
     
-    auto rowCallback = [&](SQLHSTMT hStmt) {
+    LOG("[PlayerManager] Querying DB for dwCharID: " + std::to_string(dwCharID) + " opCode: " + std::to_string(opCode));
+    CharacterDB::CharFullStatus fs;
+    bool dbRet = CharacterDB::GetInstance().GetCharFullStatus(dwCharID, fs);
+    LOG("[PlayerManager] GetCharFullStatus returned " + std::to_string(dbRet));
+    
+    if (dbRet) {
         LOG("[PlayerManager] DB Query returned a row for dwCharID: " + std::to_string(dwCharID));
-        LONG lLevel=0, lStr=0, lSus=0, lDex=0, lVit=0, lIpMax=0, lIpCur=0, lRemainSp=0, lRemainTp=0;
-        DWORD dwHpMax=0, dwHpCur=0, dwTotalSp=0, dwTotalTp=0, dwMoney=0, dwFame=0;
-        long long int dwExp=0, levelExp=0, nextLevelExp=0;
-        SQLLEN c;
-        SQLGetData(hStmt, 1, SQL_C_SLONG, &lLevel, 0, &c); WORD wLevel = (WORD)lLevel;
-        SQLGetData(hStmt, 2, SQL_C_SLONG, &lStr, 0, &c); WORD wStr = (WORD)lStr;
-        SQLGetData(hStmt, 3, SQL_C_SLONG, &lSus, 0, &c); WORD wSus = (WORD)lSus;
-        SQLGetData(hStmt, 4, SQL_C_SLONG, &lDex, 0, &c); WORD wDex = (WORD)lDex;
-        SQLGetData(hStmt, 5, SQL_C_SLONG, &lVit, 0, &c); WORD wVit = (WORD)lVit;
-        SQLGetData(hStmt, 6, SQL_C_SLONG, &lIpMax, 0, &c); WORD wIpMax = (WORD)lIpMax;
-        SQLGetData(hStmt, 7, SQL_C_SLONG, &lIpCur, 0, &c); WORD wIpCur = (WORD)lIpCur;
-        SQLGetData(hStmt, 8, SQL_C_ULONG, &dwHpMax, 0, &c);
-        SQLGetData(hStmt, 9, SQL_C_ULONG, &dwHpCur, 0, &c);
-        SQLGetData(hStmt, 10, SQL_C_SBIGINT, &dwExp, 0, &c);
-        SQLGetData(hStmt, 11, SQL_C_ULONG, &dwTotalSp, 0, &c);
-        SQLGetData(hStmt, 12, SQL_C_SLONG, &lRemainSp, 0, &c); WORD wRemainSp = (WORD)lRemainSp;
-        SQLGetData(hStmt, 13, SQL_C_ULONG, &dwTotalTp, 0, &c);
-        SQLGetData(hStmt, 14, SQL_C_SLONG, &lRemainTp, 0, &c); WORD wRemainTp = (WORD)lRemainTp;
-        SQLGetData(hStmt, 15, SQL_C_ULONG, &dwMoney, 0, &c);
-        SQLGetData(hStmt, 16, SQL_C_ULONG, &dwFame, 0, &c);
+        WORD wLevel = fs.wLevel, wStr = fs.wStr, wSus = fs.wSus, wDex = fs.wDex, wVit = fs.wVit;
+        WORD wIpMax = fs.wIpMax, wIpCur = fs.wIpCur, wRemainSp = fs.wRemainSp, wRemainTp = fs.wRemainTp;
+        DWORD dwHpMax = fs.dwHpMax, dwHpCur = fs.dwHpCur, dwTotalSp = fs.dwTotalSp, dwTotalTp = fs.dwTotalTp, dwMoney = fs.dwMoney, dwFame = fs.dwFame;
+        long long int dwExp = fs.dwExp, levelExp = 0, nextLevelExp = 0;
         
         // Calculate Max HP and Max IP dynamically
         dwHpMax = (wSus * 8) + ((wLevel - 1) * 8) + playerObj.wEquipHp;
         wIpMax = (wVit * 0) + ((wLevel - 1) * 4) + playerObj.wEquipIp;
         
-        LOG("[SendStatusAck] BEFORE fix: bHasMapObj=" + std::to_string(bHasMapObj)
-            + " DB.dwHpCur=" + std::to_string(dwHpCur) + " DB.wIpCur=" + std::to_string(wIpCur)
-            + " calcHpMax=" + std::to_string(dwHpMax) + " calcIpMax=" + std::to_string(wIpMax)
-            + " mapObj.dwHpCur=" + std::to_string(playerObj.dwHpCur) + " mapObj.wIpCur=" + std::to_string(playerObj.wIpCur)
-            + " mapObj.dwHpMax=" + std::to_string(playerObj.dwHpMax) + " mapObj.wIpMax=" + std::to_string(playerObj.wIpMax)
+        LOG("[SendStatusAck] BEFORE fix: dwHpCur=" + std::to_string(dwHpCur) + " dwHpMax=" + std::to_string(dwHpMax)
+            + " wIpCur=" + std::to_string(wIpCur) + " wIpMax=" + std::to_string(wIpMax)
             + " equipHp=" + std::to_string(playerObj.wEquipHp) + " equipIp=" + std::to_string(playerObj.wEquipIp)
             + " wSus=" + std::to_string(wSus) + " wVit=" + std::to_string(wVit) + " wLevel=" + std::to_string(wLevel));
         
-        // Use in-memory map object's current HP/IP as authoritative runtime values.
         if (bHasMapObj) {
             dwHpCur = playerObj.dwHpCur;
             wIpCur = playerObj.wIpCur;
@@ -316,14 +301,12 @@ void SendCharStatusInfoAck(SOCKET clientSocket, DWORD dwCharID, WORD opCode) {
             wIpMax = playerObj.wIpMax;
         }
         
-        // Clamp current HP/MP to the newly calculated maxes
         if (dwHpCur > dwHpMax || dwHpCur <= 8) dwHpCur = dwHpMax;
         if (wIpCur > wIpMax || wIpCur == 0) wIpCur = wIpMax;
         
         LOG("[SendStatusAck] AFTER fix: dwHpCur=" + std::to_string(dwHpCur) + " dwHpMax=" + std::to_string(dwHpMax)
             + " wIpCur=" + std::to_string(wIpCur) + " wIpMax=" + std::to_string(wIpMax));
         
-        // Fetch from memory cache
         if (g_LevelTemplates.count(wLevel)) {
             levelExp = g_LevelTemplates[wLevel].begin()->second.dwNeedExp;
         }
@@ -333,13 +316,10 @@ void SendCharStatusInfoAck(SOCKET clientSocket, DWORD dwCharID, WORD opCode) {
         
         if (nextLevelExp <= levelExp) nextLevelExp = levelExp + 1000;
 
-        long long int tpExp = 0;
-        long long int nextTpExp = 1000;
-        
+        long long int tpExp = 0, nextTpExp = 1000;
         long long int diff = nextLevelExp - levelExp;
         long long int segSize = diff / 6;
         if (segSize <= 0) segSize = 1;
-        
         long long int currentOffset = dwExp - levelExp;
         if (currentOffset < 0) currentOffset = 0;
         long long int currentSegIndex = currentOffset / segSize;
@@ -347,7 +327,6 @@ void SendCharStatusInfoAck(SOCKET clientSocket, DWORD dwCharID, WORD opCode) {
         long long int segBaseExp = levelExp + (currentSegIndex * segSize);
         long long int segNextExp = segBaseExp + segSize;
         if (currentSegIndex == 5) segNextExp = nextLevelExp;
-
         tpExp = segBaseExp;
         nextTpExp = segNextExp;
 
@@ -361,20 +340,19 @@ void SendCharStatusInfoAck(SOCKET clientSocket, DWORD dwCharID, WORD opCode) {
             pushDword(playerObj.dwTotalAtk);
             pushDword(playerObj.dwTotalDef);
             pushDword(playerObj.dwTotalHit);
-            ackBuf.push_back(0); // bState
+            ackBuf.push_back(0);
             ackBuf.push_back(playerObj.wWalkSpeed & 0xFF);
             pushDword(dwHpCur); pushDword(dwHpMax); 
             pushWord(wIpCur); pushWord(wIpMax);
             pushWord(playerObj.wCritical);
             pushWord(wStr); pushWord(wSus * 2); pushWord(wDex);
-            ackBuf.push_back(10); // bAttackSpeed
-            pushWord(20); // wAttackRange
+            ackBuf.push_back(10);
+            pushWord(20);
             ackBuf.push_back(playerObj.wPlusSpeed & 0xFF);
             pushWord(wRemainTp); pushDword(dwTotalTp);
             pushDword(dwFame);
-            ackBuf.push_back(0); // bChangeItemSet
-            ackBuf.push_back(0); // bRebirth
-            pushDword(0); pushDword(0); pushDword(0); // PremiumTP, PremiumSP, GMark
+            ackBuf.push_back(0); ackBuf.push_back(0);
+            pushDword(0); pushDword(0); pushDword(0);
         } else if (opCode == CS_IT_CHARSTATUSINFO_ACK) {
             pushWord(wLevel); pushWord(wStr); pushWord(wSus); pushWord(wDex); pushWord(wVit);
             ackBuf.push_back(0); ackBuf.push_back(0); ackBuf.push_back(0); ackBuf.push_back(0);
@@ -384,24 +362,23 @@ void SendCharStatusInfoAck(SOCKET clientSocket, DWORD dwCharID, WORD opCode) {
             pushWord(wStr); pushDword(playerObj.dwTotalAtk);
             pushWord(wSus * 2); pushDword(playerObj.dwTotalDef);
             pushWord(wDex); pushDword(playerObj.dwTotalHit);
-            pushWord(20); // wAttackRange
+            pushWord(20);
             ackBuf.push_back(playerObj.wWalkSpeed & 0xFF); ackBuf.push_back(playerObj.wWalkSpeed & 0xFF); ackBuf.push_back(playerObj.wPlusSpeed & 0xFF);
-            ackBuf.push_back(0); // bJumpLevel
-            pushDword(0); // dwPkCnt
+            ackBuf.push_back(0);
+            pushDword(0);
             pushDword(dwMoney);
             pushWord(playerObj.wCritical);
-            ackBuf.push_back(10); ackBuf.push_back(0); // bAttackSpeed, bState
+            ackBuf.push_back(10); ackBuf.push_back(0);
             pushDword(dwFame);
-            pushWord(0); // wFiveElmPoint
+            pushWord(0);
             pushDword(0); pushDword(0); pushDword(0);
             pushWord(0); pushWord(0); pushWord(0); pushWord(0); pushWord(0);
-            ackBuf.push_back(0); // bRebirth
+            ackBuf.push_back(0);
         }
-    };
+    }
     
-    LOG("[PlayerManager] Querying DB for dwCharID: " + std::to_string(dwCharID) + " opCode: " + std::to_string(opCode));
-    bool dbRet = DBHelper::GetInstance().ExecuteQuery(q, rowCallback);
-    LOG("[PlayerManager] ExecuteQuery returned " + std::to_string(dbRet) + ", ackBuf size: " + std::to_string(ackBuf.size()));
+    LOG("[PlayerManager] ackBuf size: " + std::to_string(ackBuf.size()));
+        
     
     if (ackBuf.size() > 4) {
         PACKET_HEADER* ackHead = (PACKET_HEADER*)ackBuf.data();
