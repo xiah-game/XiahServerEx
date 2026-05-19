@@ -201,12 +201,7 @@ void OnDrawInBankReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tota
 
     if (bBankPos == 255) {
         // Find free bank pos (0-35)
-        std::vector<BYTE> usedPos;
-        std::string qBank = "SELECT bSackPos FROM BANKITEM WHERE szAccount = '" + account + "'";
-        DBHelper::GetInstance().ExecuteQuery(qBank, [&](SQLHSTMT hStmt) {
-            int p = 0; SQLLEN c;
-            if (SQL_SUCCEEDED(SQLGetData(hStmt, 1, SQL_C_SLONG, &p, 0, &c))) usedPos.push_back(p);
-        });
+        std::vector<BYTE> usedPos = ItemDB::GetInstance().GetBankUsedPositions(account);
         
         for (BYTE p = 0; p < 36; ++p) {
             if (std::find(usedPos.begin(), usedPos.end(), p) == usedPos.end()) {
@@ -216,20 +211,12 @@ void OnDrawInBankReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tota
         }
         if (bBankPos == 255) result = 3; // Bank full
     } else {
-        bool isOccupied = false;
-        std::string qOcc = "SELECT dwItemID FROM BANKITEM WHERE szAccount = '" + account + "' AND bSackPos = " + std::to_string(bBankPos);
-        DBHelper::GetInstance().ExecuteQuery(qOcc, [&](SQLHSTMT hStmt) {
-            isOccupied = true;
-        });
+        bool isOccupied = ItemDB::GetInstance().IsBankPosOccupied(account, bBankPos);
         if (isOccupied) result = 2; // Position occupied
     }
 
     if (result == 0) {
-        bool itemOwned = false;
-        std::string qCheck = "SELECT dwItemID FROM SACKITEM WHERE dwCharID = " + std::to_string(charID) + " AND dwItemID = " + std::to_string(dwItemID);
-        DBHelper::GetInstance().ExecuteQuery(qCheck, [&](SQLHSTMT hStmt) {
-            itemOwned = true;
-        });
+        bool itemOwned = ItemDB::GetInstance().IsSackItemOwned(charID, dwItemID);
         if (!itemOwned) result = 1; // Item not found
     }
 
@@ -416,19 +403,11 @@ static void ProcessDrawOut(SOCKET clientSocket, DWORD charID, BYTE* payload, WOR
     }
 
     if (result == 0) {
-        bool itemOwned = false;
         std::string tableName = isBank ? "BANKITEM" : "MALLITEM";
-        std::string qCheck = "SELECT dwItemID FROM " + tableName + " WHERE szAccount = '" + account + "' AND dwItemID = " + std::to_string(dwItemID);
-        DBHelper::GetInstance().ExecuteQuery(qCheck, [&](SQLHSTMT hStmt) {
-            itemOwned = true;
-        });
+        bool itemOwned = ItemDB::GetInstance().IsItemInStorage(tableName, account, dwItemID);
         if (!itemOwned) result = 1; // Item not found
         else {
-            bool occ = false;
-            std::string qOcc = "SELECT dwItemID FROM SACKITEM WHERE dwCharID = " + std::to_string(charID) + " AND bSackPos = " + std::to_string(absolutePos);
-            DBHelper::GetInstance().ExecuteQuery(qOcc, [&](SQLHSTMT hStmt) {
-                occ = true;
-            });
+            bool occ = ItemDB::GetInstance().IsSackPosOccupiedAbs(charID, absolutePos);
             if (occ) result = 2; // Position occupied
         }
     }

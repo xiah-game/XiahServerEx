@@ -126,6 +126,21 @@ public:
     // Get cumulative rebuild bonus (Wujing or Sujing)
     int GetRebuildBonusSum(const std::string& attrColumn, int reqLevel, int maxRebuildLevel);
 
+    // Get all used bank positions for account
+    std::vector<BYTE> GetBankUsedPositions(const std::string& account);
+
+    // Check if bank pos is occupied
+    bool IsBankPosOccupied(const std::string& account, BYTE bBankPos);
+
+    // Check if character owns item in SACKITEM
+    bool IsSackItemOwned(DWORD dwCharID, DWORD dwItemID);
+
+    // Check if item exists in a storage table (BANKITEM/MALLITEM) by account
+    bool IsItemInStorage(const std::string& tableName, const std::string& account, DWORD dwItemID);
+
+    // Check if sack position is occupied (by absolute pos)
+    bool IsSackPosOccupiedAbs(DWORD dwCharID, BYTE absolutePos);
+
     // Get item amount
     WORD GetItemAmount(DWORD dwItemID);
 

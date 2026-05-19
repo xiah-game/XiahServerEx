@@ -291,3 +291,43 @@ int ItemDB::GetRebuildBonusSum(const std::string& attrColumn, int reqLevel, int 
         [&](SQLHSTMT hStmt) { SQLLEN c; SQLGetData(hStmt, 1, SQL_C_SLONG, &result, 0, &c); });
     return result;
 }
+
+std::vector<BYTE> ItemDB::GetBankUsedPositions(const std::string& account) {
+    std::vector<BYTE> used;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT bSackPos FROM BANKITEM WHERE szAccount = '" + account + "'",
+        [&](SQLHSTMT hStmt) { int p=0; SQLLEN c; SQLGetData(hStmt, 1, SQL_C_SLONG, &p, 0, &c); used.push_back((BYTE)p); });
+    return used;
+}
+
+bool ItemDB::IsBankPosOccupied(const std::string& account, BYTE bBankPos) {
+    bool occ = false;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT dwItemID FROM BANKITEM WHERE szAccount = '" + account + "' AND bSackPos = " + std::to_string(bBankPos),
+        [&](SQLHSTMT) { occ = true; });
+    return occ;
+}
+
+bool ItemDB::IsSackItemOwned(DWORD dwCharID, DWORD dwItemID) {
+    bool owned = false;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT dwItemID FROM SACKITEM WHERE dwCharID = " + std::to_string(dwCharID) + " AND dwItemID = " + std::to_string(dwItemID),
+        [&](SQLHSTMT) { owned = true; });
+    return owned;
+}
+
+bool ItemDB::IsItemInStorage(const std::string& tableName, const std::string& account, DWORD dwItemID) {
+    bool found = false;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT dwItemID FROM " + tableName + " WHERE szAccount = '" + account + "' AND dwItemID = " + std::to_string(dwItemID),
+        [&](SQLHSTMT) { found = true; });
+    return found;
+}
+
+bool ItemDB::IsSackPosOccupiedAbs(DWORD dwCharID, BYTE absolutePos) {
+    bool occ = false;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT dwItemID FROM SACKITEM WHERE dwCharID = " + std::to_string(dwCharID) + " AND bSackPos = " + std::to_string(absolutePos),
+        [&](SQLHSTMT) { occ = true; });
+    return occ;
+}
