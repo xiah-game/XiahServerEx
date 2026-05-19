@@ -2,6 +2,7 @@
 #include "MugongManager.h"
 #include "../DBHelper.h"
 #include "../DB/CharacterDB.h"
+#include "../DB/ItemDB.h"
 #include "../../XiahClient/csprotocol.h"
 #include "../Network/SessionMgr.h"
 #include "../GameObjects/MapInstance.h"
@@ -23,21 +24,11 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
 
     // 2. Fetch equipment stats from DB
     int equipAtk=0, equipDef=0, equipMag=0, equipSpd=0, equipAtkSpd=0, equipCrit=0, equipHp=0, equipIp=0, equipRestoreHp=0, equipRestoreIp=0;
-    std::string qEq = "SELECT I.wRefID, ISNULL(D.nData4, -9999), ISNULL(D.nData5, -9999), ISNULL(D.nData6, -9999), ISNULL(D.nData7, -9999), ISNULL(D.nData13, -9999), ISNULL(D.nData9, -9999), ISNULL(D.nData10, -9999), ISNULL(D.nData11, -9999), ISNULL(D.nData12, -9999) FROM SACKITEM S JOIN ITEM I ON S.dwItemID = I.dwItemID LEFT JOIN ITEMDATA D ON S.dwItemID = D.dwItemID WHERE S.dwCharID = " + std::to_string(dwCharID) + " AND S.bSackPos < 20";
-    
-    DBHelper::GetInstance().ExecuteQuery(qEq, [&](SQLHSTMT hStmt) {
-        WORD ref=0; int d4=0, d5=0, d6=0, d7=0, d13=0, d9=0, d10=0, d11=0, d12=0; SQLLEN c[10];
-        SQLGetData(hStmt, 1, SQL_C_USHORT, &ref, 0, &c[0]);
-        SQLGetData(hStmt, 2, SQL_C_SLONG, &d4, 0, &c[1]);
-        SQLGetData(hStmt, 3, SQL_C_SLONG, &d5, 0, &c[2]);
-        SQLGetData(hStmt, 4, SQL_C_SLONG, &d6, 0, &c[3]);
-        SQLGetData(hStmt, 5, SQL_C_SLONG, &d7, 0, &c[4]);
-        SQLGetData(hStmt, 6, SQL_C_SLONG, &d13, 0, &c[5]);
-        SQLGetData(hStmt, 7, SQL_C_SLONG, &d9, 0, &c[6]);
-        SQLGetData(hStmt, 8, SQL_C_SLONG, &d10, 0, &c[7]);
-        SQLGetData(hStmt, 9, SQL_C_SLONG, &d11, 0, &c[8]);
-        SQLGetData(hStmt, 10, SQL_C_SLONG, &d12, 0, &c[9]);
-        
+    std::vector<ItemDB::EquipStatRow> equipRows;
+    ItemDB::GetInstance().GetEquippedItemStats(dwCharID, equipRows);
+    for (auto& row : equipRows) {
+        int d4=row.d4, d5=row.d5, d6=row.d6, d7=row.d7, d13=row.d13, d9=row.d9, d10=row.d10, d11=row.d11, d12=row.d12;
+        WORD ref = row.wRefID;
         if (d4 == -9999) d4 = (g_ItemTemplates.count(ref) ? g_ItemTemplates[ref].nData4 : 0);
         if (d5 == -9999) d5 = (g_ItemTemplates.count(ref) ? g_ItemTemplates[ref].nData5 : 0);
         if (d6 == -9999) d6 = (g_ItemTemplates.count(ref) ? g_ItemTemplates[ref].nData6 : 0);
@@ -45,19 +36,17 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
         if (d13 == -9999) d13 = (g_ItemTemplates.count(ref) ? g_ItemTemplates[ref].nData13 : 0);
         if (d9 == -9999) d9 = (g_ItemTemplates.count(ref) ? g_ItemTemplates[ref].nData9 : 0);
         if (d10 == -9999) d10 = (g_ItemTemplates.count(ref) ? g_ItemTemplates[ref].nData10 : 0);
-        if (d11 == -9999) d11 = 0; // nData11 not in template, default 0
-        if (d12 == -9999) d12 = 0; // nData12 not in template, default 0
-        
+        if (d11 == -9999) d11 = 0;
+        if (d12 == -9999) d12 = 0;
         equipAtk += d4; equipDef += d5; equipMag += d6; equipCrit += d13;
-        // nData7 (StkSpeed): Shoes → Move Speed, Weapons/Other → Attack Speed
         if (g_ItemTemplates.count(ref) && g_ItemTemplates[ref].bType == 4) {
-            equipSpd += d7; // Shoe: move speed bonus
+            equipSpd += d7;
         } else {
-            equipAtkSpd += d7; // Weapon/Other: attack speed bonus
+            equipAtkSpd += d7;
         }
         equipHp += d9; equipIp += d10; equipRestoreHp += d11; equipRestoreIp += d12;
         LOG("[RecalcStats] EquipRow ref=" + std::to_string(ref) + " d7(spd)=" + std::to_string(d7) + " d9(hp)=" + std::to_string(d9) + " d10(ip)=" + std::to_string(d10) + " d11(restHp)=" + std::to_string(d11) + " d12(restIp)=" + std::to_string(d12) + " d13(crit)=" + std::to_string(d13));
-    });
+    }
 
     LOG("[RecalcStats] charID=" + std::to_string(dwCharID) + " TOTALS: equipAtk=" + std::to_string(equipAtk) + " equipDef=" + std::to_string(equipDef) + " equipSpd=" + std::to_string(equipSpd) + " equipCrit=" + std::to_string(equipCrit) + " equipHp=" + std::to_string(equipHp) + " equipIp=" + std::to_string(equipIp) + " restoreHp=" + std::to_string(equipRestoreHp) + " restoreIp=" + std::to_string(equipRestoreIp));
 

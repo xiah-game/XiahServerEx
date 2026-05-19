@@ -390,12 +390,9 @@ void OnItemDropReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
     // Verify item exists and belongs to this character
     WORD wRefID = 0;
     DWORD dbAmount = 0;
-    std::string qItem = "SELECT I.wRefID, I.wAmount FROM SACKITEM S JOIN ITEM I ON S.dwItemID = I.dwItemID WHERE S.dwCharID = " + std::to_string(charID) + " AND S.dwItemID = " + std::to_string(dwItemID);
-    DBHelper::GetInstance().ExecuteQuery(qItem, [&](SQLHSTMT hStmt) {
-        SQLLEN c1, c2;
-        SQLGetData(hStmt, 1, SQL_C_USHORT, &wRefID, 0, &c1);
-        SQLGetData(hStmt, 2, SQL_C_ULONG, &dbAmount, 0, &c2);
-    });
+    { ItemDB::ItemBasicInfo ib;
+      if (ItemDB::GetInstance().GetItemBasicInfo(dwItemID, ib)) { wRefID = ib.wRefID; dbAmount = ib.wAmount; }
+    }
     
     if (wRefID == 0) {
         LOG("[ItemHandler] OnItemDropReq: Item not found or not owned! dwItemID=" + std::to_string(dwItemID));
@@ -450,20 +447,11 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
     WORD wAmount = 0;
     bool foundItem = false;
 
-    DBHelper::GetInstance().ExecuteQuery(
-        "SELECT wRefID, wAmount FROM ITEM WHERE dwItemID = " + std::to_string(dwItemID),
-        [&](SQLHSTMT hStmt) {
-            int refID_val = 0, amount_val = 0;
-            SQLLEN cbRefID = 0, cbAmount = 0;
-            SQLGetData(hStmt, 1, SQL_C_SLONG, &refID_val, 0, &cbRefID);
-            SQLGetData(hStmt, 2, SQL_C_SLONG, &amount_val, 0, &cbAmount);
-            if (cbRefID != SQL_NULL_DATA) {
-                wRefID = (WORD)refID_val;
-                wAmount = (WORD)amount_val;
-                foundItem = true;
-            }
-        }
-    );
+    { ItemDB::ItemBasicInfo ib;
+      if (ItemDB::GetInstance().GetItemBasicInfo(dwItemID, ib)) {
+          wRefID = ib.wRefID; wAmount = (WORD)ib.wAmount; foundItem = true;
+      }
+    }
 
     if (!foundItem) {
         LOG("[ItemHandler] OnUseItemReq: Item not found in DB! dwItemID: " + std::to_string(dwItemID));

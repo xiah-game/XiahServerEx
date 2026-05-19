@@ -331,3 +331,21 @@ bool ItemDB::IsSackPosOccupiedAbs(DWORD dwCharID, BYTE absolutePos) {
         [&](SQLHSTMT) { occ = true; });
     return occ;
 }
+
+void ItemDB::GetEquippedItemStats(DWORD dwCharID, std::vector<EquipStatRow>& out) {
+    std::string q = "SELECT I.wRefID, ISNULL(D.nData4, -9999), ISNULL(D.nData5, -9999), ISNULL(D.nData6, -9999), ISNULL(D.nData7, -9999), ISNULL(D.nData13, -9999), ISNULL(D.nData9, -9999), ISNULL(D.nData10, -9999), ISNULL(D.nData11, -9999), ISNULL(D.nData12, -9999) FROM SACKITEM S JOIN ITEM I ON S.dwItemID = I.dwItemID LEFT JOIN ITEMDATA D ON S.dwItemID = D.dwItemID WHERE S.dwCharID = " + std::to_string(dwCharID) + " AND S.bSackPos < 20";
+    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+        EquipStatRow r; SQLLEN c[10];
+        SQLGetData(hStmt, 1, SQL_C_USHORT, &r.wRefID, 0, &c[0]);
+        SQLGetData(hStmt, 2, SQL_C_SLONG, &r.d4, 0, &c[1]);
+        SQLGetData(hStmt, 3, SQL_C_SLONG, &r.d5, 0, &c[2]);
+        SQLGetData(hStmt, 4, SQL_C_SLONG, &r.d6, 0, &c[3]);
+        SQLGetData(hStmt, 5, SQL_C_SLONG, &r.d7, 0, &c[4]);
+        SQLGetData(hStmt, 6, SQL_C_SLONG, &r.d13, 0, &c[5]);
+        SQLGetData(hStmt, 7, SQL_C_SLONG, &r.d9, 0, &c[6]);
+        SQLGetData(hStmt, 8, SQL_C_SLONG, &r.d10, 0, &c[7]);
+        SQLGetData(hStmt, 9, SQL_C_SLONG, &r.d11, 0, &c[8]);
+        SQLGetData(hStmt, 10, SQL_C_SLONG, &r.d12, 0, &c[9]);
+        out.push_back(r);
+    });
+}

@@ -141,6 +141,10 @@ public:
     // Check if sack position is occupied (by absolute pos)
     bool IsSackPosOccupiedAbs(DWORD dwCharID, BYTE absolutePos);
 
+    // Get equipped item stats (wRefID + nData4-7,9-13) for all equipped items (bSackPos < 20)
+    struct EquipStatRow { WORD wRefID = 0; int d4=0, d5=0, d6=0, d7=0, d9=0, d10=0, d11=0, d12=0, d13=0; };
+    void GetEquippedItemStats(DWORD dwCharID, std::vector<EquipStatRow>& out);
+
     // Get item amount
     WORD GetItemAmount(DWORD dwItemID);
 
