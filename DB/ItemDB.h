@@ -149,6 +149,22 @@ public:
     struct SackOccupancy { int bSackPos = 0; WORD wRefID = 0; DWORD dwItemID = 0; };
     void GetSackOccupancy(DWORD dwCharID, int startPos, int endPos, std::vector<SackOccupancy>& out);
 
+    // Full item row: ITEM + ITEMDATA columns (30+ columns)
+    struct FullItemRow {
+        int bSackPos=0; DWORD dwItemID=0;
+        int wVisualID=0, bType=0, bKind=0, wLevel=0, dwCost=0;
+        int nData18=0, nData19=0, wRefID=0, wAmount=0;
+        int d[18] = {0}; // d[0]=nData1..d[16]=nData17, d[17] unused
+        int nData20=0, nData21=0, nData25=0;
+        char szName[128] = {0};
+    };
+    // Get full item data for a single item (by dwItemID)
+    bool GetFullItemData(DWORD dwItemID, FullItemRow& out);
+    // Get full sack items for inventory display
+    void GetFullSackItems(DWORD dwCharID, const std::string& posCond, std::vector<FullItemRow>& out);
+    // Get full item data from BANKITEM/MALLITEM for bank display
+    void GetFullBankItems(const std::string& account, const std::string& tableName, std::vector<FullItemRow>& out);
+
     // Get item amount
     WORD GetItemAmount(DWORD dwItemID);
 

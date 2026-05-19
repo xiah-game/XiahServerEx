@@ -360,3 +360,57 @@ void ItemDB::GetSackOccupancy(DWORD dwCharID, int startPos, int endPos, std::vec
         out.push_back(r);
     });
 }
+
+static void ParseFullItemRow(SQLHSTMT hStmt, ItemDB::FullItemRow& r, int colOffset) {
+    SQLLEN c[32] = {0};
+    int col = colOffset;
+    SQLGetData(hStmt, col++, SQL_C_SLONG, &r.wVisualID, 0, &c[0]);
+    SQLGetData(hStmt, col++, SQL_C_SLONG, &r.bType, 0, &c[1]);
+    SQLGetData(hStmt, col++, SQL_C_SLONG, &r.bKind, 0, &c[2]);
+    SQLGetData(hStmt, col++, SQL_C_SLONG, &r.wLevel, 0, &c[3]);
+    SQLGetData(hStmt, col++, SQL_C_SLONG, &r.dwCost, 0, &c[4]);
+    SQLGetData(hStmt, col++, SQL_C_SLONG, &r.nData18, 0, &c[5]);
+    SQLGetData(hStmt, col++, SQL_C_SLONG, &r.nData19, 0, &c[6]);
+    SQLGetData(hStmt, col++, SQL_C_SLONG, &r.wRefID, 0, &c[7]);
+    SQLGetData(hStmt, col++, SQL_C_SLONG, &r.wAmount, 0, &c[8]);
+    for (int i = 0; i < 17; i++) SQLGetData(hStmt, col++, SQL_C_SLONG, &r.d[i], 0, &c[9+i]);
+    SQLGetData(hStmt, col++, SQL_C_SLONG, &r.nData20, 0, &c[26]);
+    SQLGetData(hStmt, col++, SQL_C_SLONG, &r.nData21, 0, &c[27]);
+    SQLGetData(hStmt, col++, SQL_C_SLONG, &r.nData25, 0, &c[28]);
+    SQLGetData(hStmt, col++, SQL_C_CHAR, r.szName, sizeof(r.szName), &c[29]);
+}
+
+static const char* FULL_ITEM_COLS = "I.wVisualID, I.bType, I.bKind, I.wLevel, I.dwCost, ISNULL(D.nData18,0), ISNULL(D.nData19,0), I.wRefID, I.wAmount, ISNULL(D.nData1,-9999), ISNULL(D.nData2,-9999), ISNULL(D.nData3,-9999), ISNULL(D.nData4,-9999), ISNULL(D.nData5,-9999), ISNULL(D.nData6,-9999), ISNULL(D.nData7,-9999), ISNULL(D.nData8,-9999), ISNULL(D.nData9,-9999), ISNULL(D.nData10,-9999), ISNULL(D.nData11,-9999), ISNULL(D.nData12,-9999), ISNULL(D.nData13,-9999), ISNULL(D.nData14,-9999), ISNULL(D.nData15,-9999), ISNULL(D.nData16,-9999), ISNULL(D.nData17,-9999), ISNULL(D.nData20,0), ISNULL(D.nData21,0), ISNULL(D.nData25,0), I.szName";
+
+bool ItemDB::GetFullItemData(DWORD dwItemID, FullItemRow& out) {
+    bool found = false;
+    std::string q = std::string("SELECT ") + FULL_ITEM_COLS + " FROM ITEM I LEFT JOIN ITEMDATA D ON I.dwItemID=D.dwItemID WHERE I.dwItemID=" + std::to_string(dwItemID);
+    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+        out.dwItemID = dwItemID;
+        ParseFullItemRow(hStmt, out, 1);
+        found = true;
+    });
+    return found;
+}
+
+void ItemDB::GetFullSackItems(DWORD dwCharID, const std::string& posCond, std::vector<FullItemRow>& out) {
+    std::string q = "SELECT S.bSackPos, S.dwItemID, " + std::string(FULL_ITEM_COLS) + " FROM SACKITEM S JOIN ITEM I ON S.dwItemID=I.dwItemID LEFT JOIN ITEMDATA D ON S.dwItemID=D.dwItemID WHERE S.dwCharID=" + std::to_string(dwCharID) + " AND " + posCond;
+    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+        FullItemRow r; SQLLEN c1, c2;
+        SQLGetData(hStmt, 1, SQL_C_SLONG, &r.bSackPos, 0, &c1);
+        SQLGetData(hStmt, 2, SQL_C_ULONG, &r.dwItemID, 0, &c2);
+        ParseFullItemRow(hStmt, r, 3);
+        out.push_back(r);
+    });
+}
+
+void ItemDB::GetFullBankItems(const std::string& account, const std::string& tableName, std::vector<FullItemRow>& out) {
+    std::string q = "SELECT B.bSackPos, B.dwItemID, " + std::string(FULL_ITEM_COLS) + " FROM " + tableName + " B JOIN ITEM I ON B.dwItemID=I.dwItemID LEFT JOIN ITEMDATA D ON B.dwItemID=D.dwItemID WHERE B.szAccount='" + account + "'";
+    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+        FullItemRow r; SQLLEN c1, c2;
+        SQLGetData(hStmt, 1, SQL_C_SLONG, &r.bSackPos, 0, &c1);
+        SQLGetData(hStmt, 2, SQL_C_ULONG, &r.dwItemID, 0, &c2);
+        ParseFullItemRow(hStmt, r, 3);
+        out.push_back(r);
+    });
+}

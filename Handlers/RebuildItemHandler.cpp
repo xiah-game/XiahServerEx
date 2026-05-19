@@ -18,27 +18,16 @@ static void pushString(std::vector<BYTE>& buf, const std::string& str) {
 }
 
 void SendItemRefresh(SOCKET clientSocket, DWORD dwItemID, BYTE bSackID, BYTE bSackPos) {
-    std::string q = "SELECT I.wVisualID, I.bType, I.bKind, I.wLevel, I.dwCost, D.nData18, D.nData19, I.wRefID, I.wAmount, ISNULL(D.nData1, -9999), ISNULL(D.nData2, -9999), ISNULL(D.nData3, -9999), ISNULL(D.nData4, -9999), ISNULL(D.nData5, -9999), ISNULL(D.nData6, -9999), ISNULL(D.nData7, -9999), ISNULL(D.nData8, -9999), ISNULL(D.nData9, -9999), ISNULL(D.nData10, -9999), ISNULL(D.nData11, -9999), ISNULL(D.nData12, -9999), ISNULL(D.nData13, -9999), ISNULL(D.nData14, -9999), ISNULL(D.nData15, -9999), ISNULL(D.nData16, -9999), ISNULL(D.nData17, -9999), ISNULL(D.nData20, 0), ISNULL(D.nData21, 0), ISNULL(D.nData25, 0), I.szName FROM ITEM I LEFT JOIN ITEMDATA D ON I.dwItemID=D.dwItemID WHERE I.dwItemID=" + std::to_string(dwItemID);
-    
-    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
-        int vis=0, type=0, kind=0, lvl=0, cost=0, dat18=0, dat19=0, dat20=0, dat21=0, dat25=0, refid=0, amount=0;
-        int d1=0, d2=0, d3=0, d4=0, d5=0, d6=0, d7=0, d8=0, d9=0, d10=0, d11=0, d12=0, d13=0, d14=0, d15=0, d16=0, d17=0; SQLLEN c[30]={0};
-        char szName[128]={0};
-        SQLGetData(hStmt, 1, SQL_C_SLONG, &vis, 0, &c[0]); SQLGetData(hStmt, 2, SQL_C_SLONG, &type, 0, &c[1]);
-        SQLGetData(hStmt, 3, SQL_C_SLONG, &kind, 0, &c[2]); SQLGetData(hStmt, 4, SQL_C_SLONG, &lvl, 0, &c[3]);
-        SQLGetData(hStmt, 5, SQL_C_SLONG, &cost, 0, &c[4]); SQLGetData(hStmt, 6, SQL_C_SLONG, &dat18, 0, &c[5]);
-        SQLGetData(hStmt, 7, SQL_C_SLONG, &dat19, 0, &c[6]); SQLGetData(hStmt, 8, SQL_C_SLONG, &refid, 0, &c[7]);
-        SQLGetData(hStmt, 9, SQL_C_SLONG, &amount, 0, &c[8]); SQLGetData(hStmt, 10, SQL_C_SLONG, &d1, 0, &c[9]);
-        SQLGetData(hStmt, 11, SQL_C_SLONG, &d2, 0, &c[10]); SQLGetData(hStmt, 12, SQL_C_SLONG, &d3, 0, &c[11]);
-        SQLGetData(hStmt, 13, SQL_C_SLONG, &d4, 0, &c[12]); SQLGetData(hStmt, 14, SQL_C_SLONG, &d5, 0, &c[13]);
-        SQLGetData(hStmt, 15, SQL_C_SLONG, &d6, 0, &c[14]); SQLGetData(hStmt, 16, SQL_C_SLONG, &d7, 0, &c[15]);
-        SQLGetData(hStmt, 17, SQL_C_SLONG, &d8, 0, &c[16]); SQLGetData(hStmt, 18, SQL_C_SLONG, &d9, 0, &c[17]);
-        SQLGetData(hStmt, 19, SQL_C_SLONG, &d10, 0, &c[18]); SQLGetData(hStmt, 20, SQL_C_SLONG, &d11, 0, &c[19]);
-        SQLGetData(hStmt, 21, SQL_C_SLONG, &d12, 0, &c[20]); SQLGetData(hStmt, 22, SQL_C_SLONG, &d13, 0, &c[21]);
-        SQLGetData(hStmt, 23, SQL_C_SLONG, &d14, 0, &c[22]); SQLGetData(hStmt, 24, SQL_C_SLONG, &d15, 0, &c[23]);
-        SQLGetData(hStmt, 25, SQL_C_SLONG, &d16, 0, &c[24]); SQLGetData(hStmt, 26, SQL_C_SLONG, &d17, 0, &c[25]);
-        SQLGetData(hStmt, 27, SQL_C_SLONG, &dat20, 0, &c[26]); SQLGetData(hStmt, 28, SQL_C_SLONG, &dat21, 0, &c[27]);
-        SQLGetData(hStmt, 29, SQL_C_SLONG, &dat25, 0, &c[28]); SQLGetData(hStmt, 30, SQL_C_CHAR, szName, sizeof(szName), &c[29]);
+    ItemDB::FullItemRow row;
+    if (!ItemDB::GetInstance().GetFullItemData(dwItemID, row)) return;
+    {
+        int vis=row.wVisualID, type=row.bType, kind=row.bKind, lvl=row.wLevel, cost=row.dwCost;
+        int dat18=row.nData18, dat19=row.nData19, dat20=row.nData20, dat21=row.nData21, dat25=row.nData25;
+        int refid=row.wRefID, amount=row.wAmount;
+        int d1=row.d[0], d2=row.d[1], d3=row.d[2], d4=row.d[3], d5=row.d[4], d6=row.d[5], d7=row.d[6];
+        int d8=row.d[7], d9=row.d[8], d10=row.d[9], d11=row.d[10], d12=row.d[11], d13=row.d[12];
+        int d14=row.d[13], d15=row.d[14], d16=row.d[15], d17=row.d[16];
+        char szName[128]; memcpy(szName, row.szName, sizeof(szName));
 
         int nd1=0, nd2=0, nd3=0, nd4=0, nd5=0;
         BYTE charType = 1;
@@ -136,17 +125,13 @@ void SendItemRefresh(SOCKET clientSocket, DWORD dwItemID, BYTE bSackID, BYTE bSa
         head->payloadSize = (WORD)(bi.size() - 4);
         EncryptPacket(bi.data(), 0x42);
         SafeSend(clientSocket, (const char*)bi.data(), bi.size(), 0);
-    });
+    }
 }
 
 void OnRebuildItemTermReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
     if (totalSize < 6) return;
     DWORD dwItemID = *(DWORD*)(payload + 0);
-    bool found = false;
-    DBHelper::GetInstance().ExecuteQuery(
-        "SELECT TOP 1 1 FROM SACKITEM WHERE dwCharID = " + std::to_string(charID) + " AND dwItemID = " + std::to_string(dwItemID),
-        [&](SQLHSTMT hStmt) { found = true; }
-    );
+    bool found = ItemDB::GetInstance().IsSackItemOwned(charID, dwItemID);
     std::vector<BYTE> ackBuf(5);
     PACKET_HEADER* head = (PACKET_HEADER*)ackBuf.data();
     head->id = 0x4242; // CS_IM_REBUILDITEMTERM_ACK
@@ -211,13 +196,12 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
     int crystalKind = 0, crystalSuccessRate = 0;
     bool hasCrystal = false;
     if (dwResourceID[0] != 0) {
-        std::string qRes = "SELECT T.bKind, ISNULL(T.nBasicData2, 0) FROM ITEM I JOIN ITEMTEMPLATE T ON I.wRefID = T.wRefID WHERE I.dwItemID = " + std::to_string(dwResourceID[0]);
-        DBHelper::GetInstance().ExecuteQuery(qRes, [&](SQLHSTMT hStmt) {
-            SQLLEN c[2];
-            SQLGetData(hStmt, 1, SQL_C_SLONG, &crystalKind, 0, &c[0]);
-            SQLGetData(hStmt, 2, SQL_C_SLONG, &crystalSuccessRate, 0, &c[1]);
+        WORD crystalRef = ItemDB::GetInstance().GetItemRefID(dwResourceID[0]);
+        if (crystalRef > 0 && g_ItemTemplates.count(crystalRef)) {
+            crystalKind = g_ItemTemplates[crystalRef].bKind;
+            crystalSuccessRate = g_ItemTemplates[crystalRef].nBasicData2;
             hasCrystal = true;
-        });
+        }
     }
 
     if (!hasCrystal || (crystalKind != 1 && crystalKind != 2)) {
