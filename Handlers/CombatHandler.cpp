@@ -17,7 +17,7 @@ void OnPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
     }
     LOG("> RECEIVED 0x4003 PreAttackReq! Size: " + std::to_string(totalSize) + " Hex: " + hexDump);
     
-    // Build 0x4004 PreAttackAck éˆ?echo payload back with id changed to 0x4004
+    // Build 0x4004 PreAttackAck ?echo payload back with id changed to 0x4004
     // Layout: [4-byte header] + [payload bytes] + optional [bAttackSpeed if PC attacker]
     std::vector<BYTE> ackBuf(totalSize + 4);
     memcpy(ackBuf.data() + 4, payload, totalSize);
@@ -33,6 +33,10 @@ void OnPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                 std::lock_guard<std::mutex> lock(g_MapInstances[pMapID]->GetMutex());
                 PlayerData* pAtk = g_MapInstances[pMapID]->GetPlayer(atkId);
                 if (pAtk) {
+                    if (pAtk->activeBuffs.count(130) > 0) {
+                        pAtk->activeBuffs[130].dwEndTime = 0; // Mark for instant expiry in MonsterAI loop
+                        LOG("[CombatHandler] Player " + std::to_string(atkId) + " pre-attacked. Expiring Turtle Breath.");
+                    }
                     // wAtkSpeed not in PlayerData; use default 9
                     // Sync position from attack packet (client may not send ENDMOVE when auto-walking to target)
                     if (atkPosX > 0 && atkPosX < 2048 && atkPosY > 0 && atkPosY < 2048) {
@@ -89,6 +93,10 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
             std::lock_guard<std::mutex> lock(mapInst->GetMutex());
             PlayerData* pAttacker = mapInst->GetPlayer(attackerId);
             if (pAttacker) {
+                if (pAttacker->activeBuffs.count(130) > 0) {
+                    pAttacker->activeBuffs[130].dwEndTime = 0; // Mark for instant expiry in MonsterAI loop
+                    LOG("[CombatHandler] Player " + std::to_string(attackerId) + " attacked. Expiring Turtle Breath.");
+                }
                 finalDmg = pAttacker->dwTotalAtk;
                 if (finalDmg == 0) finalDmg = 50; // Fallback
                 

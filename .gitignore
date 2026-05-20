@@ -1,4 +1,4 @@
-﻿# Build and Compilation Folders
+# Build and Compilation Folders
 .vs/
 .vscode/
 out/
@@ -27,6 +27,7 @@ x86/
 __pycache__/
 *.py[cod]
 *.class
+*.py
 
 # Logs and Archives
 *.log
@@ -37,4 +38,7 @@ __pycache__/
 *.zip
 *.rar
 *.7z
-server_log*.txt
+*.txt
+!CMakeLists.txt
+scratch/
+

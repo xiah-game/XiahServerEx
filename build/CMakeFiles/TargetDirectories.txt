@@ -1,3 +1,0 @@
-D:/xiahold/XiahServerEx/build/CMakeFiles/XiahServerEx.dir
-D:/xiahold/XiahServerEx/build/CMakeFiles/ALL_BUILD.dir
-D:/xiahold/XiahServerEx/build/CMakeFiles/ZERO_CHECK.dir

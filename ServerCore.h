@@ -117,6 +117,11 @@ struct PlayerData : EntityBase {
     std::map<DWORD, sActiveBuff> activeBuffs;
     // Skills
     std::map<DWORD, BYTE> learnedMugongs;
+    // Personal Shop
+    DWORD dwShopID = 0;
+    BYTE  bShopStatus = 0;        // 0=not selling, 1=shop open
+    std::string strShopName;
+    std::string strShopDescription;
 
     PlayerData() { bObjectType = 1; }
 };

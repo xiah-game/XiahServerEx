@@ -40,6 +40,11 @@ struct sMapDrop {
     
     // Store rolled stats in memory before pickup!
     int nData[25];
+
+    // Position and Map fields for AOI checks
+    DWORD mapID;
+    WORD wPosX;
+    WORD wPosY;
 };
 
 class DropManager {
@@ -72,4 +77,7 @@ public:
     
     // Process CS_IM_PICK_REQ (0x4201)
     void HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payload, WORD size);
+
+    // Send active drops in the player's AOI (supports both entry full sync and move delta sync)
+    void SendActiveDropsInAOI(SOCKET clientSocket, DWORD mapID, int posX, int posY, int lastUX = 0, int lastUY = 0);
 };

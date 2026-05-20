@@ -5,7 +5,10 @@
 #include "../DB/ItemDB.h"
 #include "../DB/CharacterDB.h"
 #include "../Network/SystemMessage.h"
+#include "MapInstance.h"
 #include <iostream>
+
+extern std::map<DWORD, CMapInstance*> g_MapInstances;
 
 class BufferWriter {
 public:
@@ -88,8 +91,13 @@ void DropManager::DropItemToMap(DWORD killerID, const MonsterData& obj, DWORD it
     s_nextMapItemID++;
     bw.write<DWORD>(s_nextMapItemID);
     
+    WORD visualID = tpl.wVisualID;
+    if (visualID == 0) {
+        visualID = 10050; // Fallback to safe generic money pouch visual ID
+    }
+    
     bw.write<BYTE>(tpl.bType);
-    bw.write<WORD>(tpl.wVisualID);
+    bw.write<WORD>(visualID);
     bw.writeString(tpl.szName);
     
     DWORD dbItemID = rand() * rand();
@@ -109,9 +117,12 @@ void DropManager::DropItemToMap(DWORD killerID, const MonsterData& obj, DWORD it
     newDrop.ownerID = killerID;
     newDrop.dropTime = GetTickCount();
     newDrop.bType = tpl.bType;
-    newDrop.wVisualID = tpl.wVisualID;
+    newDrop.wVisualID = visualID;
     newDrop.name = tpl.szName;
     newDrop.isMoney = false;
+    newDrop.mapID = obj.dwMapID;
+    newDrop.wPosX = dropX;
+    newDrop.wPosY = dropY;
     memset(newDrop.nData, 0, sizeof(newDrop.nData));
     
     newDrop.nData[0] = tpl.nData1;  newDrop.nData[1] = tpl.nData2;
@@ -191,6 +202,9 @@ void DropManager::DropMoneyToMap(DWORD killerID, const MonsterData& obj, DWORD a
     newDrop.wVisualID = 10050;
     newDrop.name = moneyName;
     newDrop.isMoney = true;
+    newDrop.mapID = obj.dwMapID;
+    newDrop.wPosX = dropX;
+    newDrop.wPosY = dropY;
     memset(newDrop.nData, 0, sizeof(newDrop.nData));
     
     m_activeDrops[s_nextMapItemID] = newDrop;
@@ -318,7 +332,11 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
         head->payloadSize = 4;
         *((DWORD*)(rmBuf.data() + 4)) = drop.dwMapItemID;
         EncryptPacket(rmBuf.data(), 0x42);
-        SafeSend(clientSocket, (const char*)rmBuf.data(), rmBuf.size(), 0);
+        if (g_MapInstances.count(mapID)) {
+            g_MapInstances[mapID]->BroadcastPacketAOI(x, y, rmBuf);
+        } else {
+            BroadcastPacketToMap(mapID, rmBuf);
+        }
         
         // Add money directly to database
         CharacterDB::GetInstance().AddMoney(playerID, drop.amount);
@@ -387,7 +405,11 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
         head->payloadSize = 4;
         *((DWORD*)(rmBuf.data() + 4)) = drop.dwMapItemID;
         EncryptPacket(rmBuf.data(), 0x42);
-        SafeSend(clientSocket, (const char*)rmBuf.data(), rmBuf.size(), 0);
+        if (g_MapInstances.count(mapID)) {
+            g_MapInstances[mapID]->BroadcastPacketAOI(x, y, rmBuf);
+        } else {
+            BroadcastPacketToMap(mapID, rmBuf);
+        }
         
         // Use BufferWriter for 0x420A (AddOnSack)
         BufferWriter bw;
@@ -483,4 +505,60 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
         }
         SystemMessage::SendHelpMessage(clientSocket, SystemMessage::MsgType::PICK_ITEM, itemName, drop.amount);
     }
+}
+
+void DropManager::SendActiveDropsInAOI(SOCKET clientSocket, DWORD mapID, int posX, int posY, int lastUX, int lastUY) {
+    std::vector<sMapDrop> nearbyDrops;
+    for (const auto& pair : m_activeDrops) {
+        const sMapDrop& drop = pair.second;
+        if (drop.mapID == mapID) {
+            int dx = (int)drop.wPosX - posX;
+            int dy = (int)drop.wPosY - posY;
+            bool inNew = (dx * dx + dy * dy <= 150 * 150);
+            
+            bool inOld = false;
+            if (lastUX > 0 && lastUY > 0) {
+                int odx = (int)drop.wPosX - lastUX;
+                int ody = (int)drop.wPosY - lastUY;
+                inOld = (odx * odx + ody * ody <= 150 * 150);
+            }
+            
+            if (inNew && !inOld) {
+                nearbyDrops.push_back(drop);
+            }
+        }
+    }
+    
+    if (nearbyDrops.empty()) return;
+    
+    BufferWriter bw;
+    bw.write<BYTE>(0); // bResult
+    bw.write<WORD>((WORD)nearbyDrops.size()); // wItemNum
+    
+    for (const auto& drop : nearbyDrops) {
+        bw.write<DWORD>(drop.mapID);
+        bw.write<WORD>(drop.wPosX);
+        bw.write<WORD>(drop.wPosY);
+        bw.write<BYTE>(0); // bHeight
+        bw.write<DWORD>(drop.dwMapItemID);
+        
+        bw.write<BYTE>(drop.bType);
+        bw.write<WORD>(drop.wVisualID);
+        bw.writeString(drop.name);
+        
+        bw.write<DWORD>(drop.dbItemID);
+        bw.write<DWORD>(drop.amount);
+        bw.write<DWORD>(drop.ownerID);
+        bw.write<BYTE>(0); // bType
+        bw.write<BYTE>(0); // bFESocket
+        bw.write<BYTE>(0); // bChangeItem
+    }
+    
+    std::vector<BYTE> finalBuf(4 + bw.buf.size());
+    PACKET_HEADER* head = (PACKET_HEADER*)finalBuf.data();
+    head->id = 0x420C;
+    head->payloadSize = (WORD)bw.buf.size();
+    memcpy(finalBuf.data() + 4, bw.buf.data(), bw.buf.size());
+    EncryptPacket(finalBuf.data(), 0x42);
+    SafeSend(clientSocket, (const char*)finalBuf.data(), finalBuf.size(), 0);
 }

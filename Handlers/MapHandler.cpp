@@ -6,8 +6,26 @@
 #include "../GameObjects/PlayerManager.h"
 #include "../GameObjects/PlayerManager.h"
 #include "../GameObjects/MapInstance.h"
+#include "../GameObjects/DropManager.h"
 
 extern std::map<DWORD, CMapInstance*> g_MapInstances;
+
+static void SendSystemWarningChat(SOCKET clientSocket, const std::string& msg) {
+    std::vector<BYTE> buf;
+    buf.resize(4, 0);
+    DWORD senderObjID = 0;
+    buf.push_back(senderObjID & 0xFF); buf.push_back((senderObjID >> 8) & 0xFF); buf.push_back((senderObjID >> 16) & 0xFF); buf.push_back(senderObjID >> 24);
+    buf.push_back(8); // CT_TIMEMESSAGE
+    WORD len = (WORD)msg.size();
+    buf.push_back(len & 0xFF); buf.push_back((len >> 8) & 0xFF);
+    buf.insert(buf.end(), msg.begin(), msg.end());
+    WORD packetID = 0x3E02; // CS_CH_CHAT_ACK
+    WORD payloadSize = (WORD)(buf.size() - 4);
+    memcpy(&buf[0], &packetID, 2);
+    memcpy(&buf[2], &payloadSize, 2);
+    EncryptPacket(buf.data(), 0x42);
+    SafeSend(clientSocket, (const char*)buf.data(), (int)buf.size(), 0);
+}
 
 void OnMapLoadingSequenceReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize, WORD headerId) {
     if (headerId == 0x3A55) { 
@@ -156,6 +174,9 @@ void OnMapEnterReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
 
     // Send CS_IF_CHARINFO_ACK (0x3B02) immediately after MapEnterAck
     SendCharStatusInfoAck(clientSocket, dwActualCharID, 0x3B02);
+
+    // Sync active drops in player's AOI upon entering
+    DropManager::GetInstance()->SendActiveDropsInAOI(clientSocket, dwMapID, wCurX, wCurY);
 
     // Spawn Map Objects immediately upon entering within AoI
     std::vector<BYTE> aoiBuf; aoiBuf.resize(4); aoiBuf.push_back(0); // bResult
@@ -377,6 +398,9 @@ void OnImReadyReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
         SafeSend(clientSocket, (const char*)objListBuf.data(), objListBuf.size(), 0);
         
         LOG("[MapHandler] Sent MAPOBJECTLIST_ACK (0x4312) with " + std::to_string(wNumObject) + " objects.");
+
+        // Sync active drops in player's AOI
+        DropManager::GetInstance()->SendActiveDropsInAOI(clientSocket, dwMapID, pX, pY);
         
         // Broadcast the new player to everyone else in the map
         std::vector<BYTE> bcastBuf(4);
@@ -483,9 +507,9 @@ void OnCharInfoReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
     pushByte(objCopy.bPropType); // bCharType
     pushString(objCopy.szName);
     pushDWord(0); // dwFame
-    pushByte(0); // bShopStatus
-    pushString(""); // strShopName
-    pushString(""); // strShopDescription
+    pushByte(objCopy.bShopStatus); // bShopStatus
+    pushString(objCopy.strShopName); // strShopName
+    pushString(objCopy.strShopDescription); // strShopDescription
     pushByte(0); // bSemiPKStatus
     pushByte(0); // bCurFiveElm
     pushByte(0); // bFELevel
@@ -561,9 +585,9 @@ void OnCharInfoListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                 pushString(o.szName);
                 pushDWord(0); // dwFame
                 
-                pushByte(0); // bShopStatus
-                pushString(""); // strShopName
-                pushString(""); // strShopDescription
+                pushByte(o.bShopStatus); // bShopStatus
+                pushString(o.strShopName); // strShopName
+                pushString(o.strShopDescription); // strShopDescription
                 pushByte(0); // bSemiPKStatus
                 pushByte(0); // bCurFiveElm
                 pushByte(0); // bFELevel
@@ -638,6 +662,15 @@ void OnMapMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
     
     DWORD dwObjectID = charID + 400000000;
     DWORD oldMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+    
+    if (g_MapInstances.count(oldMapID)) {
+        std::lock_guard<std::mutex> lock(g_MapInstances[oldMapID]->GetMutex());
+        sServerObject* pObj = g_MapInstances[oldMapID]->GetPlayer(dwObjectID);
+        if (pObj && pObj->bShopStatus == 1) {
+            SendSystemWarningChat(clientSocket, "[Shop] Setup is active. Map transition and teleportation blocked!");
+            return;
+        }
+    }
     
     LOG("[MapHandler] OnMapMoveReq: charID=" + std::to_string(charID) + 
         " reqMap=" + std::to_string(dwReqMapID) + " pos=(" + std::to_string(wReqPosX) + "," + std::to_string(wReqPosY) + ")");

@@ -1,10 +1,13 @@
 #include "TradeHandler.h"
+#include "ShopHandler.h"
+#include "../GameObjects/MapInstance.h"
 #include "../DB/CharacterDB.h"
 #include "../DB/ItemDB.h"
 #include "../GameObjects/MugongManager.h"
 #include <algorithm>
 
 extern std::map<WORD, sItemTemplate> g_ItemTemplates;
+extern std::map<DWORD, CMapInstance*> g_MapInstances;
 
 static void pushByte(std::vector<BYTE>& buf, BYTE b) { buf.push_back(b); }
 static void pushWord(std::vector<BYTE>& buf, WORD w) { buf.push_back(w & 0xFF); buf.push_back((w >> 8) & 0xFF); }
@@ -45,6 +48,22 @@ void TradeManager::OnAskTradeReq(SOCKET s, DWORD charID, BYTE* payload, WORD siz
     SOCKET targetSock = SessionMgr::GetInstance().GetSocketByCharID(targetCharID);
     if (targetSock == INVALID_SOCKET) {
         LOG("[Trade] Target not online: " + std::to_string(targetCharID));
+        return;
+    }
+
+    // Check if the target player is currently in a shop/stall (摆摊) state.
+    // If so, redirect this request to open their stall shop instead of sending a trade request invitation.
+    DWORD mapID = SessionMgr::GetInstance().GetMapID(s);
+    sServerObject* targetPlayer = nullptr;
+    if (g_MapInstances.count(mapID)) {
+        std::lock_guard<std::mutex> lock(g_MapInstances[mapID]->GetMutex());
+        targetPlayer = g_MapInstances[mapID]->GetPlayer(dwTargetObjID);
+    }
+
+    if (targetPlayer && targetPlayer->bShopStatus == 1) {
+        LOG("[Trade] Target player " + std::to_string(targetCharID) + " is in shop/stall state. Redirecting to ShopHandler::OnGetShopInfoReq.");
+        // Redirect: Directly open their shop window by calling the stall information request handler.
+        ShopHandler::OnGetShopInfoReq(s, charID, (BYTE*)&dwTargetObjID, 4);
         return;
     }
     
@@ -96,14 +115,22 @@ static void SendTradeOpenSack(SOCKET s, DWORD traderObjID) {
 
 // ============================================================
 // TradeSackOnItem: Player places an item into the trade window
-// Payload: bSackID(1) bSackPos(1) dwItemID(4) wAmount(2)
+// Payload: bSackID(1) bSackPos(1) wRefID(2) dwItemID(4) wAmount(2) ...
+// NOTE: Client sends wRefID(2) BEFORE dwItemID(4), so dwItemID is at offset+4.
 // ============================================================
 void TradeManager::OnTradeSackOnItemReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
-    if (size < 8) return;
-    BYTE bSackID = payload[0];
+    if (size < 10) return;
+    BYTE bSackID  = payload[0];
     BYTE bSackPos = payload[1];
-    DWORD dwItemID = *(DWORD*)(payload + 2);
-    WORD wAmount = *(WORD*)(payload + 6);
+    // payload[2..3] = wRefID (skip)
+    DWORD dwItemID = *(DWORD*)(payload + 4);
+    WORD wAmount   = *(WORD*) (payload + 8);
+    
+    LOG("[Trade] SackOnItem: charID=" + std::to_string(charID)
+        + " sackID=" + std::to_string(bSackID)
+        + " pos=" + std::to_string(bSackPos)
+        + " itemID=" + std::to_string(dwItemID)
+        + " amount=" + std::to_string(wAmount));
     
     std::lock_guard<std::mutex> lock(m_mutex);
     auto it = m_activeTrades.find(charID);
@@ -147,17 +174,11 @@ void TradeManager::OnTradeSackOnItemReq(SOCKET s, DWORD charID, BYTE* payload, W
     pushByte(rmPayload, 2); // reason = trade
     SendPacket(s, 0x4208, rmPayload); // REMOVESACK_ACK
     
-    // ACK to self
-    std::vector<BYTE> selfAck;
-    pushByte(selfAck, 0); // bResult
-    pushByte(selfAck, slot.bTradePos);
-    pushDWord(selfAck, dwItemID);
-    pushWord(selfAck, wAmount);
-    SendPacket(s, PKT_TRADESACKONITEM_ACK, selfAck);
+    // ACK to self — use same full-item format as the other player receives.
+    SendTradeSackItemAck(s, PKT_TRADESACKONITEM_ACK, 0, charID + 400000000, bSackID, bSackPos, 0, slot.bTradePos, dwItemID, wAmount);
     
-    // Notify other player about the item being placed
-    // Build full item data for the other player to see
-    BuildAndSendItemData(otherSock, charID + 400000000, bSackID, bSackPos, 0, slot.bTradePos, dwItemID, wAmount);
+    // Notify the other player about the item being placed
+    SendTradeSackItemAck(otherSock, PKT_TRADESACKONITEM_ACK, 0, charID + 400000000, bSackID, bSackPos, 0, slot.bTradePos, dwItemID, wAmount);
     
     LOG("[Trade] Player " + std::to_string(charID) + " placed item " + std::to_string(dwItemID) + " in trade");
 }
@@ -187,26 +208,19 @@ void TradeManager::OnTradeSackOffItemReq(SOCKET s, DWORD charID, BYTE* payload, 
     auto sit = std::find_if(mySlots.begin(), mySlots.end(), [&](const TradeSlot& sl) { return sl.dwItemID == dwItemID; });
     if (sit == mySlots.end()) return;
     
-    BYTE origSackPos = sit->bSrcSackPos;
+    TradeSlot slot = *sit;
     mySlots.erase(sit);
     
     // Reset confirm states
     session->stateA = TradeState::OPEN;
     session->stateB = TradeState::OPEN;
     
-    // ACK to self
-    std::vector<BYTE> selfAck;
-    pushByte(selfAck, 0); // bResult
-    pushByte(selfAck, bTradePos);
-    pushDWord(selfAck, dwItemID);
-    SendPacket(s, PKT_TRADESACKOFFITEM_ACK, selfAck);
+    // Send standard PKT_TRADESACKOFFITEM_ACK (0x3D98) 18-byte header to both players so they remove it from trade UI
+    SendTradeSackItemAck(s, PKT_TRADESACKOFFITEM_ACK, 0, charID + 400000000, slot.bSrcSackID, slot.bSrcSackPos, 0, slot.bTradePos, slot.dwItemID, slot.dwAmount);
+    SendTradeSackItemAck(otherSock, PKT_TRADESACKOFFITEM_ACK, 0, charID + 400000000, slot.bSrcSackID, slot.bSrcSackPos, 0, slot.bTradePos, slot.dwItemID, slot.dwAmount);
     
-    // Notify other player
-    std::vector<BYTE> otherAck;
-    pushByte(otherAck, 0);
-    pushByte(otherAck, bTradePos);
-    pushDWord(otherAck, dwItemID);
-    SendPacket(otherSock, PKT_TRADESACKOFFITEM_ACK, otherAck);
+    // Also, send ADDONSACK_ACK (0x420A) to self to visually restore the item back into our backpack
+    SendAddOnSackAck(s, slot.bSrcSackID, slot.bSrcSackPos, slot.dwItemID);
     
     LOG("[Trade] Player " + std::to_string(charID) + " removed item " + std::to_string(dwItemID) + " from trade");
 }
@@ -275,7 +289,7 @@ void TradeManager::OnTradeSackOnMoneyReq(SOCKET s, DWORD charID, BYTE* payload, 
     if (myState != TradeState::OPEN) return;
     
     // Verify player has enough money
-    DWORD currentMoney = CharacterDB::GetInstance().GetMoney(charID);
+    DWORD currentMoney = (DWORD)CharacterDB::GetInstance().GetMoney(charID);
     if (dwMoney > currentMoney) dwMoney = currentMoney;
     
     myMoney = dwMoney;
@@ -286,13 +300,15 @@ void TradeManager::OnTradeSackOnMoneyReq(SOCKET s, DWORD charID, BYTE* payload, 
     
     // ACK to self
     std::vector<BYTE> selfAck;
-    pushByte(selfAck, 0);
+    pushByte(selfAck, 0); // bResult
+    pushDWord(selfAck, charID + 400000000); // ownerObjectID
     pushDWord(selfAck, dwMoney);
     SendPacket(s, PKT_TRADESACKONMONEY_ACK, selfAck);
     
     // Notify other
     std::vector<BYTE> otherAck;
-    pushByte(otherAck, 0);
+    pushByte(otherAck, 0); // bResult
+    pushDWord(otherAck, charID + 400000000); // ownerObjectID
     pushDWord(otherAck, dwMoney);
     SendPacket(otherSock, PKT_TRADESACKONMONEY_ACK, otherAck);
     
@@ -321,7 +337,9 @@ void TradeManager::OnTradeSackOffMoneyReq(SOCKET s, DWORD charID, BYTE* payload,
     session->stateB = TradeState::OPEN;
     
     std::vector<BYTE> ack;
-    pushByte(ack, 0);
+    pushByte(ack, 0); // bResult
+    pushDWord(ack, charID + 400000000); // ownerObjectID
+    pushDWord(ack, 0); // money removed
     SendPacket(s, PKT_TRADESACKOFFMONEY_ACK, ack);
     SendPacket(otherSock, PKT_TRADESACKOFFMONEY_ACK, ack);
     
@@ -500,34 +518,109 @@ void TradeManager::SendMoneyUpdate(SOCKET s, DWORD charID) {
     SendPacket(s, 0x3B13, payload); // CS_IF_CHARMONEY_ACK
 }
 
-void TradeManager::BuildAndSendItemData(SOCKET targetSocket, DWORD ownerObjectID,
-                                         BYTE bSrcSackID, BYTE bSrcPos,
-                                         BYTE bDesSackID, BYTE bDesPos,
+void TradeManager::SendTradeSackItemAck(SOCKET targetSocket, WORD packetID, BYTE bResult, DWORD ownerObjectID,
+                                         BYTE bSrcSackID, BYTE bSrcPos, BYTE bDesSackID, BYTE bDesPos,
                                          DWORD dwItemID, DWORD dwAmount) {
-    // Simplified: send TRADESACKONITEM_ACK with item info to the other player
-    ItemDB::FullItemRow row;
-    if (!ItemDB::GetInstance().GetFullItemData(dwItemID, row)) return;
+    std::vector<BYTE> payload;
+    pushByte(payload, bResult);
+    pushDWord(payload, ownerObjectID);
+    pushByte(payload, bSrcSackID);
+    pushByte(payload, bSrcPos);
+    pushByte(payload, bDesSackID);
+    pushByte(payload, bDesPos);
+    pushDWord(payload, dwItemID);
+    pushDWord(payload, dwAmount); // wAmount (4 bytes)
     
-    int type = row.bType, refid = row.wRefID;
-    if (g_ItemTemplates.count(refid)) {
-        if (type == 0) type = g_ItemTemplates[refid].bType;
+    // Only serialize standard item data for PKT_TRADESACKONITEM_ACK (0x3D96)
+    if (packetID == PKT_TRADESACKONITEM_ACK) {
+        ItemDB::FullItemRow row;
+        WORD refid = 0;
+        if (dwItemID != 0 && ItemDB::GetInstance().GetFullItemData(dwItemID, row)) {
+            refid = row.wRefID;
+        }
+        
+        if (dwItemID == 0 || refid == 0) {
+            pushDWord(payload, 0); // Null item pointer
+        } else {
+            int vis=row.wVisualID, type=row.bType, kind=row.bKind, lvl=row.wLevel, cost=row.dwCost;
+            int dat18=row.nData18, dat19=row.nData19, dat20=row.nData20;
+            int amount=row.wAmount;
+            int d[17]; for (int i=0;i<17;i++) d[i]=row.d[i];
+            
+            int nd1=0, nd2=0, nd3=0, nd4=0, nd5=0;
+            BYTE charType = 1;
+            if (g_ItemTemplates.count(refid)) {
+                if (type == 0) type = g_ItemTemplates[refid].bType;
+                if (kind == 0) kind = g_ItemTemplates[refid].bKind;
+                if (vis == 0) vis = g_ItemTemplates[refid].wVisualID;
+                if (lvl == 0) lvl = g_ItemTemplates[refid].wLevel;
+                if (cost == 0) cost = g_ItemTemplates[refid].dwCost;
+                if (amount == 0) amount = g_ItemTemplates[refid].wAmount;
+                charType = g_ItemTemplates[refid].bCharType;
+                nd1 = g_ItemTemplates[refid].nBasicData1;
+                nd2 = g_ItemTemplates[refid].nBasicData2;
+                nd3 = g_ItemTemplates[refid].nBasicData3;
+                nd4 = g_ItemTemplates[refid].nBasicData4;
+                nd5 = g_ItemTemplates[refid].nBasicData5;
+                if (d[0] == -9999) d[0] = g_ItemTemplates[refid].nData1;
+                if (d[1] == -9999) d[1] = g_ItemTemplates[refid].nData2;
+                if (d[2] == -9999) d[2] = g_ItemTemplates[refid].nData3;
+                if (d[3] == -9999) d[3] = g_ItemTemplates[refid].nData4;
+                if (d[4] == -9999) d[4] = g_ItemTemplates[refid].nData5;
+                if (d[5] == -9999) d[5] = g_ItemTemplates[refid].nData6;
+                if (d[6] == -9999) d[6] = g_ItemTemplates[refid].nData7;
+                if (d[7] == -9999) d[7] = g_ItemTemplates[refid].nData8;
+                if (d[8] == -9999) d[8] = g_ItemTemplates[refid].nData9;
+                if (d[9] == -9999) d[9] = g_ItemTemplates[refid].nData10;
+            }
+            for (int i=0;i<17;i++) { if (d[i]==-9999) d[i]=0; }
+            
+            std::string itemName(row.szName);
+            if (itemName.empty() && g_ItemTemplates.count(refid)) itemName = g_ItemTemplates[refid].szName;
+            
+            pushDWord(payload, dwItemID); pushWord(payload, refid);
+            pushByte(payload, type); pushByte(payload, kind); pushWord(payload, vis);
+            pushWord(payload, (WORD)itemName.length());
+            for (char ch : itemName) pushByte(payload, ch);
+            pushDWord(payload, cost); pushWord(payload, lvl); pushByte(payload, charType);
+            pushWord(payload, amount);
+            
+            if (type >= 1 && type <= 9) {
+                pushWord(payload, nd1); pushWord(payload, nd2); pushWord(payload, nd3); pushWord(payload, nd4); pushWord(payload, nd5);
+                pushByte(payload, d[0]);
+                pushWord(payload, d[1]); pushWord(payload, d[2]);
+                pushWord(payload, d[3]); pushWord(payload, d[4]); pushWord(payload, d[5]); pushWord(payload, d[6]); pushWord(payload, d[7]);
+                pushWord(payload, d[8]); pushWord(payload, d[9]); pushWord(payload, d[10]); pushWord(payload, d[11]); pushWord(payload, d[12]);
+                pushByte(payload, dat18); pushByte(payload, dat19);
+                pushByte(payload, d[13]); pushByte(payload, d[14]); pushByte(payload, d[15]); pushByte(payload, d[16]);
+                if (type == 9) { pushDWord(payload, 0); pushWord(payload, 0); pushWord(payload, 0); pushWord(payload, 0); pushWord(payload, 0); }
+                else if (type == 8) { for(int i=0;i<8;i++) pushByte(payload, 0); }
+                else { pushByte(payload, 0); }
+                if (type >= 1 && type <= 4) { pushByte(payload, 0); pushByte(payload, 0); pushByte(payload, 0); pushWord(payload, dat20); }
+            } else {
+                switch (type) {
+                    case 11: case 12: case 13: case 14: case 17: pushByte(payload, 0); pushWord(payload, d[1]); pushWord(payload, d[2]); break;
+                    case 15: pushByte(payload, d[0]); pushWord(payload, d[1]); pushWord(payload, d[2]); pushByte(payload, 0); pushByte(payload, 0); break;
+                    case 16: pushWord(payload, 0); pushByte(payload, 0); pushWord(payload, 0); pushByte(payload, 0); pushWord(payload, 0); break;
+                    case 18: pushByte(payload, 0); pushDWord(payload, 0); pushWord(payload, d[1]); pushWord(payload, d[2]); pushByte(payload, 0); break;
+                    case 19: pushWord(payload, 0); pushWord(payload, 0); break;
+                    case 20: pushByte(payload, 0); pushDWord(payload, 0); break;
+                    case 21: { DWORD mid=nd2; sMugongTemplate* mg=MugongManager::GetInstance()->GetTemplate(mid); pushWord(payload, lvl); pushDWord(payload, mid); pushByte(payload, mg?mg->bType:0); pushByte(payload, mg?mg->bKind:0); pushByte(payload, 1); break; }
+                    case 22: pushDWord(payload, 0); pushByte(payload, 0); pushWord(payload, 0); pushWord(payload, 0); break;
+                    case 23: pushDWord(payload, 0); pushWord(payload, 0); pushWord(payload, 0); pushByte(payload, 0); pushByte(payload, 0); break;
+                    case 25: pushByte(payload, 0); pushWord(payload, 0); pushWord(payload, 0); break;
+                    case 27: pushByte(payload, 0); pushDWord(payload, 0); pushByte(payload, 0); pushByte(payload, 0); pushByte(payload, 0); pushByte(payload, 0); pushDWord(payload, 0); break;
+                    case 29: pushWord(payload, 0); pushWord(payload, 0); break;
+                    case 32: pushWord(payload, 0); pushWord(payload, d[1]); pushWord(payload, d[2]); pushDWord(payload, 0); break;
+                    case 31: pushByte(payload, 0); pushWord(payload, 0); pushWord(payload, 0); break;
+                    case 34: pushDWord(payload, 0); pushByte(payload, 0); break;
+                }
+            }
+            pushWord(payload, (WORD)dat20); // wRebuithValue
+        }
     }
     
-    std::string itemName(row.szName);
-    if (itemName.empty() && g_ItemTemplates.count(refid)) itemName = g_ItemTemplates[refid].szName;
-    
-    std::vector<BYTE> payload;
-    pushByte(payload, 0);       // bResult
-    pushByte(payload, bDesPos); // trade position
-    pushDWord(payload, dwItemID);
-    pushWord(payload, (WORD)refid);
-    pushByte(payload, (BYTE)type);
-    pushWord(payload, row.wVisualID);
-    pushWord(payload, (WORD)itemName.length());
-    for (char ch : itemName) pushByte(payload, ch);
-    pushWord(payload, (WORD)dwAmount);
-    
-    SendPacket(targetSocket, PKT_TRADESACKONITEM_ACK, payload);
+    SendPacket(targetSocket, packetID, payload);
 }
 
 // ============================================================

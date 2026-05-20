@@ -40,6 +40,7 @@ set(SOURCES
     Handlers/BankHandler.cpp
     Handlers/StatHandler.cpp
     Handlers/TradeHandler.cpp
+    Handlers/ShopHandler.cpp
     GameObjects/DropManager.cpp
     GameObjects/ExpSystem.cpp
     DB/CharacterDB.cpp

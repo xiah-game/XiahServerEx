@@ -72,7 +72,12 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
             pObj->wEquipIp = equipIp;
             pObj->wEquipRestoreHp = equipRestoreHp;
             pObj->wEquipRestoreIp = equipRestoreIp;
-            pObj->wWalkSpeed = 6 + equipSpd;
+            int buffSpd = 0;
+            if (pObj->activeBuffs.count(124) > 0) buffSpd += 5; // ıÆﬂæ speed increase
+            if (pObj->activeBuffs.count(94) > 0) buffSpd += 6;  // Ú‹∆ speed increase
+            if (pObj->activeBuffs.count(34) > 0) buffSpd += 4;  // ÏÈ◊∂Ê” speed increase
+
+            pObj->wWalkSpeed = 6 + equipSpd + buffSpd;
             // Attack speed: computed on-the-fly in PreAttackReq, not stored on PlayerData
 
             // Calculate and update HP/IP max on the object (same formula as SendCharStatusInfoAck)
@@ -94,13 +99,13 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
             DWORD flatIpMax = 0;
             DWORD flatCrit  = equipCrit;
 
-            // Phase 2: Accumulate ALL percentage bonuses
-            DWORD percAtk  = 0;
-            DWORD percDef  = 0;
-            DWORD percHit  = 0;
-            DWORD percCrit = 0;
+            // Phase 2: Accumulate ALL percentage bonuses (using signed integers to support debuff reductions)
+            int percAtk  = 0;
+            int percDef  = 0;
+            int percHit  = 0;
+            int percCrit = 0;
 
-            // 4.5. Passive Inner Skill (ÈçêÂë≠Âßõ) flat + perc (dwMugongID 1-29)
+            // 4.5. Passive Inner Skill (çêë≠Âß) flat + perc (dwMugongID 1-29)
             for (auto& mg : pObj->learnedMugongs) {
                 DWORD mugID = mg.first;
                 BYTE mugLvl = mg.second;
@@ -114,10 +119,10 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
                         flatIpMax += pd->wIncIpMax;
                         flatCrit  += pd->wIncCritical;
 
-                        if (pd->wIncAtkPerc > 100) percAtk += (pd->wIncAtkPerc - 100);
-                        if (pd->wIncDefPerc > 100) percDef += (pd->wIncDefPerc - 100);
-                        if (pd->wIncRatePerc > 100) percHit += (pd->wIncRatePerc - 100);
-                        if (pd->wIncCriticalPerc > 100) percCrit += (pd->wIncCriticalPerc - 100);
+                        if (pd->wIncAtkPerc > 0) percAtk += ((int)pd->wIncAtkPerc - 100);
+                        if (pd->wIncDefPerc > 0) percDef += ((int)pd->wIncDefPerc - 100);
+                        if (pd->wIncRatePerc > 0) percHit += ((int)pd->wIncRatePerc - 100);
+                        if (pd->wIncCriticalPerc > 0) percCrit += ((int)pd->wIncCriticalPerc - 100);
 
                         LOG("[RecalcStats] Passive ID=" + std::to_string(mugID) + " Lv=" + std::to_string(mugLvl) 
                             + " flatAtk+" + std::to_string(pd->wIncAtk) + " percAtk+" + std::to_string(pd->wIncAtkPerc)
@@ -141,21 +146,26 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
                         flatIpMax += bd->wIncIpMax;
                         flatCrit  += bd->wIncCritical;
 
-                        if (bd->wIncAtkPerc > 100) percAtk += (bd->wIncAtkPerc - 100);
-                        if (bd->wIncDefPerc > 100) percDef += (bd->wIncDefPerc - 100);
-                        if (bd->wIncRatePerc > 100) percHit += (bd->wIncRatePerc - 100);
-                        if (bd->wIncCriticalPerc > 100) percCrit += (bd->wIncCriticalPerc - 100);
+                        if (bd->wIncAtkPerc > 0) percAtk += ((int)bd->wIncAtkPerc - 100);
+                        if (bd->wIncDefPerc > 0) percDef += ((int)bd->wIncDefPerc - 100);
+                        if (bd->wIncRatePerc > 0) percHit += ((int)bd->wIncRatePerc - 100);
+                        if (bd->wIncCriticalPerc > 0) percCrit += ((int)bd->wIncCriticalPerc - 100);
                     }
                     ++it;
                 }
             }
 
-            // Phase 3: Apply percentages once Èà•?totalFlat * (100 + totalPerc) / 100
-            DWORD totalAtk   = flatAtk * (100 + percAtk) / 100;
-            DWORD totalDef   = flatDef * (100 + percDef) / 100;
-            DWORD totalHit   = flatHit * (100 + percHit) / 100;
+            // Phase 3: Apply percentages once à•?totalFlat * (100 + totalPerc) / 100
+            int finalAtkPerc = 100 + percAtk; if (finalAtkPerc < 1) finalAtkPerc = 1;
+            int finalDefPerc = 100 + percDef; if (finalDefPerc < 1) finalDefPerc = 1;
+            int finalHitPerc = 100 + percHit; if (finalHitPerc < 1) finalHitPerc = 1;
+            int finalCritPerc = 100 + percCrit; if (finalCritPerc < 1) finalCritPerc = 1;
+
+            DWORD totalAtk   = flatAtk * finalAtkPerc / 100;
+            DWORD totalDef   = flatDef * finalDefPerc / 100;
+            DWORD totalHit   = flatHit * finalHitPerc / 100;
             DWORD totalDodge = flatDodge;
-            DWORD totalCrit  = flatCrit * (100 + percCrit) / 100;
+            DWORD totalCrit  = flatCrit * finalCritPerc / 100;
 
             // Update HP/IP max with all bonuses
             pObj->dwHpMax += flatHpMax;
@@ -180,9 +190,9 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
             SendCharStatusInfoAck(s, dwCharID, 0x4414); // CS_IT_CHARSTATUSINFO_ACK
             // Client's Init_WindowOutSide/InSide clears mugong data upon receiving 0x4414,
             // so we must immediately re-send the mugong lists to repopulate the UI.
-            BYTE typeGeneral = 0; // General/Outgong (ÈûïÊààËΩ¶)
+            BYTE typeGeneral = 0; // General/Outgong (ûïààËΩ)
             OnMugongListReq(s, dwCharID, &typeGeneral, 1);
-            BYTE typePassive = 1; // Passive/Ingong (ÈõÆÊêìËΩ¶) ‚Äî also triggers Active list
+            BYTE typePassive = 1; // Passive/Ingong (õÆêìËΩ)  also triggers Active list
             OnMugongListReq(s, dwCharID, &typePassive, 1);
 
             // Send 0x3B0D (HP/IP bar update) to ensure bars are refreshed with in-memory values

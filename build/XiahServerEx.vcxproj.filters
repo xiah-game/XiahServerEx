@@ -79,6 +79,9 @@
     <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\TradeHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\ShopHandler.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="D:\xiahold\XiahServerEx\GameObjects\DropManager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

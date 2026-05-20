@@ -8,6 +8,24 @@
 #include "../GameObjects/MapInstance.h"
 
 extern std::map<DWORD, CMapInstance*> g_MapInstances;
+#include "ShopHandler.h"
+
+static void SendSystemWarningChat(SOCKET clientSocket, const std::string& msg) {
+    std::vector<BYTE> buf;
+    buf.resize(4, 0);
+    DWORD senderObjID = 0;
+    buf.push_back(senderObjID & 0xFF); buf.push_back((senderObjID >> 8) & 0xFF); buf.push_back((senderObjID >> 16) & 0xFF); buf.push_back(senderObjID >> 24);
+    buf.push_back(8); // CT_TIMEMESSAGE
+    WORD len = (WORD)msg.size();
+    buf.push_back(len & 0xFF); buf.push_back((len >> 8) & 0xFF);
+    buf.insert(buf.end(), msg.begin(), msg.end());
+    WORD packetID = 0x3E02; // CS_CH_CHAT_ACK
+    WORD payloadSize = (WORD)(buf.size() - 4);
+    memcpy(&buf[0], &packetID, 2);
+    memcpy(&buf[2], &payloadSize, 2);
+    EncryptPacket(buf.data(), 0x42);
+    SafeSend(clientSocket, (const char*)buf.data(), (int)buf.size(), 0);
+}
 
 void OnSackItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
     if (charID > 0) {
@@ -418,6 +436,16 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
 
     LOG("[ItemHandler] OnUseItemReq called! charID: " + std::to_string(charID) + " dwItemID: " + std::to_string(dwItemID));
 
+    DWORD pMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+    if (g_MapInstances.count(pMapID)) {
+        std::lock_guard<std::mutex> lock(g_MapInstances[pMapID]->GetMutex());
+        PlayerData* pObj = g_MapInstances[pMapID]->GetPlayer(charID + 400000000);
+        if (pObj && pObj->bShopStatus == 1) {
+            SendSystemWarningChat(clientSocket, "[Shop] Setup is active. Item usage is blocked!");
+            return;
+        }
+    }
+
     auto pushDWord = [&](std::vector<BYTE>& buf, DWORD d) { buf.push_back(d&0xFF); buf.push_back((d>>8)&0xFF); buf.push_back((d>>16)&0xFF); buf.push_back(d>>24); };
     auto pushWord = [&](std::vector<BYTE>& buf, WORD w) { buf.push_back(w&0xFF); buf.push_back(w>>8); };
 
@@ -606,5 +634,7 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
     } else if (tpl.bType == 21) { // Book (Skill)
         DWORD dwMugongID = tpl.nBasicData2;
         MugongManager::GetInstance()->LearnMugong(clientSocket, charID, dwMugongID, targetLevel);
+    } else if (tpl.bType == 32) { // Shop Token
+        ShopHandler::OnOpenShop(clientSocket, charID);
     }
 }

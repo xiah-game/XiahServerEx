@@ -287,6 +287,7 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
             PlayerData& player = pair.second;
             if (player.dwHpCur == 0) continue;
             if (player.dwInvulnerableUntil > tick) continue; // Death/respawn protection
+            if (player.activeBuffs.count(130) > 0) continue; // Ignore players under Turtle Breath (130)
             if (targetId != 0 && player.dwObjectID != targetId) continue;
 
             float dx = (float)player.wPosX - (float)obj.wPosX;

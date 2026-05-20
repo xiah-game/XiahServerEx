@@ -1,8 +1,26 @@
 #include "MoveHandler.h"
 #include "../Network/SessionMgr.h"
 #include "../GameObjects/MapInstance.h"
+#include "../GameObjects/DropManager.h"
 
 extern std::map<DWORD, CMapInstance*> g_MapInstances;
+
+static void SendSystemWarningChat(SOCKET clientSocket, const std::string& msg) {
+    std::vector<BYTE> buf;
+    buf.resize(4, 0);
+    DWORD senderObjID = 0;
+    buf.push_back(senderObjID & 0xFF); buf.push_back((senderObjID >> 8) & 0xFF); buf.push_back((senderObjID >> 16) & 0xFF); buf.push_back(senderObjID >> 24);
+    buf.push_back(8); // CT_TIMEMESSAGE
+    WORD len = (WORD)msg.size();
+    buf.push_back(len & 0xFF); buf.push_back((len >> 8) & 0xFF);
+    buf.insert(buf.end(), msg.begin(), msg.end());
+    WORD packetID = 0x3E02; // CS_CH_CHAT_ACK
+    WORD payloadSize = (WORD)(buf.size() - 4);
+    memcpy(&buf[0], &packetID, 2);
+    memcpy(&buf[2], &payloadSize, 2);
+    EncryptPacket(buf.data(), 0x42);
+    SafeSend(clientSocket, (const char*)buf.data(), (int)buf.size(), 0);
+}
 
 void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize, WORD headerId) {
     DWORD dwMoveID = *(DWORD*)(payload);
@@ -22,6 +40,16 @@ void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize,
             p.wPosX = *(WORD*)(payload + 4); p.wPosY = *(WORD*)(payload + 6);
             mapInst->AddPlayer(p);
             pObj = mapInst->GetPlayer(dwMoveID);
+        }
+        
+        if (pObj && pObj->bShopStatus == 1) {
+            SendSystemWarningChat(clientSocket, "[Shop] Setup is active. Player movement is blocked!");
+            return;
+        }
+
+        if (pObj && pObj->activeBuffs.count(130) > 0) {
+            pObj->activeBuffs[130].dwEndTime = 0; // Mark for instant expiry in MonsterAI loop
+            LOG("[MoveHandler] Player " + std::to_string(dwMoveID) + " moved during Turtle Breath. Expiring buff 130.");
         }
         
         int oldX = pObj->wPosX;
@@ -134,6 +162,9 @@ void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize,
 
     // Check if we need to send an AoI update
     if (needsUpdate) {
+        // Sync any active drops that have newly entered the player's AOI
+        DropManager::GetInstance()->SendActiveDropsInAOI(clientSocket, pMapID, pX, pY, lastUX, lastUY);
+
         std::vector<BYTE> objListBuf;
         objListBuf.resize(4);
         objListBuf.push_back(0); // bResult

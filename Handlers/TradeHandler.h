@@ -99,9 +99,8 @@ private:
     void SendTradeItemAck(SOCKET s, BYTE bResult, DWORD dwTraderID);
     void SendTradeCompleteAck(SOCKET s, DWORD dwTraderID);
     void SendMoneyUpdate(SOCKET s, DWORD charID);
-    void BuildAndSendItemData(SOCKET targetSocket, DWORD ownerObjectID,
-                              BYTE bSrcSackID, BYTE bSrcPos,
-                              BYTE bDesSackID, BYTE bDesPos,
+    void SendTradeSackItemAck(SOCKET targetSocket, WORD packetID, BYTE bResult, DWORD ownerObjectID,
+                              BYTE bSrcSackID, BYTE bSrcPos, BYTE bDesSackID, BYTE bDesPos,
                               DWORD dwItemID, DWORD dwAmount);
 };
 
