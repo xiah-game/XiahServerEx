@@ -2,7 +2,12 @@
 
 #include <vector>
 #include <map>
+#include <mutex>
 #include "../ServerCore.h"
+
+// Drop expiration constants (milliseconds)
+static const DWORD DROP_OWNER_EXCLUSIVE_MS = 25000;  // 0~25s: only killer can pick up
+static const DWORD DROP_LIFETIME_MS        = 60000;  // 60s: item disappears
 
 // Legacy: kept for backward compatibility with NPC_ROOTITEM
 struct sRootItem {
@@ -55,8 +60,9 @@ private:
     // New: Drop Group system
     std::map<BYTE, std::vector<sDropGroup>> m_dropGroups; // NpcType -> groups
     
-    // Active drops on the map
+    // Active drops on the map (protected by m_dropMutex)
     std::map<DWORD, sMapDrop> m_activeDrops; // key: dwMapItemID
+    std::mutex m_dropMutex;
     
     // Singleton instance
     static DropManager* s_instance;
@@ -80,4 +86,8 @@ public:
 
     // Send active drops in the player's AOI (supports both entry full sync and move delta sync)
     void SendActiveDropsInAOI(SOCKET clientSocket, DWORD mapID, int posX, int posY, int lastUX = 0, int lastUY = 0);
+
+    // Periodic cleanup: expire old drops and transition owner-exclusive → public
+    // Called from MonsterAI tick (worker 0 only, every 5 seconds)
+    void CleanupExpiredDrops();
 };

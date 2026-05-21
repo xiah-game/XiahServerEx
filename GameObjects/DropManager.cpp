@@ -147,7 +147,10 @@ void DropManager::DropItemToMap(DWORD killerID, const MonsterData& obj, DWORD it
         }
     }
     
-    m_activeDrops[s_nextMapItemID] = newDrop;
+    {
+        std::lock_guard<std::mutex> lock(m_dropMutex);
+        m_activeDrops[s_nextMapItemID] = newDrop;
+    }
     
     std::vector<BYTE> finalBuf(4 + bw.buf.size());
     PACKET_HEADER* head = (PACKET_HEADER*)finalBuf.data();
@@ -207,7 +210,10 @@ void DropManager::DropMoneyToMap(DWORD killerID, const MonsterData& obj, DWORD a
     newDrop.wPosY = dropY;
     memset(newDrop.nData, 0, sizeof(newDrop.nData));
     
-    m_activeDrops[s_nextMapItemID] = newDrop;
+    {
+        std::lock_guard<std::mutex> lock(m_dropMutex);
+        m_activeDrops[s_nextMapItemID] = newDrop;
+    }
     
     std::vector<BYTE> finalBuf(4 + bw.buf.size());
     PACKET_HEADER* head = (PACKET_HEADER*)finalBuf.data();
@@ -306,21 +312,32 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
     DWORD mapItemID = *((DWORD*)(payload + 13)); 
     DWORD amount = *((DWORD*)(payload + 17));
     
-    auto it = m_activeDrops.end();
-    for (auto i = m_activeDrops.begin(); i != m_activeDrops.end(); ++i) {
-        if (i->second.dbItemID == dbItemID) {
-            it = i;
-            break;
+    sMapDrop drop;
+    {
+        std::lock_guard<std::mutex> lock(m_dropMutex);
+        auto it = m_activeDrops.end();
+        for (auto i = m_activeDrops.begin(); i != m_activeDrops.end(); ++i) {
+            if (i->second.dbItemID == dbItemID) {
+                it = i;
+                break;
+            }
         }
+        
+        if (it == m_activeDrops.end()) {
+            LOG("[DropManager] Pick failed, item not found or already picked! dbItemID: " + std::to_string(dbItemID));
+            return;
+        }
+        
+        // Owner-exclusive check: within first 25 seconds only the killer can pick up
+        DWORD elapsed = GetTickCount() - it->second.dropTime;
+        if (elapsed < DROP_OWNER_EXCLUSIVE_MS && it->second.ownerID != 0 && it->second.ownerID != playerID) {
+            LOG("[DropManager] Pick denied: owner-exclusive period. ownerID=" + std::to_string(it->second.ownerID) + " playerID=" + std::to_string(playerID));
+            return;
+        }
+        
+        drop = it->second;
+        m_activeDrops.erase(it); // Remove from map
     }
-    
-    if (it == m_activeDrops.end()) {
-        LOG("[DropManager] Pick failed, item not found or already picked! dbItemID: " + std::to_string(dbItemID));
-        return;
-    }
-    
-    sMapDrop drop = it->second;
-    m_activeDrops.erase(it); // Remove from map
     
     LOG("[DropManager] Picked up item! RefID: " + std::to_string(drop.wRefID) + " Amount: " + std::to_string(drop.amount));
     
@@ -509,25 +526,28 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
 
 void DropManager::SendActiveDropsInAOI(SOCKET clientSocket, DWORD mapID, int posX, int posY, int lastUX, int lastUY) {
     std::vector<sMapDrop> nearbyDrops;
-    for (const auto& pair : m_activeDrops) {
-        const sMapDrop& drop = pair.second;
-        if (drop.mapID == mapID) {
-            int dx = (int)drop.wPosX - posX;
-            int dy = (int)drop.wPosY - posY;
-            bool inNew = (dx * dx + dy * dy <= 150 * 150);
-            
-            bool inOld = false;
-            if (lastUX > 0 && lastUY > 0) {
-                int odx = (int)drop.wPosX - lastUX;
-                int ody = (int)drop.wPosY - lastUY;
-                inOld = (odx * odx + ody * ody <= 150 * 150);
-            }
-            
-            if (inNew && !inOld) {
-                nearbyDrops.push_back(drop);
+    {
+        std::lock_guard<std::mutex> lock(m_dropMutex);
+        for (const auto& pair : m_activeDrops) {
+            const sMapDrop& drop = pair.second;
+            if (drop.mapID == mapID) {
+                int dx = (int)drop.wPosX - posX;
+                int dy = (int)drop.wPosY - posY;
+                bool inNew = (dx * dx + dy * dy <= 150 * 150);
+                
+                bool inOld = false;
+                if (lastUX > 0 && lastUY > 0) {
+                    int odx = (int)drop.wPosX - lastUX;
+                    int ody = (int)drop.wPosY - lastUY;
+                    inOld = (odx * odx + ody * ody <= 150 * 150);
+                }
+                
+                if (inNew && !inOld) {
+                    nearbyDrops.push_back(drop);
+                }
             }
         }
-    }
+    } // unlock m_dropMutex
     
     if (nearbyDrops.empty()) return;
     
@@ -561,4 +581,55 @@ void DropManager::SendActiveDropsInAOI(SOCKET clientSocket, DWORD mapID, int pos
     memcpy(finalBuf.data() + 4, bw.buf.data(), bw.buf.size());
     EncryptPacket(finalBuf.data(), 0x42);
     SafeSend(clientSocket, (const char*)finalBuf.data(), finalBuf.size(), 0);
+}
+
+void DropManager::CleanupExpiredDrops() {
+    DWORD now = GetTickCount();
+    
+    // Collect expired drops under lock, then broadcast removal outside lock
+    struct ExpiredDrop {
+        DWORD dwMapItemID;
+        DWORD mapID;
+        WORD wPosX;
+        WORD wPosY;
+    };
+    std::vector<ExpiredDrop> expired;
+    
+    {
+        std::lock_guard<std::mutex> lock(m_dropMutex);
+        for (auto it = m_activeDrops.begin(); it != m_activeDrops.end(); ) {
+            DWORD elapsed = now - it->second.dropTime;
+            if (elapsed >= DROP_LIFETIME_MS) {
+                ExpiredDrop ed;
+                ed.dwMapItemID = it->second.dwMapItemID;
+                ed.mapID = it->second.mapID;
+                ed.wPosX = it->second.wPosX;
+                ed.wPosY = it->second.wPosY;
+                expired.push_back(ed);
+                it = m_activeDrops.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    
+    // Broadcast REMOVELISTFROMMAP_ACK (0x4206) for each expired drop
+    for (const auto& ed : expired) {
+        std::vector<BYTE> rmBuf(8);
+        PACKET_HEADER* head = (PACKET_HEADER*)rmBuf.data();
+        head->id = 0x4206; // CS_IM_REMOVELISTFROMMAP_ACK
+        head->payloadSize = 4;
+        *((DWORD*)(rmBuf.data() + 4)) = ed.dwMapItemID;
+        EncryptPacket(rmBuf.data(), 0x42);
+        
+        if (g_MapInstances.count(ed.mapID) && g_MapInstances[ed.mapID]) {
+            g_MapInstances[ed.mapID]->BroadcastPacketAOI(ed.wPosX, ed.wPosY, rmBuf);
+        } else {
+            BroadcastPacketToMap(ed.mapID, rmBuf);
+        }
+    }
+    
+    if (!expired.empty()) {
+        LOG("[DropManager] Cleaned up " + std::to_string(expired.size()) + " expired drops.");
+    }
 }

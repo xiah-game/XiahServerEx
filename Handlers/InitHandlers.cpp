@@ -18,6 +18,7 @@
 #include "StatHandler.h"
 #include "TradeHandler.h"
 #include "ShopHandler.h"
+#include "RepairHandler.h"
 
 void InitPacketHandlers() {
     RegisterHandler(CS_IT_LOGINCHECK_REQ, [](SOCKET s, BYTE* p, WORD size) {
@@ -175,4 +176,5 @@ void InitPacketHandlers() {
     RegisterBankMallHandlers();
     RegisterTradeHandlers();
     RegisterShopHandlers();
+    RegisterRepairHandlers();
 }

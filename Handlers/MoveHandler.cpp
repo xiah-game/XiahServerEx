@@ -84,7 +84,18 @@ void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize,
             pObj->wMoveDesY = *(WORD*)(payload + 11);
             pObj->bMoveDesH = *(BYTE*)(payload + 13);
             pObj->wMoveDirection = *(WORD*)(payload + 14);
-            pObj->bMoveState = *(BYTE*)(payload + 16);
+            
+            BYTE moveState = *(BYTE*)(payload + 16);
+            if (pObj->activeBuffs.count(34) > 0 || 
+                pObj->activeBuffs.count(64) > 0 || 
+                pObj->activeBuffs.count(94) > 0 || 
+                pObj->activeBuffs.count(124) > 0) 
+            {
+                // Force Qinggong state (4) so the client plays the lightness footsteps visual effect
+                moveState = 4;
+            }
+            pObj->bMoveState = moveState;
+            *(BYTE*)(payload + 16) = moveState;
             char dbg[256]; sprintf(dbg, "[MoveTrack] Player %u START/SYNC: pos(%d,%d) -> des(%d,%d) speed=%d bIsMoving=true",
                 pObj->dwObjectID, pObj->wPosX, pObj->wPosY, pObj->wMoveDesX, pObj->wMoveDesY, pObj->wWalkSpeed);
             LOG(std::string(dbg));

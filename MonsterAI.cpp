@@ -5,6 +5,7 @@
 #include "GameObjects/MapInstance.h"
 #include "GameObjects/PlayerManager.h"
 #include "GameObjects/ExpSystem.h"
+#include "GameObjects/DropManager.h"
 #include <cmath>
 #include <thread>
 #include <time.h>
@@ -189,12 +190,12 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
                                 SessionMgr::GetInstance().BroadcastToMap(mapID, endAck);
                             }
                         }
-                        // 2. Recalculate stats for affected players (outside all mutexes)
+                        // 2. Recalculate stats for affected players (outside all mutexes) (do NOT send 0x4414 to prevent clearing client visuals)
                         std::set<DWORD> refreshedChars;
                         for (const auto& eb : expiredBuffs) {
                             if (refreshedChars.count(eb.dwCharID) == 0) {
                                 refreshedChars.insert(eb.dwCharID);
-                                PlayerManager::GetInstance().RecalculateStats(eb.dwCharID, true);
+                                PlayerManager::GetInstance().RecalculateStats(eb.dwCharID, false);
                                 LOG("[BuffExpiry] Refreshed stats for charID " + std::to_string(eb.dwCharID));
                             }
                         }
@@ -202,6 +203,15 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
                 }
             }
             idx++;
+        }
+
+        // === Drop Expiration Cleanup (every 5 seconds, worker 0 only) ===
+        if (workerId == 0) {
+            static DWORD s_lastDropCleanupTime = 0;
+            if (tick - s_lastDropCleanupTime >= 5000) {
+                s_lastDropCleanupTime = tick;
+                DropManager::GetInstance()->CleanupExpiredDrops();
+            }
         }
 
         // === Party Position Sync (every 3 seconds, worker 0 only) ===

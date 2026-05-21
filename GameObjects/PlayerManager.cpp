@@ -73,9 +73,22 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
             pObj->wEquipRestoreHp = equipRestoreHp;
             pObj->wEquipRestoreIp = equipRestoreIp;
             int buffSpd = 0;
-            if (pObj->activeBuffs.count(124) > 0) buffSpd += 5; // õ®ß¾ speed increase
-            if (pObj->activeBuffs.count(94) > 0) buffSpd += 6;  // òðÜÆ speed increase
-            if (pObj->activeBuffs.count(34) > 0) buffSpd += 4;  // ìé×¶æÓ speed increase
+            if (pObj->activeBuffs.count(124) > 0) { // õ®ß¾
+                BYTE lvl = pObj->activeBuffs[124].bLevel;
+                buffSpd += 4 + (lvl > 0 ? lvl : 1);
+            }
+            if (pObj->activeBuffs.count(94) > 0) { // òðÜÆ
+                BYTE lvl = pObj->activeBuffs[94].bLevel;
+                buffSpd += 5 + (lvl > 0 ? lvl : 1);
+            }
+            if (pObj->activeBuffs.count(64) > 0) { // ×Ð÷îÚ°ÜÆ
+                BYTE lvl = pObj->activeBuffs[64].bLevel;
+                buffSpd += 4 + (lvl > 0 ? lvl : 1);
+            }
+            if (pObj->activeBuffs.count(34) > 0) { // ìé×¶æÓ
+                BYTE lvl = pObj->activeBuffs[34].bLevel;
+                buffSpd += 3 + (lvl > 0 ? lvl : 1);
+            }
 
             pObj->wWalkSpeed = 6 + equipSpd + buffSpd;
             // Attack speed: computed on-the-fly in PreAttackReq, not stored on PlayerData

@@ -194,53 +194,69 @@ void OnFunctionalNpcItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload
                 case 5: // CLOAK
                 case 6: // RING
                 case 7: // NECKLACE
-                case 13: // SOCKET
-                case 20: // BONGIN
-                    pushWord(0); // wNeedLevel
-                    pushWord(0); // wNeedDex
-                    pushWord(0); // wNeedStr
-                    pushWord(0); // wNeedSus
-                    pushWord(0); // wNeedVit
-                    pushWord(0); // wDecrDurRate
-                    pushWord(tpl.nBasicData1); // wCurDur
-                    pushWord(tpl.nBasicData1); // wMaxDur
-                    pushWord(tpl.nData4); // wAtkPwr
-                    pushWord(tpl.nData5); // wDefPwr
-                    pushWord(0); // wAtkRating
-                    pushWord(0); // wStkSpeed
-                    pushWord(0); // wAtkRange
-                    pushWord(0); // wIncrHp
-                    pushWord(0); // wIncrIp
+                case 8: // SOCKET
+                case 9: // BONGIN (shield)
+                    pushWord((WORD)tpl.nBasicData1); // wNeedLevel
+                    pushWord((WORD)tpl.nBasicData2); // wNeedDex
+                    pushWord((WORD)tpl.nBasicData3); // wNeedStr
+                    pushWord((WORD)tpl.nBasicData4); // wNeedSus
+                    pushWord((WORD)tpl.nBasicData5); // wNeedVit
+                    pushWord((WORD)tpl.nData1); // wDecrDurRate
+                    pushWord((WORD)tpl.nData2); // wCurDur (from template nData2)
+                    pushWord((WORD)tpl.nData3); // wMaxDur (from template nData3)
+                    pushWord((WORD)tpl.nData4); // wAtkPwr
+                    pushWord((WORD)tpl.nData5); // wDefPwr
+                    pushWord((WORD)tpl.nData6); // wAtkRating
+                    pushWord((WORD)tpl.nData7); // wStkSpeed
+                    pushWord((WORD)tpl.nData8); // wAtkRange
+                    pushWord((WORD)tpl.nData9); // wIncrHp
+                    pushWord((WORD)tpl.nData10); // wIncrIp
                     pushWord(0); // wRestoreHp
                     pushWord(0); // wRestoreIp
-                    pushWord(0); // wIncrCritical
-                    pushWord(0); // wHukjungModityCount
-                    pushWord(0); // wSojungModityCount
+                    pushWord((WORD)tpl.nData13); // wIncrCritical
+                    pushWord(0); // wHukjungModityCount (rebuild rarity)
+                    pushWord(0); // wSojungModityCount (stx type)
                     pushWord(0); // wHuljungModityCount
                     pushWord(0); // wModifyCount
                     
-                    if (tpl.bType == 20) {
+                    if (tpl.bType == 9) { // BONGIN has extra soak fields
                         pushWord(0); // wSoakHPRatio
                         pushWord(0); // wSoakAtkRatio
                         pushWord(0); // wSoakDefRatio
                         pushWord(0); // wSoakHitRatio
                     }
                     break;
+                case 11: // NPCRING
+                case 12: // NPCNECKLACE
+                case 13: // NPCWEAPON
+                case 14: // NPCRIDING
+                case 17: // SADDLE
+                    pushByte(0); // bTemp
+                    pushWord((WORD)tpl.nData2); // wCurDur
+                    pushWord((WORD)tpl.nData3); // wMaxDur
+                    break;
                 case 15: // ITEMTYPE_NPCBAG
                     pushByte(0); // bDecrDurRate
-                    pushWord(tpl.nBasicData1); // wCurDur
-                    pushWord(tpl.nBasicData1); // wMaxDur
+                    pushWord((WORD)tpl.nBasicData1); // wCurDur
+                    pushWord((WORD)tpl.nBasicData1); // wMaxDur
                     break;
                 case 16: // ITEMTYPE_NPCITEM
-                    pushWord(tpl.nData1); // wTamingLevel
-                    pushWord(tpl.nData2); // wNpcItemType
-                    pushWord(tpl.nData3); // wTamingRate
-                    pushWord(tpl.nData4); // wWildRate
-                    pushWord(tpl.nData5); // wIncrHp
+                    pushWord((WORD)tpl.nData1); // wTamingLevel
+                    pushWord((WORD)tpl.nData2); // wNpcItemType
+                    pushWord((WORD)tpl.nData3); // wTamingRate
+                    pushWord((WORD)tpl.nData4); // wWildRate
+                    pushWord((WORD)tpl.nData5); // wIncrHp
+                    break;
+                case 18: // SUNANG (event item)
+                    pushByte(0); // bModifyCnt
+                    break;
+                case 20: // SURESOURCE — client reads bFuncID(1) + dwValue(4)
+                    pushByte(0); // bFuncID
+                    pushDWord(0); // dwValue
                     break;
                 case 23: // ITEMTYPE_POTION
-                    pushWord(tpl.nData1); // wIncrHp
-                    pushWord(tpl.nData2); // wIncrIp
+                    pushWord((WORD)tpl.nBasicData2); // wIncrHp (HP recovery)
+                    pushWord((WORD)tpl.nBasicData3); // wIncrIp (IP recovery)
                     break;
                 case 27: // ITEMTYPE_LOTTO
                     pushByte(0); // bPrizeRank
@@ -248,11 +264,12 @@ void OnFunctionalNpcItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload
                     pushByte(0); // bLottoNum[0]
                     pushByte(0); // bLottoNum[1]
                     pushByte(0); // bLottoNum[2]
+
                     break;
                 case 32: // ITEMTYPE_GISDURABLITY
-                    pushWord(tpl.nData1); // wFunctionItem
-                    pushWord(tpl.nBasicData1); // wCurDur
-                    pushWord(tpl.nBasicData1); // wMaxDur
+                    pushWord((WORD)tpl.nData1); // wFunctionItem
+                    pushWord((WORD)tpl.nBasicData1); // wCurDur
+                    pushWord((WORD)tpl.nBasicData1); // wMaxDur
                     pushDWord(tpl.nData3); // dwValue
                     break;
             }
@@ -281,6 +298,7 @@ void OnBuyItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
     sItemTemplate& tpl = g_ItemTemplates[dwItemID];
 
     DWORD price = tpl.dwCost;
+    WORD npcItemAmount = tpl.wAmount;  // Default to template amount
     DWORD pMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
     if (g_MapInstances.count(pMapID)) {
         CMapInstance* mapInst = g_MapInstances[pMapID];
@@ -288,15 +306,30 @@ void OnBuyItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
         MonsterData* pObj = mapInst->GetMonster(dwShopID);
         if (pObj) {
             for (auto& it : pObj->npcItems) {
-                if (it.dwItemID == dwItemID) {
+                // Match by both item ID and shop position to distinguish stack-1 vs stack-10 entries
+                if (it.dwItemID == dwItemID && it.bPos == bShopSackPos) {
                     if (it.dwPrice > 0) price = it.dwPrice;
+                    if (it.wAmount > 0) npcItemAmount = it.wAmount;
                     break;
+                }
+            }
+            // Fallback: if no positional match, try item-only match
+            if (npcItemAmount == tpl.wAmount) {
+                for (auto& it : pObj->npcItems) {
+                    if (it.dwItemID == dwItemID && it.bSackCnt == bShopSackCnt) {
+                        if (it.dwPrice > 0) price = it.dwPrice;
+                        if (it.wAmount > 0) npcItemAmount = it.wAmount;
+                        break;
+                    }
                 }
             }
         }
     }
 
-    DWORD totalCost = price * dwAmount;
+    // Use NPC item's wAmount as the actual stack size, multiplied by client's buy count
+    DWORD actualAmount = (DWORD)npcItemAmount * dwAmount;
+    DWORD totalCost = price * actualAmount;
+    LOG("[NpcHandler] BuyItem: refID=" + std::to_string(dwItemID) + " npcAmount=" + std::to_string(npcItemAmount) + " clientAmount=" + std::to_string(dwAmount) + " actualAmount=" + std::to_string(actualAmount) + " price=" + std::to_string(price) + " totalCost=" + std::to_string(totalCost));
 
     INT64 currentMoney = (INT64)CharacterDB::GetInstance().GetMoney(charID);
 
@@ -314,8 +347,25 @@ void OnBuyItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
         EncryptPacket(mBuf.data(), 0x42);
         SafeSend(clientSocket, (const char*)mBuf.data(), mBuf.size(), 0);
 
-        DWORD newDbItemID = ItemDB::GetInstance().InsertItem(dwItemID, tpl.bType, tpl.bKind, tpl.wVisualID, tpl.szName, tpl.dwCost, tpl.wLevel, tpl.bCharType, dwAmount);
+        DWORD newDbItemID = ItemDB::GetInstance().InsertItem(dwItemID, tpl.bType, tpl.bKind, tpl.wVisualID, tpl.szName, tpl.dwCost, tpl.wLevel, tpl.bCharType, actualAmount);
         if (newDbItemID == 0) newDbItemID = rand() * rand();
+
+        // Insert ITEMDATA for equipment types so stats persist in DB
+        if (newDbItemID > 0 && tpl.bType >= 1 && tpl.bType <= 9) {
+            int nData[25] = {0};
+            nData[0] = tpl.nData1;  // nData1 = DecrDurRate
+            nData[1] = tpl.nData2;  // nData2 = CurDur
+            nData[2] = tpl.nData3;  // nData3 = MaxDur
+            nData[3] = tpl.nData4;  // nData4 = AtkPwr
+            nData[4] = tpl.nData5;  // nData5 = DefPwr
+            nData[5] = tpl.nData6;  // nData6 = AtkRating
+            nData[6] = tpl.nData7;  // nData7 = StkSpeed
+            nData[7] = tpl.nData8;  // nData8 = AtkRange
+            nData[8] = tpl.nData9;  // nData9 = IncrHp
+            nData[9] = tpl.nData10; // nData10 = IncrIp
+            nData[12] = tpl.nData13; // nData13 = IncrCritical
+            ItemDB::GetInstance().InsertItemData(newDbItemID, nData);
+        }
 
         if (bCharSackPos == 255) {
             BYTE result = FindFreeSackPos(charID, bCharSackCnt, tpl.bCX, tpl.bCY);
@@ -360,45 +410,128 @@ void OnBuyItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
         pushDWord(tpl.dwCost);
         pushWord(tpl.wLevel);
         pushByte(tpl.bCharType);
-        pushWord(dwAmount);
+        pushWord((WORD)actualAmount);
 
-        if (tpl.bType < 10 || tpl.bType == 13 || tpl.bType == 20) {
-            for (int i = 0; i < 85; i++) pushByte(0);
+        if (tpl.bType >= 1 && tpl.bType <= 9) { // Equipment types (WEAPON thru BONGIN)
+            pushWord((WORD)tpl.nBasicData1); // wNeedLevel
+            pushWord((WORD)tpl.nBasicData2); // wNeedDex
+            pushWord((WORD)tpl.nBasicData3); // wNeedStr
+            pushWord((WORD)tpl.nBasicData4); // wNeedSus
+            pushWord((WORD)tpl.nBasicData5); // wNeedVit
+            pushByte((BYTE)tpl.nData1); // bDecrDurRate
+            pushWord((WORD)tpl.nData2); // wCurDur
+            pushWord((WORD)tpl.nData3); // wMaxDur
+            pushWord((WORD)tpl.nData4); // wAtkPwr
+            pushWord((WORD)tpl.nData5); // wDefPwr
+            pushWord((WORD)tpl.nData6); // wAtkRating
+            pushWord((WORD)tpl.nData7); // wStkSpeed
+            pushWord((WORD)tpl.nData8); // wAtkRange
+            pushWord((WORD)tpl.nData9); // wIncrHp
+            pushWord((WORD)tpl.nData10); // wIncrIp
+            pushWord(0); // wRestoreHp
+            pushWord(0); // wRestoreIp
+            pushWord((WORD)tpl.nData13); // wIncrCritical
+            pushByte(0); // bRarity (HukjungModity)
+            pushByte(0); // bStxType (SojungModity)
+            pushByte(0); // bLimitCnt (HuljungModity)
+            pushByte(0); // bModifyCnt
+            pushByte(0); // bRepairCnt
+            pushByte(0); // bRepairDiscount
+            if (tpl.bType == 9) { // BONGIN
+                pushDWord(0); // dwNpcID
+                pushWord(0); // wSoakHPRatio
+                pushWord(0); // wSoakAtkRatio
+                pushWord(0); // wSoakDefRatio
+                pushWord(0); // wSoakHitRatio
+            } else if (tpl.bType == 8) { // SOCKET
+                pushByte(0); // bDanIncExp
+                pushByte(0); // bMopDecAtk
+                pushByte(0); // bMopDecDef
+                pushByte(0); // bMopDecAtkRatio
+                pushByte(0); // bMopDecHP
+                pushByte(0); // bShopDecTax
+                pushByte(0); // bGambleShopDec
+                pushByte(0); // bEffectType
+            } else { // types 1-7
+                pushByte(0); // bPuzzleType
+            }
+            // Socket data for types 1-4 (WEAPON, CLOTH, HAT, SHOE)
+            if (tpl.bType >= 1 && tpl.bType <= 4) {
+                pushByte(0); // bSocketItem[0]
+                pushByte(0); // bSocketItem[1]
+                pushByte(0); // bSocketItem[2]
+                pushWord(0); // wRBSocketItem
+            }
+        } else if (tpl.bType == 11 || tpl.bType == 12 || tpl.bType == 13 || tpl.bType == 14 || tpl.bType == 17) {
+            // NPCRING, NPCNECKLACE, NPCWEAPON, NPCRIDING, SADDLE
+            pushByte(0); // bTemp
+            pushWord((WORD)tpl.nData2); // wCurDur
+            pushWord((WORD)tpl.nData3); // wMaxDur
         } else if (tpl.bType == 15) { // ITEMTYPE_NPCBAG
             pushByte(0); // m_bDecrDurRate
-            pushWord(tpl.nBasicData1); // m_wCurDur
-            pushWord(tpl.nBasicData1); // m_wMaxDur
+            pushWord((WORD)tpl.nBasicData1); // m_wCurDur
+            pushWord((WORD)tpl.nBasicData1); // m_wMaxDur
             pushByte(0); // m_bNpcRace
             pushByte(0); // m_bNpcBagSize
         } else if (tpl.bType == 16) { // ITEMTYPE_NPCITEM
-            pushWord(tpl.nData1); // m_wTamingLevel
-            pushByte(tpl.nData2); // m_bNpcItemType
-            pushWord(tpl.nData3); // m_wTamingRate
-            pushByte(tpl.nData4); // m_bWildRate
-            pushWord(tpl.nData5); // m_wIncrHp
+            pushWord((WORD)tpl.nData1); // m_wTamingLevel
+            pushByte((BYTE)tpl.nData2); // m_bNpcItemType
+            pushWord((WORD)tpl.nData3); // m_wTamingRate
+            pushByte((BYTE)tpl.nData4); // m_bWildRate
+            pushWord((WORD)tpl.nData5); // m_wIncrHp
+        } else if (tpl.bType == 18) { // ITEMTYPE_SUNANG
+            pushByte(0); // m_bFuncID
+            pushDWord(0); // m_dwValue
+            pushWord(0); // m_wCurDur
+            pushWord(0); // m_wMaxDur
+            pushByte(0); // m_bModifyCnt
+        } else if (tpl.bType == 19) { // ITEMTYPE_EVENT
+            pushWord(0); // m_wKeyRefID
+            pushWord(0); // m_wKeyAmount
+        } else if (tpl.bType == 20) { // ITEMTYPE_SURESOURCE
+            pushByte(0); // m_bFuncID
+            pushDWord(0); // m_dwValue
         } else if (tpl.bType == 23) { // ITEMTYPE_POTION
             pushDWord(0); // m_dwKeepUpTime
-            pushWord(tpl.nData1); // m_wIncrHp
-            pushWord(tpl.nData2); // m_wIncrIp
+            pushWord((WORD)tpl.nBasicData2); // m_wIncrHp (HP recovery)
+            pushWord((WORD)tpl.nBasicData3); // m_wIncrIp (IP recovery)
             pushByte(0); // m_bMinLevel
             pushByte(0); // m_bMaxLevel
+        } else if (tpl.bType == 25) { // ITEMTYPE_REBUILDRES
+            pushByte(0); // m_bIsDividedRes
+            pushWord(0); // m_wSuccessRatio
+            pushWord(0); // m_wFactorValue
         } else if (tpl.bType == 27) { // ITEMTYPE_LOTTO
             pushByte(0); // m_bPrizeRank
             pushDWord(0); // m_dwRound
             pushByte(0); pushByte(0); pushByte(0); pushByte(0); // m_bLottoNum[4]
             pushDWord(0); // m_dwPrizeMoney
-        } else if (tpl.bType == 32) { // ITEMTYPE_GISDURABLITY
-            pushWord(tpl.nData1); // m_wFunctionItem
-            pushWord(tpl.nBasicData1); // m_wCurDur
-            pushWord(tpl.nBasicData1); // m_wMaxDur
-            pushDWord(tpl.nData3); // m_dwValue
-        } else if (tpl.bType == 33) { // ITEMTYPE_REBIRTH
+        } else if (tpl.bType == 29) { // ITEMTYPE_MANUAL
+            pushWord(0); // m_wOriginRefID
+            pushWord(0); // m_wUnionRefID
+        } else if (tpl.bType == 31) { // ITEMTYPE_REBIRTH
             pushByte(0); // m_bStepID
-            pushWord(tpl.nData1); // m_wRebirthFuncID
+            pushWord((WORD)tpl.nData1); // m_wRebirthFuncID
             pushWord(0); // m_wRebirthNeedLevel
+        } else if (tpl.bType == 32) { // ITEMTYPE_GISDURABLITY
+            pushWord((WORD)tpl.nData1); // m_wFunctionItem
+            pushWord((WORD)tpl.nBasicData1); // m_wCurDur
+            pushWord((WORD)tpl.nBasicData1); // m_wMaxDur
+            pushDWord(tpl.nData3); // m_dwValue
+        } else if (tpl.bType == 33) { // ITEMTYPE_GISTIMELIMIT (was REBIRTH)
+            // No additional data (PREMIUMQUEST case is 34)
+        } else if (tpl.bType == 34) { // ITEMTYPE_PREMIUMQUEST
+            pushDWord(0); // m_dwPremiumQuestID
+            pushByte(0); // m_bLimitCnt
+        } else if (tpl.bType == 22) { // ITEMTYPE_PORTAL
+            pushDWord((DWORD)tpl.nBasicData2); // m_dwPotalMapID (target map)
+            pushByte(0); // m_bPortalType
+            pushWord(0); // m_wPosX
+            pushWord(0); // m_wPosY
         } else if (tpl.bType == 21) { // ITEMTYPE_BOOK
             DWORD mid = tpl.nBasicData2;
             sMugongTemplate* mg = MugongManager::GetInstance()->GetTemplate(mid);
+
             BYTE type = mg ? mg->bType : 0;
             BYTE kind = mg ? mg->bKind : 0;
             pushWord(tpl.wLevel); // m_wNeedLevel

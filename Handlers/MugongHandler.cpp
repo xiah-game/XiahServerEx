@@ -177,11 +177,24 @@ void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
     
     // Pack remaining bytes
     p[5] = bMugongLevel;
-    p[6] = bAttackType;
+    // Determine if this is a buff skill - buff skills must use p[6]=0 to prevent
+    // CharRender engine corruption. The engine's animation resource pipeline has an
+    // internal bug where buff animation data pollutes the effect_count for subsequent
+    // animations, causing SpawnEffect to fail (pool exhaustion / stale resource pointer).
+    // Original game design: buff PreAttackAcks are silently dropped by client (p[6]=0).
+    // Buff visual feedback comes from 0x402C (KeepUpMugongStartAck) instead.
+    sMugongList* pPreMugong = MugongManager::GetInstance()->GetMugongLevelData(dwMugongID, bMugongLevel);
+    bool isPreBuff = (pPreMugong && pPreMugong->dwKeepUpTime > 0);
+    p[6] = isPreBuff ? 0 : 1;
     *(DWORD*)(p + 7) = dwAttackID;
     *(WORD*)(p + 11) = wAttackPosX;
     *(WORD*)(p + 13) = wAttackPosY;
     p[15] = bAttackHeight;
+    // For self-buff/no-target skills, set defender to self with OBJTYPE_PC
+    if (dwDefenseID == 0) {
+        dwDefenseID = dwAttackID;
+        bDefenseType = 1; // OBJTYPE_PC
+    }
     p[16] = bDefenseType;
     *(DWORD*)(p + 17) = dwDefenseID;
     *(WORD*)(p + 21) = wTargetPosX;
@@ -198,6 +211,80 @@ void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
     // Broadcast to map so everyone sees the pre-attack animation
     DWORD playerMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
     BroadcastPacketToMap(playerMapID, ackBuf);
+
+    // For buff skills (p[6]=0), the client will silently drop the PreAttackAck and
+    // never send MugongAttackReq. So we must process the entire buff here.
+    if (isPreBuff) {
+        // 1. IP Cost deduction
+        if (pPreMugong && pPreMugong->dwCostMp > 0) {
+            if (g_MapInstances.count(playerMapID)) {
+                CMapInstance* mapInst = g_MapInstances[playerMapID];
+                std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+                sServerObject* pObj = mapInst->GetPlayer(dwAttackID);
+                if (pObj) {
+                    if (pObj->wIpCur < (WORD)pPreMugong->dwCostMp) {
+                        LOG("[MugongHandler] PreAttack Buff " + std::to_string(dwMugongID) + " blocked: IP insufficient");
+                        return;
+                    }
+                    pObj->wIpCur -= (WORD)pPreMugong->dwCostMp;
+
+                    // Send IP update (0x3B0D)
+                    std::vector<BYTE> hpBuf(4);
+                    auto push4 = [&](DWORD d) { hpBuf.push_back(d&0xFF); hpBuf.push_back((d>>8)&0xFF); hpBuf.push_back((d>>16)&0xFF); hpBuf.push_back((d>>24)&0xFF); };
+                    auto push2 = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
+                    push4(pObj->dwHpMax);
+                    push4(pObj->dwHpCur);
+                    push2(pObj->wIpMax);
+                    push2(pObj->wIpCur);
+                    hpBuf.push_back(0);
+                    PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
+                    hpHead->id = 0x3B0D;
+                    hpHead->payloadSize = hpBuf.size() - 4;
+                    EncryptPacket(hpBuf.data(), 0x42);
+                    SafeSend(clientSocket, (const char*)hpBuf.data(), hpBuf.size(), 0);
+                }
+            }
+        }
+
+        // 2. Apply buff to player
+        if (g_MapInstances.count(playerMapID)) {
+            CMapInstance* mapInst = g_MapInstances[playerMapID];
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            sServerObject* pObj = mapInst->GetPlayer(dwAttackID);
+            if (pObj) {
+                if (pObj->activeBuffs.count(dwMugongID) > 0) {
+                    pObj->activeBuffs[dwMugongID].dwEndTime = GetTickCount() + (pPreMugong->dwKeepUpTime * 1000);
+                } else {
+                    sServerObject::sActiveBuff newBuff;
+                    newBuff.dwMugongID = dwMugongID;
+                    newBuff.bLevel = bMugongLevel;
+                    newBuff.dwEndTime = GetTickCount() + (pPreMugong->dwKeepUpTime * 1000);
+                    newBuff.bIsDebuff = false;
+                    pObj->activeBuffs[dwMugongID] = newBuff;
+                }
+            }
+        }
+
+        // 3. Broadcast KeepUpMugongStartAck (0x402C) - buff icon
+        std::vector<BYTE> buffAck(4 + 11);
+        BYTE* bp = buffAck.data() + 4;
+        bp[0] = 0;
+        *(DWORD*)(bp + 1) = dwAttackID;
+        bp[5] = 1; // OBJTYPE_PC
+        *(DWORD*)(bp + 6) = dwMugongID;
+        bp[10] = bMugongLevel;
+        PACKET_HEADER* headB = (PACKET_HEADER*)buffAck.data();
+        headB->id = 0x402C;
+        headB->payloadSize = 11;
+        EncryptPacket(buffAck.data(), 0x42);
+        BroadcastPacketToMap(playerMapID, buffAck);
+
+        // 4. Recalculate stats
+        DWORD buffCharID = dwAttackID - 400000000;
+        PlayerManager::GetInstance().RecalculateStats(buffCharID, false);
+
+        LOG("[MugongHandler] Buff " + std::to_string(dwMugongID) + " applied in PreAttackReq for player " + std::to_string(dwAttackID));
+    }
 }
 
 bool IsAoeSkill(DWORD dwMugongID, sMugongTemplate* tpl) {
@@ -248,6 +335,61 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
     // 2. Determine if it's a buff or heal
     bool isBuff = (pMugongData && pMugongData->dwKeepUpTime > 0);
     bool isHeal = (!isBuff && pMugongData && (pMugongData->wIncHpCur > 0 || pMugongData->wIncHpCurPerc > 0 || pMugongData->wIncIpCur > 0 || pMugongData->wIncIpCurPerc > 0) && dwMugongID != 37);
+
+    // 2.5. Perform early IP cost validation and deduction for all non-healing skills
+    if (!isHeal && dwMugongID != 63 && pMugongData && pMugongData->dwCostMp > 0) {
+        if (g_MapInstances.count(playerMapID)) {
+            CMapInstance* mapInst = g_MapInstances[playerMapID];
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            sServerObject* pObj = mapInst->GetPlayer(dwAttackID);
+            if (pObj) {
+                if (pObj->wIpCur < (WORD)pMugongData->dwCostMp) {
+                    LOG("[MugongHandler] Skill " + std::to_string(dwMugongID) + " blocked: IP " 
+                        + std::to_string(pObj->wIpCur) + " < cost " + std::to_string(pMugongData->dwCostMp));
+                    // Send 0x4016 with bResult=5 (IP insufficient) so client shows error message
+                    std::vector<BYTE> failBuf(4 + 38, 0);
+                    BYTE* fp = failBuf.data() + 4;
+                    fp[0] = 3; // bResult = 3 (IDS_SHORT_INLIFE / IP insufficient)
+                    *(DWORD*)(fp + 1) = dwMugongID;
+                    fp[5] = bMugongLevel;
+                    fp[6] = 1; // bAtkType = OBJTYPE_PC (client uses this in FindXiahObject)
+                    *(DWORD*)(fp + 7) = dwAttackID;
+                    *(WORD*)(fp + 11) = wAttackPosX;
+                    *(WORD*)(fp + 13) = wAttackPosY;
+                    fp[15] = bAttackHeight;
+                    fp[16] = 1; // bDefType = OBJTYPE_PC
+                    *(DWORD*)(fp + 17) = dwAttackID; // dwDefID = self
+                    PACKET_HEADER* fh = (PACKET_HEADER*)failBuf.data();
+                    fh->id = 0x4016;
+                    fh->payloadSize = 38;
+                    EncryptPacket(failBuf.data(), 0x42);
+                    SafeSend(clientSocket, (const char*)failBuf.data(), failBuf.size(), 0);
+                    return;
+                }
+                WORD oldIp = pObj->wIpCur;
+                pObj->wIpCur -= (WORD)pMugongData->dwCostMp;
+
+                // Send 0x3B0D to update client HP/IP bars
+                std::vector<BYTE> hpBuf(4);
+                auto push4 = [&](DWORD d) { hpBuf.push_back(d&0xFF); hpBuf.push_back((d>>8)&0xFF); hpBuf.push_back((d>>16)&0xFF); hpBuf.push_back((d>>24)&0xFF); };
+                auto push2 = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
+                push4(pObj->dwHpMax);
+                push4(pObj->dwHpCur);
+                push2(pObj->wIpMax);
+                push2(pObj->wIpCur);
+                hpBuf.push_back(0); // bType
+                PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
+                hpHead->id = 0x3B0D;
+                hpHead->payloadSize = hpBuf.size() - 4;
+                EncryptPacket(hpBuf.data(), 0x42);
+                SafeSend(clientSocket, (const char*)hpBuf.data(), hpBuf.size(), 0);
+
+                LOG("[MugongHandler] Skill " + std::to_string(dwMugongID) + " IP cost deducted early: " 
+                    + std::to_string(oldIp) + " - " + std::to_string(pMugongData->dwCostMp) 
+                    + " = " + std::to_string(pObj->wIpCur));
+            }
+        }
+    }
 
     // 3. Class 4: Healing / HP & IP Recovery Skills
     if (isHeal || dwMugongID == 63) {
@@ -315,7 +457,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
         p[0] = 0; // SUCCESS
         *(DWORD*)(p + 1) = dwMugongID;
         p[5] = bMugongLevel;
-        p[6] = bAttackType;
+        p[6] = 1; // bAtkType = OBJTYPE_PC (client uses this in FindXiahObject)
         *(DWORD*)(p + 7) = dwAttackID;
         *(WORD*)(p + 11) = wAttackPosX;
         *(WORD*)(p + 13) = wAttackPosY;
@@ -395,10 +537,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
             }
         }
 
-        // If it's a duplicate, RETURN EARLY. Do NOT send 0x402C to prevent UI icon duplication!
-        if (isDuplicate) {
-            return;
-        }
+        // Allow recasting so client gets 0x402C and visual effects play every time
 
         std::vector<BYTE> buffAck(4 + 11);
         BYTE* bp = buffAck.data() + 4;
@@ -416,56 +555,29 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
         
         LOG("[MugongHandler] Applied BUFF " + std::to_string(dwMugongID) + " to player " + std::to_string(dwAttackID));
 
-        // Immediately recalculate stats so buff bonuses take effect
+        // Immediately recalculate stats so buff bonuses take effect (do NOT send 0x4414 to prevent clearing client visuals)
         DWORD buffCharID = dwAttackID - 400000000;
-        PlayerManager::GetInstance().RecalculateStats(buffCharID, true);
+        PlayerManager::GetInstance().RecalculateStats(buffCharID, false);
     }
 
-    // 3.5. Deduct IP cost (wReduceIP / dwCostMp) for using the skill
-    if (pMugongData && pMugongData->dwCostMp > 0) {
-        if (g_MapInstances.count(playerMapID)) {
-            CMapInstance* mapInst = g_MapInstances[playerMapID];
-            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-            sServerObject* pObj = mapInst->GetPlayer(dwAttackID);
-            if (pObj) {
-                if (pObj->wIpCur < (WORD)pMugongData->dwCostMp) {
-                    // Not enough IP ?block skill use
-                    LOG("[MugongHandler] Skill " + std::to_string(dwMugongID) + " blocked: IP " 
-                        + std::to_string(pObj->wIpCur) + " < cost " + std::to_string(pMugongData->dwCostMp));
-                    return;
-                }
-                WORD oldIp = pObj->wIpCur;
-                pObj->wIpCur -= (WORD)pMugongData->dwCostMp;
-
-                // Send 0x3B0D to update client HP/IP bars
-                std::vector<BYTE> hpBuf(4);
-                auto push4 = [&](DWORD d) { hpBuf.push_back(d&0xFF); hpBuf.push_back((d>>8)&0xFF); hpBuf.push_back((d>>16)&0xFF); hpBuf.push_back((d>>24)&0xFF); };
-                auto push2 = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
-                push4(pObj->dwHpMax);
-                push4(pObj->dwHpCur);
-                push2(pObj->wIpMax);
-                push2(pObj->wIpCur);
-                hpBuf.push_back(0); // bType
-                PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
-                hpHead->id = 0x3B0D;
-                hpHead->payloadSize = hpBuf.size() - 4;
-                EncryptPacket(hpBuf.data(), 0x42);
-                SafeSend(clientSocket, (const char*)hpBuf.data(), hpBuf.size(), 0);
-
-                LOG("[MugongHandler] Skill " + std::to_string(dwMugongID) + " IP cost: " 
-                    + std::to_string(oldIp) + " - " + std::to_string(pMugongData->dwCostMp) 
-                    + " = " + std::to_string(pObj->wIpCur));
-            }
-        }
-    }
+    // IP cost was already verified and deducted early at step 2.5
 
     // 4. Broadcast AttackAck (0x4016)
+    // IMPORTANT: We must ALWAYS send 0x4016, even for buff skills.
+    // The client's attack state machine requires this ACK to complete the sequence.
+    // Without it, the client gets stuck and all subsequent skills fail to render effects.
+    // For skills with no target (dwDefenseID==0, including self-buffs), set defender to self
+    // with OBJTYPE_PC(1) to prevent client NULL dereference in OnCS_BT_MUGONGATTACK_ACK.
+    if (dwDefenseID == 0) {
+        dwDefenseID = dwAttackID;
+        bDefenseType = 1; // OBJTYPE_PC
+    }
     std::vector<BYTE> ackBuf(4 + 38);
     BYTE* p = ackBuf.data() + 4;
     p[0] = 0; // default bResult
     *(DWORD*)(p + 1) = dwMugongID;
     p[5] = bMugongLevel;
-    p[6] = bAttackType;
+    p[6] = 1; // bAtkType = OBJTYPE_PC (client uses this in FindXiahObject)
     *(DWORD*)(p + 7) = dwAttackID;
     *(WORD*)(p + 11) = wAttackPosX;
     *(WORD*)(p + 13) = wAttackPosY;
@@ -674,7 +786,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                         sp[0] = sResult; 
                         *(DWORD*)(sp + 1) = dwMugongID;
                         sp[5] = bMugongLevel;
-                        sp[6] = bAttackType;
+                        sp[6] = 1; // bAtkType = OBJTYPE_PC (client uses this in FindXiahObject)
                         *(DWORD*)(sp + 7) = dwAttackID;
                         *(WORD*)(sp + 11) = wAttackPosX;
                         *(WORD*)(sp + 13) = wAttackPosY;
@@ -714,7 +826,15 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
     head->id = 0x4016; // CS_BT_MUGONGATTACK_ACK
     head->payloadSize = 38;
     EncryptPacket(ackBuf.data(), 0x42);
-    BroadcastPacketToMap(playerMapID, ackBuf);
+
+    // For buff/self-cast skills, do NOT broadcast 0x4016.
+    // The client's mugong attack flow sends MugongAttackReq directly (not via timer trigger),
+    // so it doesn't need a 0x4016 to "complete" the state machine.
+    // Sending 0x4016 with self-as-defender causes the client to process a "self-hit"
+    // which corrupts the animation rendering state for subsequent skills.
+    if (!isBuff) {
+        BroadcastPacketToMap(playerMapID, ackBuf);
+    }
 
     // Process exp granting, level-ups, and death animations for all dead monsters
     for (auto& de : deadEntities) {

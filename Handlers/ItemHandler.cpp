@@ -412,6 +412,7 @@ void OnItemDropReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
     }
     
     // Drop item onto the map using DropManager
+    // ownerID = 0: anyone can pick up immediately (player-discarded items have no exclusive period)
     DWORD mapID = SessionMgr::GetInstance().GetMapID(clientSocket);
     
     // Build a temporary MonsterData for DropItemToMap position
@@ -420,7 +421,7 @@ void OnItemDropReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
     fakeObj.wPosX = wPosX;
     fakeObj.wPosY = wPosY;
     
-    DropManager::GetInstance()->DropItemToMap(charID, fakeObj, wRefID, false);
+    DropManager::GetInstance()->DropItemToMap(0, fakeObj, wRefID, false);
     
     LOG("[ItemHandler] Item thrown on ground! RefID=" + std::to_string(wRefID));
 }
@@ -596,8 +597,8 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
 
         LOG("[ItemHandler] Teleported char " + std::to_string(charID) + " to Map " + std::to_string(destMap));
     } else if (tpl.bType == 23) { // Potion
-        DWORD incrHp = tpl.nData1;
-        DWORD incrIp = tpl.nData2;
+        DWORD incrHp = tpl.nBasicData2;  // HP recovery from nBasicData2
+        DWORD incrIp = tpl.nBasicData3;  // MP/IP recovery from nBasicData3
         DWORD curHp = 0, maxHp = 0;
         WORD curIp = 0, maxIp = 0;
 

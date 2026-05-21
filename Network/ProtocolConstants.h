@@ -117,6 +117,15 @@ constexpr WORD PKT_REBUILDITEM_REQ     = 0x4243;
 constexpr WORD PKT_REBUILDITEM_ACK     = 0x4244;
 
 // ============================================================
+// Repair (CS_IM family)
+// ============================================================
+constexpr WORD PKT_REPAIRITEM_REQ_ID      = 0x4228;  // OFFSET_CS_IM + 39
+constexpr WORD PKT_REPAIRITEM_ACK_ID      = 0x4229;  // OFFSET_CS_IM + 40
+constexpr WORD PKT_DURABILITY_ACK_ID      = 0x4236;  // OFFSET_CS_IM + 35
+constexpr WORD PKT_REPAIRWITHITEM_REQ_ID  = 0x4247;  // OFFSET_CS_IM + 70
+constexpr WORD PKT_REPAIRWITHITEM_ACK_ID  = 0x4248;  // OFFSET_CS_IM + 71
+
+// ============================================================
 // Bank (CS_NK family)
 // ============================================================
 constexpr WORD PKT_BANKITEMLIST_REQ     = 0x3D30;
