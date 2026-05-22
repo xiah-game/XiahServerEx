@@ -38,6 +38,23 @@ public:
 // Shared map item ID counter
 static DWORD s_nextMapItemID = 5000000;
 
+static void SendSystemWarningChat(SOCKET clientSocket, const std::string& msg) {
+    std::vector<BYTE> buf;
+    buf.resize(4, 0);
+    DWORD senderObjID = 0;
+    buf.push_back(senderObjID & 0xFF); buf.push_back((senderObjID >> 8) & 0xFF); buf.push_back((senderObjID >> 16) & 0xFF); buf.push_back(senderObjID >> 24);
+    buf.push_back(8); // CT_TIMEMESSAGE
+    WORD len = (WORD)msg.size();
+    buf.push_back(len & 0xFF); buf.push_back((len >> 8) & 0xFF);
+    buf.insert(buf.end(), msg.begin(), msg.end());
+    WORD packetID = 0x3E02; // CS_CH_CHAT_ACK
+    WORD payloadSize = (WORD)(buf.size() - 4);
+    memcpy(&buf[0], &packetID, 2);
+    memcpy(&buf[2], &payloadSize, 2);
+    EncryptPacket(buf.data(), 0x42);
+    SafeSend(clientSocket, (const char*)buf.data(), (int)buf.size(), 0);
+}
+
 DropManager* DropManager::s_instance = nullptr;
 
 DropManager* DropManager::GetInstance() {
@@ -108,7 +125,7 @@ void DropManager::DropItemToMap(DWORD killerID, const MonsterData& obj, DWORD it
     DWORD dbItemID = rand() * rand();
     bw.write<DWORD>(dbItemID);
     bw.write<DWORD>(1);         // amount
-    bw.write<DWORD>(killerID);  // ownerID
+    bw.write<DWORD>(0);         // ownerID (always send 0 so client bypasses local check)
     bw.write<BYTE>(0);  // bType
     bw.write<BYTE>(0);  // bFESocket
     bw.write<BYTE>(0);  // bChangeItem
@@ -209,7 +226,7 @@ void DropManager::DropCustomItemToMap(DWORD killerID, const MonsterData& obj, co
     if (dbItemID == 0) dbItemID = rand() * rand();
     bw.write<DWORD>(dbItemID);
     bw.write<DWORD>(row.wAmount); // amount
-    bw.write<DWORD>(killerID);    // ownerID
+    bw.write<DWORD>(0);           // ownerID (always send 0 so client bypasses local check)
     bw.write<BYTE>(0);            // bType
     
     // Set bFESocket based on D.nData18 (row.nData18 > 0)
@@ -289,7 +306,7 @@ void DropManager::DropMoneyToMap(DWORD killerID, const MonsterData& obj, DWORD a
     DWORD dbItemID = rand() * rand();
     bw.write<DWORD>(dbItemID);
     bw.write<DWORD>(amount);
-    bw.write<DWORD>(killerID);
+    bw.write<DWORD>(0);         // ownerID (always send 0 so client bypasses local check)
     bw.write<BYTE>(0);  // bType
     bw.write<BYTE>(0);  // bFESocket
     bw.write<BYTE>(0);  // bChangeItem
@@ -430,8 +447,15 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
         
         // Owner-exclusive check: within first 25 seconds only the killer can pick up
         DWORD elapsed = GetTickCount() - it->second.dropTime;
-        if (elapsed < DROP_OWNER_EXCLUSIVE_MS && it->second.ownerID != 0 && it->second.ownerID != playerID) {
+        DWORD ownerCharID = it->second.ownerID;
+        if (ownerCharID >= 800000000) ownerCharID -= 400000000;
+        
+        DWORD pickerCharID = playerID;
+        if (pickerCharID >= 800000000) pickerCharID -= 400000000;
+
+        if (elapsed < DROP_OWNER_EXCLUSIVE_MS && ownerCharID != 0 && ownerCharID != pickerCharID) {
             LOG("[DropManager] Pick denied: owner-exclusive period. ownerID=" + std::to_string(it->second.ownerID) + " playerID=" + std::to_string(playerID));
+            SendSystemWarningChat(clientSocket, "\x5B\xCF\xB5\xCD\xB3\x5D\x20\xB8\xC3\xCE\xEF\xC6\xB7\xB4\xA6\xD3\xDA\xCB\xF9\xD3\xD0\xD5\xDF\xB1\xA3\xBB\xA4\xC6\xDA\xA3\xAC\xC4\xE3\xD4\xDD\xCA\xB1\xCE\xDE\xB7\xA8\xBC\xF1\xC8\xA1\xA1\xA3");
             return;
         }
         
@@ -730,7 +754,7 @@ void DropManager::SendActiveDropsInAOI(SOCKET clientSocket, DWORD mapID, int pos
         
         bw.write<DWORD>(drop.dbItemID);
         bw.write<DWORD>(drop.amount);
-        bw.write<DWORD>(drop.ownerID);
+        bw.write<DWORD>(0);             // ownerID (always send 0 so client bypasses local check)
         bw.write<BYTE>(0); // bType
         bw.write<BYTE>(0); // bFESocket
         bw.write<BYTE>(0); // bChangeItem
