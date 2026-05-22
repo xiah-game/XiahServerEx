@@ -395,8 +395,12 @@ void OnItemDropReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
         return;
     }
     
-    // Delete from all child FK tables first, then ITEM (avoids FK constraint violations)
-    ItemDB::GetInstance().DeleteItemCascade(dwItemID);
+    // Retrieve full item attributes (sockets, rebuild level, stats) BEFORE deleting from DB
+    ItemDB::FullItemRow row;
+    bool hasFullData = ItemDB::GetInstance().GetFullItemData(dwItemID, row);
+    
+    // Remove the item from the player's backpack mapping, keeping the ITEM and ITEMDATA rows intact in the database
+    ItemDB::GetInstance().RemoveFromSack(charID, dwItemID);
     
     // Send CS_IM_REMOVESACK_ACK (0x4208) to remove from client inventory
     {
@@ -421,7 +425,11 @@ void OnItemDropReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
     fakeObj.wPosX = wPosX;
     fakeObj.wPosY = wPosY;
     
-    DropManager::GetInstance()->DropItemToMap(0, fakeObj, wRefID, false);
+    if (hasFullData) {
+        DropManager::GetInstance()->DropCustomItemToMap(0, fakeObj, row, false);
+    } else {
+        DropManager::GetInstance()->DropItemToMap(0, fakeObj, wRefID, false);
+    }
     
     LOG("[ItemHandler] Item thrown on ground! RefID=" + std::to_string(wRefID));
 }

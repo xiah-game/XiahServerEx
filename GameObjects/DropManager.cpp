@@ -6,9 +6,14 @@
 #include "../DB/CharacterDB.h"
 #include "../Network/SystemMessage.h"
 #include "MapInstance.h"
+#include "../GameObjects/MugongManager.h"
 #include <iostream>
 
 extern std::map<DWORD, CMapInstance*> g_MapInstances;
+
+static void pushByte(std::vector<BYTE>& buf, BYTE b) { buf.push_back(b); }
+static void pushWord(std::vector<BYTE>& buf, WORD w) { buf.push_back(w & 0xFF); buf.push_back((w >> 8) & 0xFF); }
+static void pushDWord(std::vector<BYTE>& buf, DWORD d) { buf.push_back(d & 0xFF); buf.push_back((d >> 8) & 0xFF); buf.push_back((d >> 16) & 0xFF); buf.push_back(d >> 24); }
 
 class BufferWriter {
 public:
@@ -161,6 +166,101 @@ void DropManager::DropItemToMap(DWORD killerID, const MonsterData& obj, DWORD it
     BroadcastPacketToMap(obj.dwMapID, finalBuf);
     
     LOG("[Drop] Dropped Item: " + tpl.szName + " (RefID: " + std::to_string(tpl.wRefID) + ")");
+}
+
+void DropManager::DropCustomItemToMap(DWORD killerID, const MonsterData& obj, const ItemDB::FullItemRow& row, bool useRandomOffset) {
+    auto tplIt = g_ItemTemplates.find((WORD)row.wRefID);
+    if (tplIt == g_ItemTemplates.end()) {
+        LOG("[Drop] Item RefID " + std::to_string(row.wRefID) + " not found in ITEMTEMPLATE!");
+        return;
+    }
+    const sItemTemplate& tpl = tplIt->second;
+    
+    WORD dropX = obj.wPosX;
+    WORD dropY = obj.wPosY;
+    if (useRandomOffset) {
+        dropX += (rand() % 11) - 5;
+        dropY += (rand() % 11) - 5;
+    }
+    
+    BufferWriter bw;
+    bw.write<BYTE>(0);      // bResult
+    bw.write<WORD>(1);      // wItemNum
+    bw.write<DWORD>(obj.dwMapID);
+    bw.write<WORD>(dropX);
+    bw.write<WORD>(dropY);
+    bw.write<BYTE>(0);      // bHeight
+    
+    s_nextMapItemID++;
+    bw.write<DWORD>(s_nextMapItemID);
+    
+    WORD visualID = row.wVisualID;
+    if (visualID == 0) visualID = tpl.wVisualID;
+    if (visualID == 0) visualID = 10050; // Fallback
+    
+    bw.write<BYTE>(row.bType);
+    bw.write<WORD>(visualID);
+    
+    std::string itemName(row.szName);
+    if (itemName.empty()) itemName = tpl.szName;
+    bw.writeString(itemName);
+    
+    DWORD dbItemID = row.dwItemID;
+    if (dbItemID == 0) dbItemID = rand() * rand();
+    bw.write<DWORD>(dbItemID);
+    bw.write<DWORD>(row.wAmount); // amount
+    bw.write<DWORD>(killerID);    // ownerID
+    bw.write<BYTE>(0);            // bType
+    
+    // Set bFESocket based on D.nData18 (row.nData18 > 0)
+    BYTE bFESocket = (row.nData18 > 0) ? 1 : 0;
+    bw.write<BYTE>(bFESocket);    // bFESocket
+    bw.write<BYTE>(0);            // bChangeItem
+    
+    // Create map drop entry
+    sMapDrop newDrop;
+    newDrop.dwMapItemID = s_nextMapItemID;
+    newDrop.dbItemID = dbItemID;
+    newDrop.wRefID = row.wRefID;
+    newDrop.amount = row.wAmount;
+    newDrop.ownerID = killerID;
+    newDrop.dropTime = GetTickCount();
+    newDrop.bType = row.bType;
+    newDrop.wVisualID = visualID;
+    newDrop.name = itemName;
+    newDrop.isMoney = false;
+    newDrop.mapID = obj.dwMapID;
+    newDrop.wPosX = dropX;
+    newDrop.wPosY = dropY;
+    memset(newDrop.nData, 0, sizeof(newDrop.nData));
+    
+    // Copy all 25 stats from row to newDrop.nData
+    for (int i = 0; i < 17; i++) {
+        newDrop.nData[i] = row.d[i];
+    }
+    newDrop.nData[17] = row.nData18; // rarity
+    newDrop.nData[18] = row.nData19; // socket 1
+    newDrop.nData[19] = row.nData20; // socket 2 / rebuild value / dat20
+    newDrop.nData[20] = row.nData21; // socket 3
+    newDrop.nData[21] = 0;
+    newDrop.nData[22] = 0;
+    newDrop.nData[23] = 0;
+    newDrop.nData[24] = row.nData25; // socket 4
+    
+    {
+        std::lock_guard<std::mutex> lock(m_dropMutex);
+        m_activeDrops[s_nextMapItemID] = newDrop;
+    }
+    
+    std::vector<BYTE> finalBuf(4 + bw.buf.size());
+    PACKET_HEADER* head = (PACKET_HEADER*)finalBuf.data();
+    head->id = 0x420C;
+    head->payloadSize = (WORD)bw.buf.size();
+    memcpy(finalBuf.data() + 4, bw.buf.data(), bw.buf.size());
+    EncryptPacket(finalBuf.data(), 0x42);
+    BroadcastPacketToMap(obj.dwMapID, finalBuf);
+    
+    LOG("[Drop] Dropped Custom/Upgraded Item: " + itemName + " (RefID: " + std::to_string(row.wRefID) + ")");
 }
 
 // Helper: drop money to the map
@@ -400,15 +500,22 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
         int startPos = (actualSackID == 1) ? 20 : (actualSackID == 2) ? 60 : 100;
         BYTE relativeSackPos = freePos - startPos;
         
-        // Insert into ITEM table via ItemDB
-        DWORD newDbItemID = ItemDB::GetInstance().CreateItemFromTemplate(drop.wRefID);
+        DWORD newDbItemID = 0;
+        bool existsInDB = (drop.dbItemID > 0 && ItemDB::GetInstance().GetItemRefID(drop.dbItemID) > 0);
         
-        if (newDbItemID == 0) {
-            newDbItemID = rand() * rand(); // Extreme fallback
+        if (existsInDB) {
+            // Re-use the existing database item row!
+            newDbItemID = drop.dbItemID;
+            LOG("[DropManager] Restoring existing player dropped item dwItemID=" + std::to_string(newDbItemID));
         } else {
-            if (drop.bType < 10) {
-                // Insert the memory-rolled stats via ItemDB
-                ItemDB::GetInstance().InsertItemData(newDbItemID, drop.nData);
+            // Create a brand new item for monster drops
+            newDbItemID = ItemDB::GetInstance().CreateItemFromTemplate(drop.wRefID);
+            if (newDbItemID == 0) {
+                newDbItemID = rand() * rand(); // Extreme fallback
+            } else {
+                if (drop.bType < 10) {
+                    ItemDB::GetInstance().InsertItemData(newDbItemID, drop.nData);
+                }
             }
         }
         
@@ -428,93 +535,148 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
             BroadcastPacketToMap(mapID, rmBuf);
         }
         
-        // Use BufferWriter for 0x420A (AddOnSack)
-        BufferWriter bw;
-        bw.write<BYTE>(actualSackID); // bSackID
-        bw.write<BYTE>(relativeSackPos); // bSackPos
+        // Query full item data from DB to ensure all attributes and socket data are correctly initialized
+        ItemDB::FullItemRow row;
+        bool dbQuerySuccess = ItemDB::GetInstance().GetFullItemData(newDbItemID, row);
         
-        // GetItemData format
-        bw.write<DWORD>(newDbItemID);
-        bw.write<WORD>(drop.wRefID);
-        bw.write<BYTE>(drop.bType);
-        bw.write<BYTE>(0); // bItemKind
-        bw.write<WORD>(drop.wVisualID);
-        bw.writeString(drop.name);
-        bw.write<DWORD>(0); // dwPrice
-        bw.write<WORD>(0); // wLevel
-        bw.write<BYTE>(0); // bNeedCharType
-        bw.write<WORD>((WORD)drop.amount); // wAmount
-        
-        // Append weapon/armor stats if needed (zeros for now to avoid crash if client reads it)
-        if (drop.bType >= 1 && drop.bType <= 9) {
-            bw.write<WORD>(0); // m_wNeedLevel
-            bw.write<WORD>(0); // m_wNeedDex
-            bw.write<WORD>(0); // m_wNeedStr
-            bw.write<WORD>(0); // m_wNeedSus
-            bw.write<WORD>(0); // m_wNeedVit
-            bw.write<BYTE>(0); // m_bDecrDurRate
-            bw.write<WORD>(0); // m_wCurDur
-            bw.write<WORD>(0); // m_wMaxDur
-            bw.write<WORD>(drop.nData[1]); // m_wAtkPwr
-            bw.write<WORD>(drop.nData[3]); // m_wDefPwr
-            bw.write<WORD>(0); // m_wAtkRating
-            bw.write<WORD>(0); // m_wStkSpeed
-            bw.write<WORD>(0); // m_wAtkRange
-            bw.write<WORD>(drop.nData[5]); // m_wIncrHp
-            bw.write<WORD>(0); // m_wIncrIp
-            bw.write<WORD>(0); // m_wRestoreHp
-            bw.write<WORD>(0); // m_wRestoreIp
-            bw.write<WORD>(0); // m_wIncrCritical
-            bw.write<BYTE>(0); // m_bRarity
-            bw.write<BYTE>(0); // m_bStxType
-            bw.write<BYTE>(0); // m_bLimitCnt
-            bw.write<BYTE>(0); // m_bModifyCnt
-            bw.write<BYTE>(0); // m_bRepairCnt
-            bw.write<BYTE>(0); // m_bRepairDiscount
+        std::vector<BYTE> bi;
+        bi.resize(4); // header placeholder
+        pushByte(bi, actualSackID);
+        pushByte(bi, relativeSackPos);
+
+        if (dbQuerySuccess) {
+            int vis=row.wVisualID, type=row.bType, kind=row.bKind, lvl=row.wLevel, cost=row.dwCost;
+            int dat18=row.nData18, dat19=row.nData19, dat20=row.nData20, dat21=row.nData21, dat25=row.nData25;
+            int refid=row.wRefID, amount=row.wAmount;
+            int d1=row.d[0], d2=row.d[1], d3=row.d[2], d4=row.d[3], d5=row.d[4], d6=row.d[5], d7=row.d[6];
+            int d8=row.d[7], d9=row.d[8], d10=row.d[9], d11=row.d[10], d12=row.d[11], d13=row.d[12];
+            int d14=row.d[13], d15=row.d[14], d16=row.d[15], d17=row.d[16];
+            char szName[128]; memcpy(szName, row.szName, sizeof(szName));
+
+            int nd1=0, nd2=0, nd3=0, nd4=0, nd5=0;
+            BYTE charType = 1;
+            if (g_ItemTemplates.count(refid)) {
+                if (type == 0) type = g_ItemTemplates[refid].bType;
+                if (kind == 0) kind = g_ItemTemplates[refid].bKind;
+                if (vis == 0) vis = g_ItemTemplates[refid].wVisualID;
+                if (lvl == 0) lvl = g_ItemTemplates[refid].wLevel;
+                if (cost == 0) cost = g_ItemTemplates[refid].dwCost;
+                if (amount == 0) amount = g_ItemTemplates[refid].wAmount;
+                charType = g_ItemTemplates[refid].bCharType;
+                nd1 = g_ItemTemplates[refid].nBasicData1;
+                nd2 = g_ItemTemplates[refid].nBasicData2;
+                nd3 = g_ItemTemplates[refid].nBasicData3;
+                nd4 = g_ItemTemplates[refid].nBasicData4;
+                nd5 = g_ItemTemplates[refid].nBasicData5;
+                if (d1 == -9999) d1 = g_ItemTemplates[refid].nData1;
+                if (d2 == -9999) d2 = g_ItemTemplates[refid].nData2;
+                if (d3 == -9999) d3 = g_ItemTemplates[refid].nData3;
+                if (d4 == -9999) d4 = g_ItemTemplates[refid].nData4;
+                if (d5 == -9999) d5 = g_ItemTemplates[refid].nData5;
+                if (d6 == -9999) d6 = g_ItemTemplates[refid].nData6;
+                if (d7 == -9999) d7 = g_ItemTemplates[refid].nData7;
+                if (d8 == -9999) d8 = g_ItemTemplates[refid].nData8;
+                if (d9 == -9999) d9 = g_ItemTemplates[refid].nData9;
+                if (d10 == -9999) d10 = g_ItemTemplates[refid].nData10;
+            }
+            if (d1 == -9999) d1 = 0; if (d2 == -9999) d2 = 0; if (d3 == -9999) d3 = 0;
+            if (d4 == -9999) d4 = 0; if (d5 == -9999) d5 = 0; if (d6 == -9999) d6 = 0;
+            if (d7 == -9999) d7 = 0; if (d8 == -9999) d8 = 0; if (d9 == -9999) d9 = 0;
+            if (d10 == -9999) d10 = 0; if (d11 == -9999) d11 = 0; if (d12 == -9999) d12 = 0;
+            if (d13 == -9999) d13 = 0; if (d14 == -9999) d14 = 0; if (d15 == -9999) d15 = 0;
+            if (d16 == -9999) d16 = 0; if (d17 == -9999) d17 = 0;
+
+            // GetItemData serialization
+            pushDWord(bi, newDbItemID); pushWord(bi, refid);
+            pushByte(bi, type); pushByte(bi, kind); pushWord(bi, vis);
+            std::string itemName(szName);
+            if (itemName.empty() && g_ItemTemplates.count(refid)) itemName = g_ItemTemplates[refid].szName;
+            pushWord(bi, (WORD)itemName.length());
+            for (char ch : itemName) pushByte(bi, ch);
+            pushDWord(bi, cost); pushWord(bi, lvl); pushByte(bi, charType);
+            pushWord(bi, amount);
             
-            if (drop.bType == 9) { // BONGIN
-                bw.write<DWORD>(0); bw.write<WORD>(0); bw.write<WORD>(0); bw.write<WORD>(0); bw.write<WORD>(0);
-            } else if (drop.bType == 8) { // SOCKET
-                for(int i=0; i<8; i++) bw.write<BYTE>(0);
+            if (type >= 1 && type <= 9) {
+                pushWord(bi, nd1); pushWord(bi, nd2); pushWord(bi, nd3); pushWord(bi, nd4); pushWord(bi, nd5);
+                pushByte(bi, d1);
+                pushWord(bi, d2); pushWord(bi, d3);
+                pushWord(bi, d4); pushWord(bi, d5); pushWord(bi, d6); pushWord(bi, d7); pushWord(bi, d8);
+                pushWord(bi, d9); pushWord(bi, d10); pushWord(bi, d11); pushWord(bi, d12); pushWord(bi, d13);
+                pushByte(bi, dat18); pushByte(bi, dat19);
+                pushByte(bi, d14); pushByte(bi, d15); pushByte(bi, d16); pushByte(bi, d17);
+                if (type == 9) { pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); }
+                else if (type == 8) { for(int i=0;i<8;i++) pushByte(bi, 0); }
+                else { pushByte(bi, 0); }
+                if (type >= 1 && type <= 4) { pushByte(bi, dat19); pushByte(bi, dat20); pushByte(bi, dat21); pushWord(bi, dat25); }
             } else {
-                bw.write<BYTE>(0); // PuzzleType
+                switch (type) {
+                    case 11: case 12: case 13: case 14: case 17: pushByte(bi, 0); pushWord(bi, d2); pushWord(bi, d3); break;
+                    case 15: pushByte(bi, d1); pushWord(bi, d2); pushWord(bi, d3); pushByte(bi, 0); pushByte(bi, 0); break;
+                    case 16: pushWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); break;
+                    case 18: pushByte(bi, 0); pushDWord(bi, 0); pushWord(bi, d2); pushWord(bi, d3); pushByte(bi, 0); break;
+                    case 19: pushWord(bi, 0); pushWord(bi, 0); break;
+                    case 20: pushByte(bi, 0); pushDWord(bi, 0); break;
+                    case 21: { DWORD mid=nd2; sMugongTemplate* mg=MugongManager::GetInstance()->GetTemplate(mid); pushWord(bi, lvl); pushDWord(bi, mid); pushByte(bi, mg?mg->bType:0); pushByte(bi, mg?mg->bKind:0); pushByte(bi, 1); break; }
+                    case 22: pushDWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
+                    case 23: pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); break;
+                    case 25: pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
+                    case 27: pushByte(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushDWord(bi, 0); break;
+                    case 29: pushWord(bi, 0); pushWord(bi, 0); break;
+                    case 32: pushWord(bi, 0); pushWord(bi, d2); pushWord(bi, d3); pushDWord(bi, 0); break;
+                    case 31: pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
+                    case 34: pushDWord(bi, 0); pushByte(bi, 0); break;
+                }
             }
-            
-            if (drop.bType >= 1 && drop.bType <= 4) { // WEAPON, CLOTH, HAT, SHOE
-                bw.write<BYTE>(0); bw.write<BYTE>(0); bw.write<BYTE>(0); // SocketItems
-                bw.write<WORD>(0); // wRBSocketItem (RebuildValue)
-            }
+            pushWord(bi, (WORD)dat20); // wRebuithValue
         } else {
-            switch (drop.bType) {
-                case 11: case 12: case 13: case 14: case 17: bw.write<BYTE>(0); bw.write<WORD>(0); bw.write<WORD>(0); break;
-                case 15: bw.write<BYTE>(0); bw.write<WORD>(0); bw.write<WORD>(0); bw.write<BYTE>(0); bw.write<BYTE>(0); break;
-                case 16: bw.write<WORD>(0); bw.write<BYTE>(0); bw.write<WORD>(0); bw.write<BYTE>(0); bw.write<WORD>(0); break;
-                case 18: bw.write<BYTE>(0); bw.write<DWORD>(0); bw.write<WORD>(0); bw.write<WORD>(0); bw.write<BYTE>(0); break;
-                case 19: bw.write<WORD>(0); bw.write<WORD>(0); break;
-                case 20: bw.write<BYTE>(0); bw.write<DWORD>(0); break;
-                case 21: bw.write<WORD>(0); bw.write<DWORD>(0); bw.write<BYTE>(0); bw.write<BYTE>(0); bw.write<BYTE>(0); break;
-                case 22: bw.write<DWORD>(0); bw.write<BYTE>(0); bw.write<WORD>(0); bw.write<WORD>(0); break;
-                case 23: bw.write<DWORD>(0); bw.write<WORD>(0); bw.write<WORD>(0); bw.write<BYTE>(0); bw.write<BYTE>(0); break;
-                case 25: bw.write<BYTE>(0); bw.write<WORD>(0); bw.write<WORD>(0); break;
-                case 27: bw.write<BYTE>(0); bw.write<DWORD>(0); bw.write<BYTE>(0); bw.write<BYTE>(0); bw.write<BYTE>(0); bw.write<BYTE>(0); bw.write<DWORD>(0); break;
-                case 29: bw.write<WORD>(0); bw.write<WORD>(0); break;
-                case 32: bw.write<WORD>(0); bw.write<WORD>(0); bw.write<WORD>(0); bw.write<DWORD>(0); break;
-                case 31: bw.write<BYTE>(0); bw.write<WORD>(0); bw.write<WORD>(0); break;
-                case 34: bw.write<DWORD>(0); bw.write<BYTE>(0); break;
+            // Extreme fallback: serialize manually using memory drop stats if DB query fails
+            pushDWord(bi, newDbItemID); pushWord(bi, drop.wRefID);
+            pushByte(bi, drop.bType); pushByte(bi, 0); pushWord(bi, drop.wVisualID);
+            pushWord(bi, (WORD)drop.name.length());
+            for (char ch : drop.name) pushByte(bi, ch);
+            pushDWord(bi, 0); pushWord(bi, 0); pushByte(bi, 1);
+            pushWord(bi, (WORD)drop.amount);
+            
+            if (drop.bType >= 1 && drop.bType <= 9) {
+                pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0);
+                pushByte(bi, 0);
+                pushWord(bi, drop.nData[1]); pushWord(bi, drop.nData[3]);
+                pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0);
+                pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0);
+                pushByte(bi, 0); pushByte(bi, 0);
+                pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0);
+                if (drop.bType == 9) { pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); }
+                else if (drop.bType == 8) { for(int i=0;i<8;i++) pushByte(bi, 0); }
+                else { pushByte(bi, 0); }
+                if (drop.bType >= 1 && drop.bType <= 4) { pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushWord(bi, 0); }
+            } else {
+                switch (drop.bType) {
+                    case 11: case 12: case 13: case 14: case 17: pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
+                    case 15: pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); break;
+                    case 16: pushWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); break;
+                    case 18: pushByte(bi, 0); pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushByte(bi, 0); break;
+                    case 19: pushWord(bi, 0); pushWord(bi, 0); break;
+                    case 20: pushByte(bi, 0); pushDWord(bi, 0); break;
+                    case 21: pushWord(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 1); break;
+                    case 22: pushDWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
+                    case 23: pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); break;
+                    case 25: pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
+                    case 27: pushByte(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushDWord(bi, 0); break;
+                    case 29: pushWord(bi, 0); pushWord(bi, 0); break;
+                    case 32: pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushDWord(bi, 0); break;
+                    case 31: pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
+                    case 34: pushDWord(bi, 0); pushByte(bi, 0); break;
+                }
             }
+            pushWord(bi, 0); // wRebuithValue
         }
         
-        // wRebuithValue - client reads this WORD after GetItemData() in OnCS_IM_ADDONSACK_ACK
-        bw.write<WORD>(0);
+        PACKET_HEADER* addHead = (PACKET_HEADER*)bi.data();
+        addHead->id = 0x420A; // CS_IM_ADDONSACK_ACK
+        addHead->payloadSize = (WORD)(bi.size() - 4);
         
-        std::vector<BYTE> addBuf(4 + bw.buf.size()); 
-        head = (PACKET_HEADER*)addBuf.data();
-        head->id = 0x420A;
-        head->payloadSize = (WORD)bw.buf.size();
-        memcpy(addBuf.data() + 4, bw.buf.data(), bw.buf.size());
-        
-        EncryptPacket(addBuf.data(), 0x42);
-        SafeSend(clientSocket, (const char*)addBuf.data(), addBuf.size(), 0);
+        EncryptPacket(bi.data(), 0x42);
+        SafeSend(clientSocket, (const char*)bi.data(), bi.size(), 0);
         
         std::string itemName = "Unknown Item";
         if (g_ItemTemplates.count(drop.wRefID)) {
@@ -606,6 +768,12 @@ void DropManager::CleanupExpiredDrops() {
                 ed.wPosX = it->second.wPosX;
                 ed.wPosY = it->second.wPosY;
                 expired.push_back(ed);
+                
+                // If it is an existing player dropped item, clean it up from database when it expires!
+                if (!it->second.isMoney && it->second.dbItemID > 0 && ItemDB::GetInstance().GetItemRefID(it->second.dbItemID) > 0) {
+                    ItemDB::GetInstance().DeleteItemCascade(it->second.dbItemID);
+                }
+                
                 it = m_activeDrops.erase(it);
             } else {
                 ++it;

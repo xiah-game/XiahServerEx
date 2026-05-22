@@ -56,7 +56,7 @@ void ItemDB::InsertItemData(DWORD dwItemID, const int nData[25]) {
                     "nData6, nData7, nData8, nData9, nData10, nData11, nData12, nData13, nData14, "
                     "nData15, nData16, nData17, nData18, nData19, nData20, nData21, nData22, "
                     "nData23, nData24, nData25) VALUES (" + std::to_string(dwItemID) + ", " + vals + ")";
-    DBHelper::GetInstance().ExecuteQuery(q, [](SQLHSTMT){});
+    DBHelper::GetInstance().ExecuteUpdate(q);
 }
 
 void ItemDB::UpdateItemData(DWORD dwItemID, int fieldIndex, int value) {

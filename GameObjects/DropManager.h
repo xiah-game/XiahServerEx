@@ -4,6 +4,7 @@
 #include <map>
 #include <mutex>
 #include "../ServerCore.h"
+#include "../DB/ItemDB.h"
 
 // Drop expiration constants (milliseconds)
 static const DWORD DROP_OWNER_EXCLUSIVE_MS = 25000;  // 0~25s: only killer can pick up
@@ -76,6 +77,7 @@ public:
     
     // Drop helpers (also used by ItemHandler for throw-item)
     void DropItemToMap(DWORD killerID, const MonsterData& obj, DWORD itemRefID, bool useRandomOffset = true);
+    void DropCustomItemToMap(DWORD killerID, const MonsterData& obj, const ItemDB::FullItemRow& row, bool useRandomOffset = false);
     void DropMoneyToMap(DWORD killerID, const MonsterData& obj, DWORD amount);
     
     // Roll and generate drops for a killed monster

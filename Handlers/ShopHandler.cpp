@@ -628,7 +628,7 @@ namespace ShopHandler {
     }
 
     void OnDelShopReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
-        if (size < 8) return;
+        if (size < 7) return;
         BYTE bShopSackPos = payload[0];
         DWORD dwItemID = *(DWORD*)(payload + 1);
         BYTE bSackID = payload[5];
