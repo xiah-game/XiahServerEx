@@ -19,6 +19,7 @@
 #include "TradeHandler.h"
 #include "ShopHandler.h"
 #include "RepairHandler.h"
+#include "MunpaHandler.h"
 
 void InitPacketHandlers() {
     RegisterHandler(CS_IT_LOGINCHECK_REQ, [](SOCKET s, BYTE* p, WORD size) {
@@ -121,7 +122,6 @@ void InitPacketHandlers() {
 
     // Map & Loading Handlers
     RegisterHandler(0x3A55, [](SOCKET s, BYTE* p, WORD size) { OnMapLoadingSequenceReq(s, SessionMgr::GetInstance().GetCharID(s), p, size, 0x3A55); });
-    RegisterHandler(0x3A34, [](SOCKET s, BYTE* p, WORD size) { OnMapLoadingSequenceReq(s, SessionMgr::GetInstance().GetCharID(s), p, size, 0x3A34); });
     RegisterHandler(0x3203, [](SOCKET s, BYTE* p, WORD size) { OnMapLoadingSequenceReq(s, SessionMgr::GetInstance().GetCharID(s), p, size, 0x3203); });
     RegisterHandler(0x3903, [](SOCKET s, BYTE* p, WORD size) { OnMapLoadingSequenceReq(s, SessionMgr::GetInstance().GetCharID(s), p, size, 0x3903); });
     
@@ -177,4 +177,5 @@ void InitPacketHandlers() {
     RegisterTradeHandlers();
     RegisterShopHandlers();
     RegisterRepairHandlers();
+    RegisterMunpaHandlers();
 }

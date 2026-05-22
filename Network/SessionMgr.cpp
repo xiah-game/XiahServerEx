@@ -50,6 +50,7 @@ void SessionMgr::RemoveConnection(SOCKET s) {
     m_socketToChar.erase(s);
     m_socketToMap.erase(s);
     m_socketToAccount.erase(s);
+    m_socketSecurity.erase(s);
 }
 
 void SessionMgr::ForEachSocket(std::function<void(SOCKET)> fn) {
@@ -130,4 +131,48 @@ void SessionMgr::BroadcastToAll(const std::vector<BYTE>& packet) {
 std::vector<SOCKET> SessionMgr::GetAllSockets() {
     std::lock_guard<std::mutex> lock(m_mutex);
     return m_sockets;
+}
+
+void SessionMgr::SetTicketId(SOCKET s, DWORD ticketId) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_socketSecurity[s].ticketId = ticketId;
+}
+
+DWORD SessionMgr::GetTicketId(SOCKET s) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_socketSecurity.count(s) ? m_socketSecurity[s].ticketId : 0;
+}
+
+bool SessionMgr::AcceptSequence(SOCKET s, uint32_t seq) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (seq == 0) return false;
+    
+    auto& sec = m_socketSecurity[s];
+    if (sec.maxSeq == 0) {
+        // Initialize sequence tracking on first accepted sequence
+        sec.maxSeq = seq;
+        sec.seqWindow = 1;
+        return true;
+    }
+    
+    if (seq > sec.maxSeq) {
+        uint32_t diff = seq - sec.maxSeq;
+        if (diff >= 64) {
+            sec.seqWindow = 1; // Slide beyond window capacity
+        } else {
+            sec.seqWindow <<= diff;
+            sec.seqWindow |= 1;
+        }
+        sec.maxSeq = seq;
+        return true;
+    }
+    
+    uint32_t diff = sec.maxSeq - seq;
+    if (diff >= 64) return false; // Sequence too old
+    
+    uint64_t mask = (1ULL << diff);
+    if (sec.seqWindow & mask) return false; // Replay!
+    
+    sec.seqWindow |= mask;
+    return true;
 }

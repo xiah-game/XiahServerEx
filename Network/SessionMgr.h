@@ -51,12 +51,24 @@ public:
     // Returns a copy of all sockets (for use outside lock)
     std::vector<SOCKET> GetAllSockets();
 
+    // --- Security Verification ---
+    void SetTicketId(SOCKET s, DWORD ticketId);
+    DWORD GetTicketId(SOCKET s);
+    bool AcceptSequence(SOCKET s, uint32_t seq);
+
 private:
     SessionMgr() {}
+
+    struct SocketSecurityState {
+        DWORD ticketId = 0;
+        uint32_t maxSeq = 0;
+        uint64_t seqWindow = 0;
+    };
 
     std::mutex m_mutex;
     std::vector<SOCKET> m_sockets;              // replaces g_UnitSockets
     std::map<SOCKET, DWORD> m_socketToChar;     // replaces g_SocketToChar
     std::map<SOCKET, DWORD> m_socketToMap;      // replaces g_SocketToMap
     std::map<SOCKET, std::string> m_socketToAccount;
+    std::map<SOCKET, SocketSecurityState> m_socketSecurity;
 };

@@ -24,6 +24,7 @@ set(SOURCES
     Network/SessionMgr.cpp
     Network/SystemMessage.cpp
     Network/PacketBuilder.cpp
+    Network/AuthCenter.cpp
     Handlers/InitHandlers.cpp
     Handlers/LoginHandler.cpp
     Handlers/ItemHandler.cpp
@@ -42,6 +43,7 @@ set(SOURCES
     Handlers/TradeHandler.cpp
     Handlers/ShopHandler.cpp
     Handlers/RepairHandler.cpp
+    Handlers/MunpaHandler.cpp
     GameObjects/DropManager.cpp
     GameObjects/ExpSystem.cpp
     DB/CharacterDB.cpp

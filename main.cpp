@@ -1,8 +1,10 @@
 #include "ServerCore.h"
 #include "AuthServer.h"
 #include "UnitServer.h"
+#include "Network/AuthCenter.h"
 #include <thread>
 #include <fstream>
+#include <chrono>
 
 #include <ctime>
 
@@ -28,6 +30,15 @@ int main() {
     LoadGameData();
     LoadWorldObjects();
     std::thread unitThread(RunUnitSvr);
+
+    std::thread cleanupThread([]() {
+        while (true) {
+            std::this_thread::sleep_for(std::chrono::seconds(30));
+            AuthCenter::Get().CleanupExpired();
+        }
+    });
+    cleanupThread.detach();
+
     RunAuthSvr();
 
     unitThread.join();

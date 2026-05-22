@@ -123,7 +123,27 @@ struct PlayerData : EntityBase {
     std::string strShopName;
     std::string strShopDescription;
 
-    PlayerData() { bObjectType = 1; }
+    // Munpa / Sect properties
+    DWORD dwMunpaID = 0;
+    DWORD dwMunpaOrder = 0;
+    std::string szMunpaName;
+    std::string szMunpaNickName;
+    DWORD dwMunpaMarkID = 0;
+
+    // Visual equipment and Fame sync
+    DWORD dwFame = 0;
+    WORD  wVisualID[9] = {0};
+    BYTE  bRarity[9] = {0};
+    BYTE  bStxType[9] = {0};
+    BYTE  bNeedCharType[9] = {0};
+
+    PlayerData() { 
+        bObjectType = 1; 
+        memset(wVisualID, 0, sizeof(wVisualID));
+        memset(bRarity, 0, sizeof(bRarity));
+        memset(bStxType, 0, sizeof(bStxType));
+        memset(bNeedCharType, 0, sizeof(bNeedCharType));
+    }
 };
 
 struct MonsterData : EntityBase {

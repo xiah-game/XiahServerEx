@@ -455,3 +455,192 @@ void CharacterDB::GetCharMugongs(DWORD dwCharID, std::map<DWORD, BYTE>& out) {
         if (c1 != SQL_NULL_DATA && c2 != SQL_NULL_DATA) out[mid] = (BYTE)lvl;
     });
 }
+
+bool CharacterDB::GetCharMunpaInfo(DWORD dwCharID, DWORD& dwMunpaID, DWORD& dwMunpaOrder, std::string& szMunpaName, std::string& szMunpaNickName, DWORD& dwMarkID) {
+    dwMunpaID = 0; dwMunpaOrder = 0; szMunpaName = ""; szMunpaNickName = ""; dwMarkID = 0;
+    std::string q = "SELECT B.dwMunpaID, ISNULL(M.szName, ''), B.dwMunpaOrder, ISNULL(B.szMunpaNickName, ''), ISNULL(M.dwMarkID, 0) "
+                    "FROM CHAR_BASIC B "
+                    "LEFT JOIN MUNPA_BASIC M ON B.dwMunpaID = M.dwMunpaID "
+                    "WHERE B.dwCharID = " + std::to_string(dwCharID);
+    bool found = false;
+    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+        SQLLEN c;
+        char nameBuf[64] = {0};
+        char nickBuf[64] = {0};
+        SQLGetData(hStmt, 1, SQL_C_ULONG, &dwMunpaID, 0, &c);
+        SQLGetData(hStmt, 2, SQL_C_CHAR, nameBuf, sizeof(nameBuf), &c);
+        SQLGetData(hStmt, 3, SQL_C_ULONG, &dwMunpaOrder, 0, &c);
+        SQLGetData(hStmt, 4, SQL_C_CHAR, nickBuf, sizeof(nickBuf), &c);
+        SQLGetData(hStmt, 5, SQL_C_ULONG, &dwMarkID, 0, &c);
+        szMunpaName = nameBuf;
+        szMunpaNickName = nickBuf;
+        found = true;
+    });
+    return found && (dwMunpaID > 0);
+}
+
+bool CharacterDB::ExecCreateMunpa(const std::string& szMunpaName, DWORD dwCreatorID, DWORD dwCurrentTime, BYTE bMunpaLevel, BYTE& bResult, DWORD& dwMunpaID, WORD& wTotalTp, WORD& wRemainTp) {
+    bResult = 99; dwMunpaID = 0; wTotalTp = 0; wRemainTp = 0;
+    std::string q = "DECLARE @bResult TINYINT; DECLARE @dwMunpaID INT; DECLARE @wTotalTp SMALLINT; DECLARE @wRemainTp SMALLINT; "
+                    "EXEC spCreateMunpa '" + szMunpaName + "', " + std::to_string(dwCurrentTime) + ", " + std::to_string(dwCreatorID) + ", " + std::to_string(bMunpaLevel) + ", @bResult OUTPUT, @dwMunpaID OUTPUT, @wTotalTp OUTPUT, @wRemainTp OUTPUT; "
+                    "SELECT @bResult, @dwMunpaID, @wTotalTp, @wRemainTp;";
+    bool executed = false;
+    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+        SQLLEN c;
+        int res = 0, mId = 0, total = 0, remain = 0;
+        SQLGetData(hStmt, 1, SQL_C_SLONG, &res, 0, &c);
+        SQLGetData(hStmt, 2, SQL_C_SLONG, &mId, 0, &c);
+        SQLGetData(hStmt, 3, SQL_C_SLONG, &total, 0, &c);
+        SQLGetData(hStmt, 4, SQL_C_SLONG, &remain, 0, &c);
+        bResult = (BYTE)res;
+        dwMunpaID = (DWORD)mId;
+        wTotalTp = (WORD)total;
+        wRemainTp = (WORD)remain;
+        executed = true;
+    });
+    return executed;
+}
+
+bool CharacterDB::ExecDeleteMunpa(DWORD dwMunpaID, BYTE& bResult) {
+    bResult = 99;
+    std::string q = "DECLARE @bResult TINYINT; "
+                    "EXEC spDeleteMunpa " + std::to_string(dwMunpaID) + ", @bResult OUTPUT; "
+                    "SELECT @bResult;";
+    bool executed = false;
+    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+        SQLLEN c;
+        int res = 0;
+        SQLGetData(hStmt, 1, SQL_C_SLONG, &res, 0, &c);
+        bResult = (BYTE)res;
+        executed = true;
+    });
+    return executed;
+}
+
+bool CharacterDB::ExecAddMunwon(DWORD dwMunpaID, DWORD dwOrderID, DWORD dwMunwonID, BYTE& bResult) {
+    bResult = 99;
+    std::string q = "DECLARE @bResult SMALLINT; "
+                    "EXEC Munpa_AddMunwon " + std::to_string(dwMunpaID) + ", " + std::to_string(dwOrderID) + ", " + std::to_string(dwMunwonID) + ", @bResult OUTPUT; "
+                    "SELECT @bResult;";
+    bool executed = false;
+    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+        SQLLEN c;
+        int res = 0;
+        SQLGetData(hStmt, 1, SQL_C_SLONG, &res, 0, &c);
+        bResult = (BYTE)res;
+        executed = true;
+    });
+    return executed;
+}
+
+bool CharacterDB::ExecChangeMunwon(DWORD dwMunpaID, DWORD dwMunwonID, DWORD dwOldOrderID, DWORD dwNewOrderID, BYTE& bResult) {
+    bResult = 99;
+    std::string q = "DECLARE @bResult TINYINT; "
+                    "EXEC Munpa_ChangeMunwon " + std::to_string(dwMunpaID) + ", " + std::to_string(dwMunwonID) + ", " + std::to_string(dwOldOrderID) + ", " + std::to_string(dwNewOrderID) + ", @bResult OUTPUT; "
+                    "SELECT @bResult;";
+    bool executed = false;
+    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+        SQLLEN c;
+        int res = 0;
+        SQLGetData(hStmt, 1, SQL_C_SLONG, &res, 0, &c);
+        bResult = (BYTE)res;
+        executed = true;
+    });
+    return executed;
+}
+
+bool CharacterDB::ExecChangeMunpaNick(DWORD dwMunpaID, DWORD dwMunwonID, const std::string& szMunpaNick, BYTE& bResult) {
+    bResult = 99;
+    std::string q = "DECLARE @bResult TINYINT; "
+                    "EXEC Munpa_ChangeMunpaNick " + std::to_string(dwMunpaID) + ", " + std::to_string(dwMunwonID) + ", '" + szMunpaNick + "', @bResult OUTPUT; "
+                    "SELECT @bResult;";
+    bool executed = false;
+    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+        SQLLEN c;
+        int res = 0;
+        SQLGetData(hStmt, 1, SQL_C_SLONG, &res, 0, &c);
+        bResult = (BYTE)res;
+        executed = true;
+    });
+    return executed;
+}
+
+bool CharacterDB::ExecMunpaMarkReg(BYTE bRegType, DWORD dwMunpaID, const std::string& szMarkImage, DWORD& dwMarkID, BYTE& bResult) {
+    dwMarkID = 0; bResult = 99;
+    std::string q = "DECLARE @dwMarkID INT; DECLARE @bResult TINYINT; "
+                    "EXEC spMunpaMarkReg " + std::to_string(bRegType) + ", " + std::to_string(dwMunpaID) + ", '" + szMarkImage + "', @dwMarkID OUTPUT, @bResult OUTPUT; "
+                    "SELECT @dwMarkID, @bResult;";
+    bool executed = false;
+    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+        SQLLEN c;
+        int mId = 0, res = 0;
+        SQLGetData(hStmt, 1, SQL_C_SLONG, &mId, 0, &c);
+        SQLGetData(hStmt, 2, SQL_C_SLONG, &res, 0, &c);
+        dwMarkID = (DWORD)mId;
+        bResult = (BYTE)res;
+        executed = true;
+    });
+    return executed;
+}
+
+bool CharacterDB::ExecGainMunpaStone(DWORD dwMunjuID, DWORD dwMunpaID, DWORD dwStoneID, DWORD dwCurrentTime, int& bResult, BYTE& bChannelID, DWORD& dwMapID) {
+    bResult = 99; bChannelID = 0; dwMapID = 0;
+    std::string q = "DECLARE @bResult INT; DECLARE @bChannelID TINYINT; DECLARE @dwMapID TINYINT; "
+                    "EXEC spGainMunpaStone " + std::to_string(dwMunjuID) + ", " + std::to_string(dwMunpaID) + ", " + std::to_string(dwStoneID) + ", " + std::to_string(dwCurrentTime) + ", @bResult OUTPUT, @bChannelID OUTPUT, @dwMapID OUTPUT; "
+                    "SELECT @bResult, @bChannelID, @dwMapID;";
+    bool executed = false;
+    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+        SQLLEN c;
+        int res = 0, chan = 0, map = 0;
+        SQLGetData(hStmt, 1, SQL_C_SLONG, &res, 0, &c);
+        SQLGetData(hStmt, 2, SQL_C_SLONG, &chan, 0, &c);
+        SQLGetData(hStmt, 3, SQL_C_SLONG, &map, 0, &c);
+        bResult = res;
+        bChannelID = (BYTE)chan;
+        dwMapID = (DWORD)map;
+        executed = true;
+    });
+    return executed;
+}
+
+void CharacterDB::LoadVisualEquipAndFame(DWORD dwCharID, PlayerData* pObj) {
+    if (!pObj) return;
+
+    memset(pObj->wVisualID, 0, sizeof(pObj->wVisualID));
+    memset(pObj->bRarity, 0, sizeof(pObj->bRarity));
+    memset(pObj->bStxType, 0, sizeof(pObj->bStxType));
+    memset(pObj->bNeedCharType, 0, sizeof(pObj->bNeedCharType));
+
+    CharPower cp;
+    if (GetCharData(dwCharID, cp)) {
+        pObj->dwFame = cp.dwFame;
+    }
+
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT bSackPos, wVisualID FROM vCHAR_EQUIPITEM WHERE dwCharID = " + std::to_string(dwCharID),
+        [&](SQLHSTMT hStmt) {
+            char pos = 0; short vis = 0; SQLLEN c1, c2;
+            SQLGetData(hStmt, 1, SQL_C_STINYINT, &pos, 0, &c1);
+            if (c1 == SQL_NULL_DATA) pos = 0;
+            SQLGetData(hStmt, 2, SQL_C_SSHORT, &vis, 0, &c2);
+            if (c2 == SQL_NULL_DATA) vis = 0;
+            if (pos >= 0 && pos < 9) {
+                pObj->wVisualID[pos] = (WORD)vis;
+            }
+        });
+
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT bSackPos, bStxType, bRarity FROM vCHAR_EQUIPITEMDATA WHERE dwCharID = " + std::to_string(dwCharID),
+        [&](SQLHSTMT hStmt) {
+            char pos = 0, stx = 0, rar = 0; SQLLEN c1, c2, c3;
+            SQLGetData(hStmt, 1, SQL_C_STINYINT, &pos, 0, &c1);
+            SQLGetData(hStmt, 2, SQL_C_STINYINT, &stx, 0, &c2);
+            if (c2 == SQL_NULL_DATA) stx = 0;
+            SQLGetData(hStmt, 3, SQL_C_STINYINT, &rar, 0, &c3);
+            if (c3 == SQL_NULL_DATA) rar = 0;
+            if (pos >= 0 && pos < 9) {
+                pObj->bStxType[pos] = (BYTE)stx;
+                pObj->bRarity[pos] = (BYTE)rar;
+            }
+        });
+}

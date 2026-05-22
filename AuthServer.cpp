@@ -3,6 +3,7 @@
 #include "../XiahClient/csprotocol.h"
 #include "DBHelper.h"
 #include "DB/CharacterDB.h"
+#include "Network/AuthCenter.h"
 #include <thread>
 
 void RunAuthSvr() {
@@ -29,11 +30,14 @@ void RunAuthSvr() {
     LOG("[AuthSvr " + std::to_string(g_Config.authPort) + "] Online and listening...");
 
     while (true) {
-        SOCKET clientSocket = accept(listenSocket, NULL, NULL);
+        sockaddr_in clientAddr;
+        int addrLen = sizeof(clientAddr);
+        SOCKET clientSocket = accept(listenSocket, (sockaddr*)&clientAddr, &addrLen);
         if (clientSocket == INVALID_SOCKET) continue;
-        LOG("[AuthSvr " + std::to_string(g_Config.authPort) + "] Client connected!");
+        std::string clientIp = inet_ntoa(clientAddr.sin_addr);
+        LOG("[AuthSvr " + std::to_string(g_Config.authPort) + "] Client connected from IP: " + clientIp);
 
-        std::thread([clientSocket]() {
+        std::thread([clientSocket, clientIp]() {
             try {
                 std::vector<BYTE> initBuf(5);
                 PACKET_HEADER* initHead = (PACKET_HEADER*)initBuf.data();
@@ -129,7 +133,14 @@ void RunAuthSvr() {
                         
                         std::vector<BYTE> ackBuf; ackBuf.resize(4); 
                         ackBuf.push_back(bLoginResult); // bResult
-                        DWORD dwKey = 46; ackBuf.push_back((BYTE)(dwKey & 0xFF)); ackBuf.push_back((BYTE)((dwKey >> 8) & 0xFF)); ackBuf.push_back((BYTE)((dwKey >> 16) & 0xFF)); ackBuf.push_back((BYTE)(dwKey >> 24));
+                        
+                        DWORD dwKey = 46;
+                        if (bLoginResult == 0) {
+                            AuthTicket ticket = AuthCenter::Get().Issue(username, accountId, 0xFF, clientIp);
+                            dwKey = ticket.ticketId;
+                        }
+
+                        ackBuf.push_back((BYTE)(dwKey & 0xFF)); ackBuf.push_back((BYTE)((dwKey >> 8) & 0xFF)); ackBuf.push_back((BYTE)((dwKey >> 16) & 0xFF)); ackBuf.push_back((BYTE)(dwKey >> 24));
                         ackBuf.push_back(18); // bAge = 18 (Bypass age restriction)
                         PACKET_HEADER* ackHead = (PACKET_HEADER*)ackBuf.data();
                         ackHead->id = CS_IT_LOGIN_ACK; ackHead->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);

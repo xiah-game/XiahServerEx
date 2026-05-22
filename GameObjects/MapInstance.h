@@ -18,7 +18,7 @@ public:
     int GetHeight() const { return m_height; }
 
     // ==========================================
-    // 实体管理 (Entities Management)
+    // Entities Management
     // ==========================================
     void AddPlayer(const PlayerData& player);
     void RemovePlayer(DWORD dwObjectID);
@@ -31,7 +31,7 @@ public:
     std::map<DWORD, MonsterData>& GetMonsters() { return m_monsters; }
 
     // ==========================================
-    // 地图心跳与 AI (Map Tick & AI)
+    // Map Tick and AI
     // ==========================================
     // Replaces global MonsterAIThread
     void Update(DWORD tick);
@@ -50,7 +50,7 @@ public:
     void UpdateMonsterGrid(DWORD dwObjectID, int oldX, int oldY, int newX, int newY);
 
     // ==========================================
-    // 网络同步 (Network Broadcasting)
+    // Network Broadcasting
     // ==========================================
     // Phase 1 broadcast to all in map, later switch to AOI
     void BroadcastPacket(const std::vector<BYTE>& packet);

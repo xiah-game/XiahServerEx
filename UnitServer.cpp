@@ -11,6 +11,19 @@
 #include <set>
 #include <mstcpip.h>
 #include "Handlers/TradeHandler.h"
+#include "../XiahClient/csprotocol.h"
+#include <ctime>
+
+static uint64_t CalculateFNV1aHMAC(const BYTE* data, size_t len, DWORD key) {
+    uint64_t hash = 14695981039346656037ULL;
+    hash ^= key;
+    hash *= 1099511628211ULL;
+    for (size_t i = 0; i < len; ++i) {
+        hash ^= data[i];
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
 
 // All business logic (SendCharStatusInfoAck, UpdatePlayerStatsAndSend, 
 // GrantExpToPlayer, BroadcastPacketToMap) has been migrated to:
@@ -126,6 +139,71 @@ void RunUnitSvr() {
 
                     DecryptPacket(fullPacket.data(), 0x42);
                     PACKET_HEADER* header = (PACKET_HEADER*)fullPacket.data();
+
+                    // --- Phase B: Security Anti-Replay & HMAC Signature Interceptor ---
+                    if (header->id != 0) { // Skip handshake init packet
+                        WORD totalPayloadSize = header->payloadSize;
+                        if (totalPayloadSize < 16) {
+                            LOG("[UnitServer] SECURITY ALERT: Packet too short for security fields! wPayloadSize=" + std::to_string(totalPayloadSize) + " Kicking client.");
+                            closesocket(clientSocket);
+                            break;
+                        }
+                        
+                        WORD originalPayloadSize = totalPayloadSize - 16;
+                        BYTE* payloadStart = fullPacket.data() + sizeof(PACKET_HEADER);
+                        
+                        uint32_t seq = *(uint32_t*)(payloadStart + originalPayloadSize);
+                        uint32_t timestamp = *(uint32_t*)(payloadStart + originalPayloadSize + 4);
+                        uint64_t clientHmac = *(uint64_t*)(payloadStart + originalPayloadSize + 8);
+                        
+                        // Get Ticket ID (session secret key)
+                        DWORD ticketId = 0;
+                        if (header->id == CS_IT_LOGINCHECK_REQ) {
+                            WORD nameLen = *(WORD*)(payloadStart);
+                            if (nameLen > 0 && nameLen <= 256 && 2 + nameLen + 4 <= originalPayloadSize) {
+                                ticketId = *(DWORD*)(payloadStart + 2 + nameLen);
+                            }
+                        } else {
+                            ticketId = SessionMgr::GetInstance().GetTicketId(clientSocket);
+                        }
+                        
+                        if (ticketId == 0) {
+                            LOG("[UnitServer] SECURITY ALERT: Unauthorized packet before login! Kicking client.");
+                            closesocket(clientSocket);
+                            break;
+                        }
+                        
+                        // Validate timestamp (prevent long-term replay, 300s tolerance for clock drift)
+                        uint32_t now = (uint32_t)time(nullptr);
+                        if (timestamp > now + 300 || now > timestamp + 300) {
+                            LOG("[UnitServer] SECURITY ALERT: Packet timestamp expired! now=" + std::to_string(now) + " ts=" + std::to_string(timestamp) + " Kicking client.");
+                            closesocket(clientSocket);
+                            break;
+                        }
+                        
+                        // Validate sequence anti-replay using sliding window
+                        if (!SessionMgr::GetInstance().AcceptSequence(clientSocket, seq)) {
+                            LOG("[UnitServer] SECURITY ALERT: Replay packet detected! seq=" + std::to_string(seq) + " Kicking client.");
+                            closesocket(clientSocket);
+                            break;
+                        }
+                        
+                        // Validate FNV-1a HMAC signature (HMAC spans up to start of HMAC field: wTotalSize - 8)
+                        // Note: The client calculated the HMAC when the header's payloadSize field was totalPayloadSize - 8 (excluding only the HMAC field itself).
+                        // We must temporarily adjust the server buffer's header payloadSize to match it!
+                        *(WORD*)(fullPacket.data() + 2) = totalPayloadSize - 8;
+                        uint64_t serverHmac = CalculateFNV1aHMAC(fullPacket.data(), wTotalSize - 8, ticketId);
+                        *(WORD*)(fullPacket.data() + 2) = totalPayloadSize; // Restore for downstream safety
+
+                        if (serverHmac != clientHmac) {
+                            LOG("[UnitServer] SECURITY ALERT: HMAC Signature mismatch! Client=" + std::to_string(clientHmac) + " Server=" + std::to_string(serverHmac) + " Key=" + std::to_string(ticketId) + " Kicking client.");
+                            closesocket(clientSocket);
+                            break;
+                        }
+                        
+                        // Strip security footer from payloadSize so handlers see original, unpolluted data
+                        header->payloadSize = originalPayloadSize;
+                    }
 
                     if (RoutePacket(clientSocket, header, fullPacket)) {
                         // Handled by PacketRouter

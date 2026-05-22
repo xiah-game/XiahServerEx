@@ -386,6 +386,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\xiahold\XiahServerEx\Network\SessionMgr.cpp" />
     <ClCompile Include="D:\xiahold\XiahServerEx\Network\SystemMessage.cpp" />
     <ClCompile Include="D:\xiahold\XiahServerEx\Network\PacketBuilder.cpp" />
+    <ClCompile Include="D:\xiahold\XiahServerEx\Network\AuthCenter.cpp" />
     <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\InitHandlers.cpp" />
     <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\LoginHandler.cpp" />
     <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\ItemHandler.cpp" />
@@ -404,6 +405,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\TradeHandler.cpp" />
     <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\ShopHandler.cpp" />
     <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\RepairHandler.cpp" />
+    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\MunpaHandler.cpp" />
     <ClCompile Include="D:\xiahold\XiahServerEx\GameObjects\DropManager.cpp" />
     <ClCompile Include="D:\xiahold\XiahServerEx\GameObjects\ExpSystem.cpp" />
     <ClCompile Include="D:\xiahold\XiahServerEx\DB\CharacterDB.cpp" />

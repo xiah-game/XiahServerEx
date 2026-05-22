@@ -6,6 +6,8 @@
 #include <map>
 #include <functional>
 
+struct PlayerData;
+
 // CharacterDB: Abstracts all CHAR_DATA, CHAR_POWER, CHAR_BASIC, CHAR_STATUS queries.
 // Eliminates raw SQL from Handlers for character-related operations.
 class CharacterDB {
@@ -189,6 +191,19 @@ public:
 
     // Get mugong level for a character's skill
     int GetMugongLevel(DWORD dwCharID, DWORD dwMugongID);
+
+    // ---- Munpa (Guild / Sect) ----
+    bool GetCharMunpaInfo(DWORD dwCharID, DWORD& dwMunpaID, DWORD& dwMunpaOrder, std::string& szMunpaName, std::string& szMunpaNickName, DWORD& dwMarkID);
+    bool ExecCreateMunpa(const std::string& szMunpaName, DWORD dwCreatorID, DWORD dwCurrentTime, BYTE bMunpaLevel, BYTE& bResult, DWORD& dwMunpaID, WORD& wTotalTp, WORD& wRemainTp);
+    bool ExecDeleteMunpa(DWORD dwMunpaID, BYTE& bResult);
+    bool ExecAddMunwon(DWORD dwMunpaID, DWORD dwOrderID, DWORD dwMunwonID, BYTE& bResult);
+    bool ExecChangeMunwon(DWORD dwMunpaID, DWORD dwMunwonID, DWORD dwOldOrderID, DWORD dwNewOrderID, BYTE& bResult);
+    bool ExecChangeMunpaNick(DWORD dwMunpaID, DWORD dwMunwonID, const std::string& szMunpaNick, BYTE& bResult);
+    bool ExecMunpaMarkReg(BYTE bRegType, DWORD dwMunpaID, const std::string& szMarkImage, DWORD& dwMarkID, BYTE& bResult);
+    bool ExecGainMunpaStone(DWORD dwMunjuID, DWORD dwMunpaID, DWORD dwStoneID, DWORD dwCurrentTime, int& bResult, BYTE& bChannelID, DWORD& dwMapID);
+
+    // Visual equipment and Fame sync
+    void LoadVisualEquipAndFame(DWORD dwCharID, PlayerData* pObj);
 
 private:
     CharacterDB() {}

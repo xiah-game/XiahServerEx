@@ -3,20 +3,59 @@
 #include "../Network/SessionMgr.h"
 #include "../GameObjects/PlayerManager.h"
 #include "SlotHandler.h"
-#include "../GameObjects/PlayerManager.h"
+#include "../Network/AuthCenter.h"
 
 void OnLoginCheckReq(SOCKET clientSocket, std::string& clientAccountName, BYTE* payload, WORD totalSize) {
     LOG("[LoginHandler] Received CS_IT_LOGINCHECK_REQ!");
+    
     WORD nameLen = *(WORD*)(payload);
-    if (nameLen > 1 && nameLen <= 256) {
-        clientAccountName = std::string((char*)payload + 2, nameLen - 1);
-        LOG("[LoginHandler] Login Account: " + clientAccountName);
-        SessionMgr::GetInstance().SetAccount(clientSocket, clientAccountName);
+    if (nameLen < 1 || nameLen > 256 || 2 + nameLen + 4 + 1 + 2 > totalSize) {
+        LOG("[LoginHandler] Bad packet length!");
+        closesocket(clientSocket);
+        return;
     }
 
+    // Extract dwKey (ticket ID) and byChannelID from client request payload
+    DWORD dwKey = *(DWORD*)(payload + 2 + nameLen);
+    BYTE byChannelID = *(BYTE*)(payload + 2 + nameLen + 4);
+    WORD wProtocolVersion = *(WORD*)(payload + 2 + nameLen + 4 + 1);
+
+    // Retrieve client IP
+    sockaddr_in peerAddr;
+    int addrLen = sizeof(peerAddr);
+    std::string peerIp = "127.0.0.1";
+    if (getpeername(clientSocket, (sockaddr*)&peerAddr, &addrLen) == 0) {
+        peerIp = inet_ntoa(peerAddr.sin_addr);
+    }
+
+    LOG("[LoginHandler] Ticket verification: Account payload='" + std::string((char*)payload + 2, nameLen - 1) + 
+        "' Ticket=" + std::to_string(dwKey) + " Channel=" + std::to_string(byChannelID) + 
+        " ProtocolVer=" + std::to_string(wProtocolVersion) + " IP=" + peerIp);
+
+    AuthTicket ticket;
+    if (!AuthCenter::Get().Consume(dwKey, peerIp, byChannelID, ticket)) {
+        LOG("[LoginHandler] TICKET VERIFICATION FAILED! Key: " + std::to_string(dwKey) + " -> Rejecting client");
+        
+        // Respond with login failure ACK
+        std::vector<BYTE> ackBuf; ackBuf.resize(4); 
+        ackBuf.push_back(1); // 1 = LOGINFAIL
+        ackBuf.push_back(0); // Underage
+        PACKET_HEADER* ackHead = (PACKET_HEADER*)ackBuf.data();
+        ackHead->id = CS_IT_LOGINCHECK_ACK; ackHead->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);
+        EncryptPacket(ackBuf.data(), 0x42);
+        SafeSend(clientSocket, (const char*)ackBuf.data(), ackBuf.size(), 0);
+        return;
+    }
+
+    // Overwrite the account name with the one secured by AuthTicket to prevent fake account spoofing!
+    clientAccountName = ticket.account;
+    LOG("[LoginHandler] Ticket verified successfully! Authenticated Account: " + clientAccountName);
+    SessionMgr::GetInstance().SetAccount(clientSocket, clientAccountName);
+    SessionMgr::GetInstance().SetTicketId(clientSocket, ticket.ticketId);
+
     std::vector<BYTE> ackBuf; ackBuf.resize(4); 
-    ackBuf.push_back(0); 
-    ackBuf.push_back(1); 
+    ackBuf.push_back(0); // 0 = SUCCESS
+    ackBuf.push_back(1); // 1 = Adult
     PACKET_HEADER* ackHead = (PACKET_HEADER*)ackBuf.data();
     ackHead->id = CS_IT_LOGINCHECK_ACK; ackHead->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);
     EncryptPacket(ackBuf.data(), 0x42);
@@ -82,7 +121,14 @@ void OnCharacterListReq(SOCKET clientSocket, const std::string& clientAccountNam
 void OnStartGameReq(SOCKET clientSocket, std::string& clientAccountName, BYTE* payload, WORD totalSize) {
     DWORD dwObjectID = *(DWORD*)(payload);
     DWORD dwCharID = dwObjectID - 400000000;
-    LOG("[LoginHandler] Received CS_NV_STARTGAME_REQ! dwCharID: " + std::to_string(dwCharID));
+    LOG("[LoginHandler] Received CS_NV_STARTGAME_REQ! dwCharID: " + std::to_string(dwCharID) + " Account: " + clientAccountName);
+
+    // Verify character ownership
+    if (!CharacterDB::GetInstance().AccountOwnsCharacter(dwCharID, clientAccountName)) {
+        LOG("[LoginHandler] SECURITY ALERT: Account '" + clientAccountName + "' tried to load unauthorized character ID " + std::to_string(dwCharID) + "! Kicking socket.");
+        closesocket(clientSocket);
+        return;
+    }
 
     SessionMgr::GetInstance().SetCharID(clientSocket, dwCharID);
 

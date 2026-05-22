@@ -62,6 +62,35 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
             pObj->wDex = baseDex;
             pObj->wVit = baseVit;
             pObj->wInt = baseInt; // Actually wSus in this context
+
+            // Load visual equipment and fame from DB into memory
+            CharacterDB::GetInstance().LoadVisualEquipAndFame(dwCharID, pObj);
+
+            // Broadcast equipment changes to other players in the same map
+            for (BYTE pos = 0; pos < 9; pos++) {
+                std::vector<BYTE> ackBuf; ackBuf.resize(4);
+                
+                auto pushDWord = [&](DWORD d) { ackBuf.push_back(d & 0xFF); ackBuf.push_back((d>>8)&0xFF); ackBuf.push_back((d>>16)&0xFF); ackBuf.push_back((d>>24)&0xFF); };
+                auto pushWord = [&](WORD w) { ackBuf.push_back(w & 0xFF); ackBuf.push_back((w>>8)&0xFF); };
+                auto pushByte = [&](BYTE b) { ackBuf.push_back(b); };
+                
+                pushDWord(dwCharID);   // dwCharID
+                pushDWord(0);          // dwItemID
+                pushByte(pos);         // bPos
+                pushWord(pObj->wVisualID[pos]);  // wVisualID
+                pushByte(pObj->bRarity[pos]);    // bRarity
+                pushByte(pObj->bStxType[pos]);   // bStxType
+                
+                PACKET_HEADER* ah = (PACKET_HEADER*)ackBuf.data();
+                ah->id = 0x3F0C; // CS_CD_CHGEQUIPMENT_ACK
+                ah->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);
+                EncryptPacket(ackBuf.data(), 0x42);
+                
+                // Broadcast to all sockets on the map
+                SessionMgr::GetInstance().ForEachSocketInMap(pMapID, [&](SOCKET sSocket, DWORD sCharID) {
+                    SafeSend(sSocket, (const char*)ackBuf.data(), ackBuf.size(), 0);
+                });
+            }
         
             pObj->wWepAtk = equipAtk;
             pObj->wWepDef = equipDef;
@@ -412,3 +441,5 @@ void SendCharStatusInfoAck(SOCKET clientSocket, DWORD dwCharID, WORD opCode) {
         SafeSend(clientSocket, (const char*)ackBuf.data(), ackBuf.size(), 0);
     }
 }
+
+
