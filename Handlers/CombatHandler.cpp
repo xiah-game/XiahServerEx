@@ -7,6 +7,7 @@
 #include "../DB/CharacterDB.h"
 #include "../GameObjects/MapInstance.h"
 #include "../Network/SessionMgr.h"
+#include "../GameObjects/MugongManager.h"
 
 extern std::map<DWORD, CMapInstance*> g_MapInstances;
 
@@ -36,6 +37,10 @@ void OnPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                     if (pAtk->activeBuffs.count(130) > 0) {
                         pAtk->activeBuffs[130].dwEndTime = 0; // Mark for instant expiry in MonsterAI loop
                         LOG("[CombatHandler] Player " + std::to_string(atkId) + " pre-attacked. Expiring Turtle Breath.");
+                    }
+                    if (pAtk->activeBuffs.count(178) > 0) {
+                        pAtk->activeBuffs[178].dwEndTime = 0; // Mark for instant expiry in MonsterAI loop
+                        LOG("[CombatHandler] Player " + std::to_string(atkId) + " pre-attacked. Expiring Stealth.");
                     }
                     // wAtkSpeed not in PlayerData; use default 9
                     // Sync position from attack packet (client may not send ENDMOVE when auto-walking to target)
@@ -97,6 +102,10 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                     pAttacker->activeBuffs[130].dwEndTime = 0; // Mark for instant expiry in MonsterAI loop
                     LOG("[CombatHandler] Player " + std::to_string(attackerId) + " attacked. Expiring Turtle Breath.");
                 }
+                if (pAttacker->activeBuffs.count(178) > 0) {
+                    pAttacker->activeBuffs[178].dwEndTime = 0; // Mark for instant expiry in MonsterAI loop
+                    LOG("[CombatHandler] Player " + std::to_string(attackerId) + " attacked. Expiring Stealth.");
+                }
                 finalDmg = pAttacker->dwTotalAtk;
                 if (finalDmg == 0) finalDmg = 50; // Fallback
                 
@@ -112,6 +121,20 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                     DWORD monsterDef = 0; // MonsterData has no wWepDef; use template
                     if (g_NpcTemplates.count(pTarget->bPropType))
                         monsterDef = g_NpcTemplates[pTarget->bPropType].dwDefInit;
+                    
+                    // 动态扣减：检测并应用怪物当前受到的减防等 Debuff 属性效果
+                    for (auto& bf : pTarget->activeBuffs) {
+                        sMugongList* bd = MugongManager::GetInstance()->GetMugongLevelData(bf.second.dwMugongID, bf.second.bLevel);
+                        if (bd) {
+                            if (bd->wIncDefPerc > 0) {
+                                monsterDef = monsterDef * bd->wIncDefPerc / 100;
+                            }
+                            if (bd->wIncDef > 0) {
+                                if (monsterDef > bd->wIncDef) monsterDef -= bd->wIncDef; else monsterDef = 0;
+                            }
+                        }
+                    }
+
                     WORD monsterAvoid = pTarget->wAvoidRatio;
                     
                     // Xiah Dodge Logic

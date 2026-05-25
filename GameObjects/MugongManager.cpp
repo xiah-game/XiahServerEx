@@ -3,6 +3,11 @@
 #include "../DB/GameDataDB.h"
 #include "../DBHelper.h"
 #include <cstring>
+#include "PlayerManager.h"
+#include "MapInstance.h"
+#include "../Network/SessionMgr.h"
+
+extern std::map<DWORD, CMapInstance*> g_MapInstances;
 
 void MugongManager::LoadMugongData() {
     GameDataDB::GetInstance().LoadMugongTemplates(m_MugongTemplates);
@@ -95,6 +100,22 @@ void MugongManager::LearnMugong(SOCKET clientSocket, DWORD charID, DWORD dwMugon
     SafeSend(clientSocket, (const char*)ackBuf.data(), ackBuf.size(), 0);
     
     LOG("[MugongManager] Character " + std::to_string(charID) + " learned Mugong " + std::to_string(dwMugongID) + " at Level " + std::to_string(targetLevel));
+
+    {
+        // 在线玩家实体内存同步更新
+        DWORD playerMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+        DWORD dwObjectID = (charID < 800000000) ? (charID + 400000000) : charID;
+        if (g_MapInstances.count(playerMapID)) {
+            CMapInstance* mapInst = g_MapInstances[playerMapID];
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            sServerObject* pObj = mapInst->GetPlayer(dwObjectID);
+            if (pObj) {
+                pObj->learnedMugongs[dwMugongID] = targetLevel;
+            }
+        }
+    }
+    // 即时重新计算面板属性并同步更新客户端
+    PlayerManager::GetInstance().RecalculateStats(charID, true);
 }
 
 void MugongManager::UpgradeMugong(SOCKET clientSocket, DWORD charID, DWORD dwMugongID) {
@@ -161,4 +182,20 @@ void MugongManager::UpgradeMugong(SOCKET clientSocket, DWORD charID, DWORD dwMug
     SafeSend(clientSocket, (const char*)ackBuf.data(), ackBuf.size(), 0);
     
     LOG("[MugongManager] Skill upgraded to " + std::to_string(targetLvl) + " with TP " + std::to_string(targetData->dwNeedPoint));
+
+    {
+        // 在线玩家实体内存同步更新
+        DWORD playerMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+        DWORD dwObjectID = (charID < 800000000) ? (charID + 400000000) : charID;
+        if (g_MapInstances.count(playerMapID)) {
+            CMapInstance* mapInst = g_MapInstances[playerMapID];
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            sServerObject* pObj = mapInst->GetPlayer(dwObjectID);
+            if (pObj) {
+                pObj->learnedMugongs[dwMugongID] = targetLvl;
+            }
+        }
+    }
+    // 即时重新计算面板属性并同步更新客户端
+    PlayerManager::GetInstance().RecalculateStats(charID, true);
 }

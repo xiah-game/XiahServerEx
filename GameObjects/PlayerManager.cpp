@@ -101,25 +101,31 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
             pObj->wEquipIp = equipIp;
             pObj->wEquipRestoreHp = equipRestoreHp;
             pObj->wEquipRestoreIp = equipRestoreIp;
-            int buffSpd = 0;
-            if (pObj->activeBuffs.count(124) > 0) { // 醍呔
+            
+            int maxBuffSpd = 0;
+            if (pObj->activeBuffs.count(124) > 0) { // 草上飞
                 BYTE lvl = pObj->activeBuffs[124].bLevel;
-                buffSpd += 4 + (lvl > 0 ? lvl : 1);
+                int currentSpd = 4 + (lvl > 0 ? lvl : 1);
+                if (currentSpd > maxBuffSpd) maxBuffSpd = currentSpd;
             }
-            if (pObj->activeBuffs.count(94) > 0) { // 蝠芷
+            if (pObj->activeBuffs.count(94) > 0) { // 疾风步
                 BYTE lvl = pObj->activeBuffs[94].bLevel;
-                buffSpd += 5 + (lvl > 0 ? lvl : 1);
+                int currentSpd = 5 + (lvl > 0 ? lvl : 1);
+                if (currentSpd > maxBuffSpd) maxBuffSpd = currentSpd;
             }
-            if (pObj->activeBuffs.count(64) > 0) { // 仔黝诎芷
+            if (pObj->activeBuffs.count(64) > 0) { // 凌波微步
                 BYTE lvl = pObj->activeBuffs[64].bLevel;
-                buffSpd += 4 + (lvl > 0 ? lvl : 1);
+                int currentSpd = 4 + (lvl > 0 ? lvl : 1);
+                if (currentSpd > maxBuffSpd) maxBuffSpd = currentSpd;
             }
-            if (pObj->activeBuffs.count(34) > 0) { // 扉锥嬗
+            if (pObj->activeBuffs.count(34) > 0) { // 斗转星移
                 BYTE lvl = pObj->activeBuffs[34].bLevel;
-                buffSpd += 3 + (lvl > 0 ? lvl : 1);
+                int currentSpd = 3 + (lvl > 0 ? lvl : 1);
+                if (currentSpd > maxBuffSpd) maxBuffSpd = currentSpd;
             }
 
-            pObj->wWalkSpeed = 6 + equipSpd + buffSpd;
+            // 初始基础行走速度调低至 4 格，防游戏后期速度发飘瞬移拉扯，为装备成长留出平衡空间
+            pObj->wWalkSpeed = 4 + equipSpd + maxBuffSpd;
             // Attack speed: computed on-the-fly in PreAttackReq, not stored on PlayerData
 
             // Calculate and update HP/IP max on the object (same formula as SendCharStatusInfoAck)

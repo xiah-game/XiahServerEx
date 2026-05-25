@@ -163,6 +163,7 @@ struct MonsterData : EntityBase {
     DWORD dwExp = 0;
     // Movement tracking
     WORD  wLastSentDestX = 0, wLastSentDestY = 0;
+    WORD  wLastSentPosX = 0, wLastSentPosY = 0;
     // Display
     BYTE  bGroupOrder = 0;
     BYTE  bWalkSpeedByte = 8;
@@ -174,6 +175,9 @@ struct MonsterData : EntityBase {
     std::map<DWORD, DWORD> mugongLastCastTime;
     // Functional NPC items (bObjectType=5 only)
     std::vector<sFunctionalNpcItem> npcItems;
+
+    // Active Buffs / Debuffs on monsters
+    std::map<DWORD, PlayerData::sActiveBuff> activeBuffs;
 
     MonsterData() { bObjectType = 3; bIsReturning = false; }
 };

@@ -2,6 +2,7 @@
 #include "../Network/SessionMgr.h"
 #include <cmath>
 #include <unordered_set>
+#include "MugongManager.h"
 
 
 
@@ -113,10 +114,21 @@ void CMapInstance::Update(DWORD tick) {
     InterpolatePlayerPositions(tick);
 
     // -----------------------------------------------------
+    // -----------------------------------------------------
     // 3. Process Monster AI
     // -----------------------------------------------------
     for (auto& pair : m_monsters) {
-        ProcessMonsterAI(tick, pair.second);
+        MonsterData& obj = pair.second;
+        // 定期清理已过期的怪物状态 (Debuff)
+        for (auto it = obj.activeBuffs.begin(); it != obj.activeBuffs.end(); ) {
+            if (tick >= it->second.dwEndTime) {
+                LOG("[MonsterBuffExpiry] Debuff " + std::to_string(it->second.dwMugongID) + " expired on monster " + std::to_string(obj.dwObjectID));
+                it = obj.activeBuffs.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        ProcessMonsterAI(tick, obj);
     }
 }
 
@@ -261,6 +273,41 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
         }
         return;
     }
+
+    // 定身/冰冻 Debuff 行动拦截：若怪物处于定身/冰冻控制状态，直接拦截不执行任何 AI 决策行为
+    bool isCCDebuff = false;
+    for (auto& bf : obj.activeBuffs) {
+        if (bf.second.bIsDebuff) {
+            DWORD mugID = bf.second.dwMugongID;
+            // Xiah 经典控制类技能：94(定身/定身术), 95(定身术), 35(冰冻), 65(眩晕/定身), 125(定身)
+            if (mugID == 94 || mugID == 95 || mugID == 35 || mugID == 65 || mugID == 125) {
+                isCCDebuff = true;
+                break;
+            }
+        }
+    }
+    
+    if (isCCDebuff) {
+        if (obj.wLastSentDestX != 0 || obj.wLastSentDestY != 0) {
+            obj.wLastSentDestX = 0;
+            obj.wLastSentDestY = 0;
+            obj.wLastSentPosX = 0;
+            obj.wLastSentPosY = 0;
+            // 向 AOI 广播怪物停止包，使客户端显示怪物定身/停步
+            std::vector<BYTE> stopBuf; stopBuf.resize(4); stopBuf.push_back(0); 
+            DWORD oid = obj.dwObjectID; stopBuf.push_back(oid&0xFF); stopBuf.push_back((oid>>8)&0xFF); stopBuf.push_back((oid>>16)&0xFF); stopBuf.push_back(oid>>24);
+            stopBuf.push_back(obj.bObjectType); 
+            stopBuf.push_back(obj.wPosX & 0xFF); stopBuf.push_back(obj.wPosX >> 8);
+            stopBuf.push_back(obj.wPosY & 0xFF); stopBuf.push_back(obj.wPosY >> 8);
+            stopBuf.push_back(obj.bHeight);
+            stopBuf.push_back(0); 
+            
+            PACKET_HEADER* stopHead = (PACKET_HEADER*)stopBuf.data(); stopHead->id = 0x350C; stopHead->payloadSize = stopBuf.size() - sizeof(PACKET_HEADER);
+            EncryptPacket(stopBuf.data(), 0x42); 
+            BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, stopBuf);
+        }
+        return; // 直接定身，跳过所有追击、移动和主动回击
+    }
     
     // HP Regeneration
     if (obj.dwHpCur < obj.dwHpMax && tpl.wHealPoint > 0) {
@@ -293,6 +340,7 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
             if (player.dwHpCur == 0) continue;
             if (player.dwInvulnerableUntil > tick) continue; // Death/respawn protection
             if (player.activeBuffs.count(130) > 0) continue; // Ignore players under Turtle Breath (130)
+            if (player.activeBuffs.count(178) > 0) continue; // Ignore players under Stealth (178)
             if (targetId != 0 && player.dwObjectID != targetId) continue;
 
             float dx = (float)player.wPosX - (float)obj.wPosX;
@@ -384,6 +432,8 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
             if (obj.wLastSentDestX != 0 || obj.wLastSentDestY != 0) {
                 obj.wLastSentDestX = 0;
                 obj.wLastSentDestY = 0;
+                obj.wLastSentPosX = 0;
+                obj.wLastSentPosY = 0;
                 
                 std::vector<BYTE> stopBuf; stopBuf.resize(4); stopBuf.push_back(0); 
                 DWORD oid = obj.dwObjectID; stopBuf.push_back(oid&0xFF); stopBuf.push_back((oid>>8)&0xFF); stopBuf.push_back((oid>>16)&0xFF); stopBuf.push_back(oid>>24);
@@ -454,7 +504,17 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                         // MISS
                         bResult = 1;
                         damage = 0;
+                    } else if (player.activeBuffs.count(130) > 0) {
+                        // 130 龟息大法防守端免伤无敌拦截
+                        bResult = 1; // MISS (完全免疫)
+                        damage = 0;
+                        LOG("[MonsterAtk] Player " + std::to_string(targetId) + " protected by Turtle Breath. Zero Damage.");
                     } else {
+                        // 如果防御方玩家挂有隐身术 178 却受创，破隐
+                        if (player.activeBuffs.count(178) > 0) {
+                            player.activeBuffs[178].dwEndTime = 0; // 受伤动作破隐
+                            LOG("[MonsterAtk] Player " + std::to_string(targetId) + " hit while stealth. Expiring Stealth.");
+                        }
                         // HIT - apply damage variance +/-10%
                         float dmgFloat = (float)damage;
                         float variance = 0.9f + ((float)(rand() % 2000) / 10000.0f);
@@ -589,10 +649,13 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                 obj.wDestX = bestPlayer->wPosX;
                 obj.wDestY = bestPlayer->wPosY;
 
-                // Only send move packet when destination changes significantly (player moved)
-                if (abs(obj.wDestX - obj.wLastSentDestX) > 3 || abs(obj.wDestY - obj.wLastSentDestY) > 3) {
+                // Only send move packet when destination changes significantly (player moved) or monster moved far enough (motion heartbeat)
+                if (abs(obj.wDestX - obj.wLastSentDestX) > 3 || abs(obj.wDestY - obj.wLastSentDestY) > 3 ||
+                    abs(obj.wPosX - obj.wLastSentPosX) > 1 || abs(obj.wPosY - obj.wLastSentPosY) > 1) {
                     obj.wLastSentDestX = obj.wDestX;
                     obj.wLastSentDestY = obj.wDestY;
+                    obj.wLastSentPosX = obj.wPosX;
+                    obj.wLastSentPosY = obj.wPosY;
 
                     std::vector<BYTE> ackBuf; ackBuf.resize(4); ackBuf.push_back(0); 
                     DWORD oid = obj.dwObjectID; ackBuf.push_back(oid&0xFF); ackBuf.push_back((oid>>8)&0xFF); ackBuf.push_back((oid>>16)&0xFF); ackBuf.push_back(oid>>24);
@@ -643,9 +706,12 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                     obj.wDestX = bestPlayer->wPosX;
                     obj.wDestY = bestPlayer->wPosY;
 
-                    if (abs(obj.wDestX - obj.wLastSentDestX) > 3 || abs(obj.wDestY - obj.wLastSentDestY) > 3) {
+                    if (abs(obj.wDestX - obj.wLastSentDestX) > 3 || abs(obj.wDestY - obj.wLastSentDestY) > 3 ||
+                        abs(obj.wPosX - obj.wLastSentPosX) > 1 || abs(obj.wPosY - obj.wLastSentPosY) > 1) {
                         obj.wLastSentDestX = obj.wDestX;
                         obj.wLastSentDestY = obj.wDestY;
+                        obj.wLastSentPosX = obj.wPosX;
+                        obj.wLastSentPosY = obj.wPosY;
 
                         std::vector<BYTE> ackBuf; ackBuf.resize(4); ackBuf.push_back(0); 
                         DWORD oid = obj.dwObjectID; ackBuf.push_back(oid&0xFF); ackBuf.push_back((oid>>8)&0xFF); ackBuf.push_back((oid>>16)&0xFF); ackBuf.push_back(oid>>24);
@@ -731,6 +797,8 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                 obj.wDestY = 0;
                 obj.wLastSentDestX = 0;
                 obj.wLastSentDestY = 0;
+                obj.wLastSentPosX = 0;
+                obj.wLastSentPosY = 0;
                 obj.dwLastAttackTime = tick; 
                 
                 std::vector<BYTE> stopBuf; stopBuf.resize(4); stopBuf.push_back(0);
@@ -770,9 +838,12 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                     obj.wPosX = nx; obj.wPosY = ny;
                     UpdateMonsterGrid(obj.dwObjectID, ox, oy, nx, ny);
                     
-                    if (obj.wDestX != obj.wLastSentDestX || obj.wDestY != obj.wLastSentDestY) {
+                    if (obj.wDestX != obj.wLastSentDestX || obj.wDestY != obj.wLastSentDestY ||
+                        abs(obj.wPosX - obj.wLastSentPosX) > 1 || abs(obj.wPosY - obj.wLastSentPosY) > 1) {
                         obj.wLastSentDestX = obj.wDestX;
                         obj.wLastSentDestY = obj.wDestY;
+                        obj.wLastSentPosX = obj.wPosX;
+                        obj.wLastSentPosY = obj.wPosY;
 
                         std::vector<BYTE> ackBuf; ackBuf.resize(4); ackBuf.push_back(0); 
                         DWORD oid = obj.dwObjectID; ackBuf.push_back(oid&0xFF); ackBuf.push_back((oid>>8)&0xFF); ackBuf.push_back((oid>>16)&0xFF); ackBuf.push_back(oid>>24);

@@ -6,6 +6,7 @@
 #include "GameObjects/PlayerManager.h"
 #include "GameObjects/ExpSystem.h"
 #include "GameObjects/DropManager.h"
+#include "GameObjects/MugongManager.h"
 #include <cmath>
 #include <thread>
 #include <time.h>
@@ -86,20 +87,70 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
                             sServerObject& pl = pp.second;
                             if (pl.bObjectType != 1) continue; // only players
                             if (pl.dwHpCur == 0) continue; // do not regen dead players
-                            if (pl.wEquipRestoreHp == 0 && pl.wEquipRestoreIp == 0) continue; // no regen stats
                             if (tick - pl.dwLastRegenTime < 5000) continue; // not yet 5 seconds
                             
                             pl.dwLastRegenTime = tick;
+
+                            // 动态计算该周期的恢复速率总量
+                            DWORD totalRegenHp = 0;
+                            DWORD totalRegenIp = 0;
+
+                            // 1. 基础自然回复 (生命上限的 1% + 2, 内力上限的 1% + 1)
+                            totalRegenHp += (pl.dwHpMax * 1 / 100) + 2;
+                            totalRegenIp += (pl.wIpMax * 1 / 100) + 1;
+
+                            // 2. 装备带来的生命内力恢复属性
+                            totalRegenHp += pl.wEquipRestoreHp;
+                            totalRegenIp += pl.wEquipRestoreIp;
+
+                            // 3. 学习的被动回复技能带来的加成 (例如 6 洗髓经被动回血, 7 易筋经被动回蓝)
+                            for (auto& mg : pl.learnedMugongs) {
+                                DWORD mugID = mg.first;
+                                BYTE mugLvl = mg.second;
+                                if (mugID >= 1 && mugID <= 29) {
+                                    sMugongList* pd = MugongManager::GetInstance()->GetMugongLevelData(mugID, mugLvl);
+                                    if (pd) {
+                                        totalRegenHp += pd->wRecoverHp;
+                                        totalRegenIp += pd->wRecoverIp;
+                                        if (pd->wRecoverHpPerc > 100) {
+                                            totalRegenHp += (pl.dwHpMax * (pd->wRecoverHpPerc - 100) / 100);
+                                        }
+                                        if (pd->wRecoverIpPerc > 100) {
+                                            totalRegenIp += (pl.wIpMax * (pd->wRecoverIpPerc - 100) / 100);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // 4. 当前生效的 Active Buff 状态回复
+                            for (auto& bf : pl.activeBuffs) {
+                                sMugongList* bd = MugongManager::GetInstance()->GetMugongLevelData(bf.second.dwMugongID, bf.second.bLevel);
+                                if (bd) {
+                                    totalRegenHp += bd->wRecoverHp;
+                                    totalRegenIp += bd->wRecoverIp;
+                                    if (bd->wRecoverHpPerc > 100) {
+                                        totalRegenHp += (pl.dwHpMax * (bd->wRecoverHpPerc - 100) / 100);
+                                    }
+                                    if (bd->wRecoverIpPerc > 100) {
+                                        totalRegenIp += (pl.wIpMax * (bd->wRecoverIpPerc - 100) / 100);
+                                    }
+                                }
+                            }
+
+                            // 若无任何加成，或血蓝已经完全回满，则不需要重算和发送同步数据
+                            if (totalRegenHp == 0 && totalRegenIp == 0) continue;
+                            if (pl.dwHpCur >= pl.dwHpMax && pl.wIpCur >= pl.wIpMax) continue;
+
                             bool changed = false;
-                            
                             DWORD oldHp = pl.dwHpCur; WORD oldIp = pl.wIpCur;
-                            if (pl.wEquipRestoreHp > 0 && pl.dwHpCur < pl.dwHpMax) {
-                                pl.dwHpCur += pl.wEquipRestoreHp;
+                            
+                            if (pl.dwHpCur < pl.dwHpMax && totalRegenHp > 0) {
+                                pl.dwHpCur += totalRegenHp;
                                 if (pl.dwHpCur > pl.dwHpMax) pl.dwHpCur = pl.dwHpMax;
                                 changed = true;
                             }
-                            if (pl.wEquipRestoreIp > 0 && pl.wIpCur < pl.wIpMax) {
-                                pl.wIpCur += pl.wEquipRestoreIp;
+                            if (pl.wIpCur < pl.wIpMax && totalRegenIp > 0) {
+                                pl.wIpCur += (WORD)totalRegenIp;
                                 if (pl.wIpCur > pl.wIpMax) pl.wIpCur = pl.wIpMax;
                                 changed = true;
                             }
