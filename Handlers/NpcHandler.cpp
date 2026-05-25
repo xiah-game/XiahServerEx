@@ -300,32 +300,73 @@ void OnBuyItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
     DWORD price = tpl.dwCost;
     WORD npcItemAmount = tpl.wAmount;  // Default to template amount
     DWORD pMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
-    if (g_MapInstances.count(pMapID)) {
-        CMapInstance* mapInst = g_MapInstances[pMapID];
-        std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-        MonsterData* pObj = mapInst->GetMonster(dwShopID);
-        if (pObj) {
-            for (auto& it : pObj->npcItems) {
-                // Match by both item ID and shop position to distinguish stack-1 vs stack-10 entries
-                if (it.dwItemID == dwItemID && it.bPos == bShopSackPos) {
-                    if (it.dwPrice > 0) price = it.dwPrice;
-                    if (it.wAmount > 0) npcItemAmount = it.wAmount;
-                    break;
-                }
-            }
-            // Fallback: if no positional match, try item-only match
-            if (npcItemAmount == tpl.wAmount) {
+MonsterData* pObj = NULL;
+    bool foundObj = false;
+
+    if (dwShopID == 100038 || dwShopID == 38) {
+        // Global search for NPC 38 across all maps
+        for (auto& pair : g_MapInstances) {
+            CMapInstance* mapInst = pair.second;
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            pObj = mapInst->GetMonster(100038);
+            if (pObj) {
+                foundObj = true;
+                bool sellsItem = false;
                 for (auto& it : pObj->npcItems) {
-                    if (it.dwItemID == dwItemID && it.bSackCnt == bShopSackCnt) {
+                    if (it.dwItemID == dwItemID && it.bPos == bShopSackPos) {
+                        if (it.dwPrice > 0) price = it.dwPrice;
+                        if (it.wAmount > 0) npcItemAmount = it.wAmount;
+                        sellsItem = true;
+                        break;
+                    }
+                }
+                if (!sellsItem) {
+                    for (auto& it : pObj->npcItems) {
+                        if (it.dwItemID == dwItemID) {
+                            if (it.dwPrice > 0) price = it.dwPrice;
+                            if (it.wAmount > 0) npcItemAmount = it.wAmount;
+                            sellsItem = true;
+                            break;
+                        }
+                    }
+                }
+                if (!sellsItem) {
+                    // Item not sold by NPC 38, reject purchase
+                    return;
+                }
+                break;
+            }
+        }
+        if (!foundObj) {
+            // NPC 38 not found at all, reject purchase
+            return;
+        }
+    } else {
+        if (g_MapInstances.count(pMapID)) {
+            CMapInstance* mapInst = g_MapInstances[pMapID];
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            pObj = mapInst->GetMonster(dwShopID);
+            if (pObj) {
+                for (auto& it : pObj->npcItems) {
+                    if (it.dwItemID == dwItemID && it.bPos == bShopSackPos) {
                         if (it.dwPrice > 0) price = it.dwPrice;
                         if (it.wAmount > 0) npcItemAmount = it.wAmount;
                         break;
                     }
                 }
+                if (npcItemAmount == tpl.wAmount) {
+                    for (auto& it : pObj->npcItems) {
+                        if (it.dwItemID == dwItemID && it.bSackCnt == bShopSackCnt) {
+                            if (it.dwPrice > 0) price = it.dwPrice;
+                            if (it.wAmount > 0) npcItemAmount = it.wAmount;
+                            break;
+                        }
+                    }
+                }
             }
         }
     }
-
+    
     // Use NPC item's wAmount as the actual stack size, multiplied by client's buy count
     DWORD actualAmount = (DWORD)npcItemAmount * dwAmount;
     DWORD totalCost = price * actualAmount;

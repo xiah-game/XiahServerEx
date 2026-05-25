@@ -15,6 +15,7 @@ public:
     // --- Account ---
     void SetAccount(SOCKET s, const std::string& account);
     std::string GetAccount(SOCKET s);
+    SOCKET GetSocketByAccount(const std::string& account);
 
     // --- CharID ---
     void SetCharID(SOCKET s, DWORD charID);

@@ -491,6 +491,27 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
     // 0. Pre-checks (Do NOT deduct if fails!)
     BYTE targetLevel = 1;
     if (tpl.bType == 21) { // Book (Skill)
+        int playerLevel = 0, playerType = 0;
+        CharacterDB::CharPower cp;
+        if (CharacterDB::GetInstance().GetCharData(charID, cp)) {
+            playerLevel = cp.wLevel;
+            playerType = cp.bCharType;
+        }
+
+        // Check career/class restriction (bCharType in item template)
+        if (tpl.bCharType != 0 && playerType != tpl.bCharType) {
+            LOG("[ItemHandler] Career mismatch for skill book! Player: " + std::to_string(playerType) + " Book Career Req: " + std::to_string(tpl.bCharType));
+            SendSystemWarningChat(clientSocket, "职业不符，无法使用此技能书！");
+            return;
+        }
+
+        // Check level requirement (wLevel in item template)
+        if (playerLevel < tpl.wLevel) {
+            LOG("[ItemHandler] Level too low for skill book! Player Level: " + std::to_string(playerLevel) + " Book Level Req: " + std::to_string(tpl.wLevel));
+            SendSystemWarningChat(clientSocket, "等级不足，无法使用此技能书！");
+            return;
+        }
+
         DWORD dwMugongID = tpl.nBasicData2;
         DWORD reqPrevLevel = tpl.nBasicData5;
         

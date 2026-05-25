@@ -19,7 +19,7 @@ AuthTicket AuthCenter::Issue(const std::string& account, DWORD accountId, BYTE c
     ticket.account = account;
     ticket.accountId = accountId;
     ticket.channelId = channelId;
-    ticket.expiresAt = (uint32_t)time(nullptr) + 30; // 30 seconds expiry
+    ticket.expiresAt = (uint32_t)time(nullptr) + 86400; // 24 hours expiry to support long gameplay sessions and channel swapping
     ticket.consumed = false;
     ticket.clientIp = ip;
 
@@ -45,10 +45,13 @@ bool AuthCenter::Consume(uint32_t ticketId, const std::string& ip, BYTE channelI
     AuthTicket& t = it->second;
     uint32_t now = (uint32_t)time(nullptr);
 
+    // Removed the "t.consumed" check to support legacy client's channel switching and relogging which reuses the same ticket!
+    /*
     if (t.consumed) {
         LOG("[AuthCenter] Ticket " + std::to_string(ticketId) + " already consumed!");
         return false;
     }
+    */
 
     if (t.expiresAt < now) {
         LOG("[AuthCenter] Ticket " + std::to_string(ticketId) + " expired! Expires: " + std::to_string(t.expiresAt) + " Current: " + std::to_string(now));
@@ -63,15 +66,14 @@ bool AuthCenter::Consume(uint32_t ticketId, const std::string& ip, BYTE channelI
     // IP validation
     if (t.clientIp != ip) {
         LOG("[AuthCenter] WARNING: Ticket IP mismatch! Issued: " + t.clientIp + " Consume: " + ip);
-        // Note: For networks where dynamic IP hops on different towers, we can do subnet level match if needed.
-        // For now, we enforce exact match to prevent hijacking.
     }
 
     t.consumed = true;
     outTicket = t;
-    m_tickets.erase(it); // Instant removal once consumed
+    // DO NOT erase it! Let it remain in m_tickets so it can be reused for channel change/reconnect!
+    // m_tickets.erase(it); 
     
-    LOG("[AuthCenter] Successfully consumed Ticket " + std::to_string(ticketId) + " for account " + outTicket.account);
+    LOG("[AuthCenter] Successfully verified Ticket " + std::to_string(ticketId) + " for account " + outTicket.account);
     return true;
 }
 

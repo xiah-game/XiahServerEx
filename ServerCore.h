@@ -169,12 +169,13 @@ struct MonsterData : EntityBase {
     // Drop rates
     WORD  wRootItem = 0, wRootMoney = 0, wRootRes = 0, wRootBook = 0;
     DWORD dwLastHealTime = 0;
+    bool  bIsReturning = false; // Leash return state
     // NPC skills
     std::map<DWORD, DWORD> mugongLastCastTime;
     // Functional NPC items (bObjectType=5 only)
     std::vector<sFunctionalNpcItem> npcItems;
 
-    MonsterData() { bObjectType = 3; }
+    MonsterData() { bObjectType = 3; bIsReturning = false; }
 };
 
 // Backward-compat alias — will be removed after all handlers are migrated

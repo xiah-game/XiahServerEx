@@ -11,6 +11,14 @@ std::string SessionMgr::GetAccount(SOCKET s) {
     return m_socketToAccount.count(s) ? m_socketToAccount[s] : "dustwj";
 }
 
+SOCKET SessionMgr::GetSocketByAccount(const std::string& account) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (auto& pair : m_socketToAccount) {
+        if (pair.second == account) return pair.first;
+    }
+    return INVALID_SOCKET;
+}
+
 void SessionMgr::SetCharID(SOCKET s, DWORD charID) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_socketToChar[s] = charID;

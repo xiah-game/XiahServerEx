@@ -613,6 +613,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
             std::lock_guard<std::mutex> lock(mapInst->GetMutex());
             MonsterData* pTarget = mapInst->GetMonster(dwDefenseID);
             if (pTarget) {
+                bool sIsReturning = pTarget->bIsReturning;
                 // Use template defense since MonsterData doesn't store wWepDef
                 DWORD monsterDef = g_NpcTemplates.count(pTarget->bPropType) ? g_NpcTemplates[pTarget->bPropType].dwDefInit : 0;
                 WORD monsterAvoid = pTarget->wAvoidRatio;
@@ -656,7 +657,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                 float hitChance = (float)playerAtkRating / (float)(playerAtkRating + monsterAvoid);
                 float dodgeRoll = (float)(rand() % 10000) / 10000.0f;
                 
-                if (monsterAvoid > 0 && dodgeRoll > hitChance) {
+                if (sIsReturning || (monsterAvoid > 0 && dodgeRoll > hitChance)) {
                     p[0] = 1; // 1 = MISS
                     finalDmg = 0;
                 } else {
@@ -717,7 +718,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                     std::vector<MonsterData*> splashTargets;
                     
                     for (MonsterData* pMon : aoiMonsters) {
-                        if (!pMon || pMon->dwObjectID == dwDefenseID || pMon->dwHpCur == 0) continue;
+                        if (!pMon || pMon->dwObjectID == dwDefenseID || pMon->dwHpCur == 0 || pMon->bIsReturning) continue;
                         
                         // Check distance from target center (e.g. splash range 5.0 tiles)
                         float dx = (float)pMon->wPosX - (float)wTargetPosX;
@@ -814,7 +815,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                     }
                 }
                 
-                if (pTarget->dwAttackPattern != 0 && pTarget->dwHpCur > 0) {
+                if (pTarget->dwAttackPattern != 0 && pTarget->dwHpCur > 0 && !pTarget->bIsReturning) {
                     pTarget->dwTargetID = dwAttackID;
                 }
                 dwDefHpMax = pTarget->dwHpMax;

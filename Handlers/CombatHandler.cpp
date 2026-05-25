@@ -105,43 +105,48 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
             
             MonsterData* pTarget = mapInst->GetMonster(targetId);
             if (pTarget) {
-                DWORD monsterDef = 0; // MonsterData has no wWepDef; use template
-                if (g_NpcTemplates.count(pTarget->bPropType))
-                    monsterDef = g_NpcTemplates[pTarget->bPropType].dwDefInit;
-                WORD monsterAvoid = pTarget->wAvoidRatio;
-                
-                // Xiah Dodge Logic
-                DWORD playerAtkRating = 50 + (pAttacker ? pAttacker->dwTotalHit : 0);
-                float hitChance = (float)playerAtkRating / (float)(playerAtkRating + monsterAvoid);
-                
-                float roll = (float)(rand() % 10000) / 10000.0f;
-                
-                if (monsterAvoid > 0 && roll > hitChance) {
-                    bResult = 1; // 1 = Miss
+                if (pTarget->bIsReturning) {
+                    bResult = 1; // Miss during leash return
                     finalDmg = 0;
                 } else {
-                    // Damage variance +/-10%
-                    float dmgFloat = (float)finalDmg;
-                    float variance = 0.9f + ((float)(rand() % 2000) / 10000.0f);
-                    dmgFloat *= variance;
+                    DWORD monsterDef = 0; // MonsterData has no wWepDef; use template
+                    if (g_NpcTemplates.count(pTarget->bPropType))
+                        monsterDef = g_NpcTemplates[pTarget->bPropType].dwDefInit;
+                    WORD monsterAvoid = pTarget->wAvoidRatio;
                     
-                    // Critical Hit (uses player wCritical stat, fallback 5%)
-                    WORD critRate = (pAttacker && pAttacker->wCritical > 0) ? pAttacker->wCritical : 5;
-                    if ((WORD)(rand() % 100) < critRate) {
-                        dmgFloat *= 2.0f;
-                        bHitFlag = 1; // Critical hit!
+                    // Xiah Dodge Logic
+                    DWORD playerAtkRating = 50 + (pAttacker ? pAttacker->dwTotalHit : 0);
+                    float hitChance = (float)playerAtkRating / (float)(playerAtkRating + monsterAvoid);
+                    
+                    float roll = (float)(rand() % 10000) / 10000.0f;
+                    
+                    if (monsterAvoid > 0 && roll > hitChance) {
+                        bResult = 1; // 1 = Miss
+                        finalDmg = 0;
+                    } else {
+                        // Damage variance +/-10%
+                        float dmgFloat = (float)finalDmg;
+                        float variance = 0.9f + ((float)(rand() % 2000) / 10000.0f);
+                        dmgFloat *= variance;
+                        
+                        // Critical Hit (uses player wCritical stat, fallback 5%)
+                        WORD critRate = (pAttacker && pAttacker->wCritical > 0) ? pAttacker->wCritical : 5;
+                        if ((WORD)(rand() % 100) < critRate) {
+                            dmgFloat *= 2.0f;
+                            bHitFlag = 1; // Critical hit!
+                        }
+                        
+                        finalDmg = (DWORD)dmgFloat;
+                        if (finalDmg > monsterDef) finalDmg -= monsterDef;
+                        else finalDmg = 1; 
                     }
                     
-                    finalDmg = (DWORD)dmgFloat;
-                    if (finalDmg > monsterDef) finalDmg -= monsterDef;
-                    else finalDmg = 1; 
+                    pTarget->dwHpCur = (pTarget->dwHpCur > finalDmg) ? (pTarget->dwHpCur - finalDmg) : 0;
                 }
                 
-                pTarget->dwHpCur = (pTarget->dwHpCur > finalDmg) ? (pTarget->dwHpCur - finalDmg) : 0;
-                
                 // Xiah AI Bitmask - NON-COMBAT (0) vs PASSIVE/ACTIVE
-                // Only set aggro if the monster is not completely passive (0)
-                if (pTarget->dwAttackPattern != 0) {
+                // Only set aggro if the monster is not completely passive (0) and not returning
+                if (pTarget->dwAttackPattern != 0 && !pTarget->bIsReturning) {
                     pTarget->dwTargetID = attackerId; // Set aggro (Even if it is Passive (2), it will fight back now)
                     LOG("[CombatHandler] SET AGGRO: Monster ObjID=" + std::to_string(targetId) + " -> targetID=" + std::to_string(attackerId) + " mapID=" + std::to_string(playerMapID));
                     

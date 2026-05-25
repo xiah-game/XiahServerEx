@@ -199,7 +199,7 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                 leaveBuf.push_back(0); // bType = 0 (normal leave)
                 PACKET_HEADER* leaveHead = (PACKET_HEADER*)leaveBuf.data(); leaveHead->id = 0x3506; leaveHead->payloadSize = leaveBuf.size() - sizeof(PACKET_HEADER);
                 EncryptPacket(leaveBuf.data(), 0x42);
-                BroadcastPacket(leaveBuf);
+                BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, leaveBuf); // Changed to AOI
                 obj.wPosX = 0;
             }
             
@@ -255,7 +255,7 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                     std::vector<BYTE> infoFull; infoFull.resize(4); infoFull.insert(infoFull.end(), infoBuf.begin(), infoBuf.end());
                     PACKET_HEADER* infoHead = (PACKET_HEADER*)infoFull.data(); infoHead->id = 0x352C; infoHead->payloadSize = (WORD)infoBuf.size();
                     EncryptPacket(infoFull.data(), 0x42);
-                    BroadcastPacket(infoFull);
+                    BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, infoFull); // Changed to AOI
                 }
             }
         }
@@ -281,10 +281,15 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
     float minDist = 99999.0f;
     PlayerData* bestPlayer = nullptr;
 
-    // FIND TARGET (Only checks players in THIS map now, not all active players globally!)
-    if ((obj.dwAttackPattern & 1) != 0 || targetId != 0) {
-        for (auto& pair : m_players) {
-            PlayerData& player = pair.second;
+    // FIND TARGET (Skip entirely if monster is currently leashed and returning to spawn)
+    if (obj.bIsReturning) {
+        targetId = 0;
+        obj.dwTargetID = 0;
+    } else if ((obj.dwAttackPattern & 1) != 0 || targetId != 0) {
+        std::vector<PlayerData*> nearbyPlayers = GetPlayersInAOI(obj.wPosX, obj.wPosY);
+        for (PlayerData* playerPtr : nearbyPlayers) {
+            if (!playerPtr) continue;
+            PlayerData& player = *playerPtr;
             if (player.dwHpCur == 0) continue;
             if (player.dwInvulnerableUntil > tick) continue; // Death/respawn protection
             if (player.activeBuffs.count(130) > 0) continue; // Ignore players under Turtle Breath (130)
@@ -334,6 +339,32 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
         obj.dwTargetID = 0;
     }
 
+    // Chase Leash Check: if pulled too far from spawn point, break aggro and return
+    if (targetId && bestPlayer) {
+        float distToSpawn = std::sqrt(std::pow((float)obj.wPosX - obj.wSpawnX, 2) + std::pow((float)obj.wPosY - obj.wSpawnY, 2));
+        float leashRange = (float)(obj.wWanderRange * 3);
+        if (leashRange < 40.0f) leashRange = 40.0f;
+        
+        if (distToSpawn > leashRange) {
+            char dbgLeash[256];
+            sprintf(dbgLeash, "[MonsterAI] LEASH: ObjID=%u pulled too far (dist=%.1f spawn=%u,%u leash=%.1f). Resetting aggro.",
+                obj.dwObjectID, distToSpawn, obj.wSpawnX, obj.wSpawnY, leashRange);
+            LOG(std::string(dbgLeash));
+            
+            targetId = 0;
+            obj.dwTargetID = 0;
+            bestPlayer = nullptr;
+            obj.bIsReturning = true; // Enter returning state
+            obj.dwHpCur = obj.dwHpMax; // Heal to full immediately
+            
+            // Force destination to spawn point and reset move tracking
+            obj.wDestX = obj.wSpawnX;
+            obj.wDestY = obj.wSpawnY;
+            obj.wLastSentDestX = 0;
+            obj.wLastSentDestY = 0;
+        }
+    }
+
     WORD oldX = obj.wPosX;
     WORD oldY = obj.wPosY;
     
@@ -364,7 +395,7 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                 
                 PACKET_HEADER* stopHead = (PACKET_HEADER*)stopBuf.data(); stopHead->id = 0x350C; stopHead->payloadSize = stopBuf.size() - sizeof(PACKET_HEADER);
                 EncryptPacket(stopBuf.data(), 0x42); 
-                BroadcastPacket(stopBuf);
+                BroadcastPacketAOI_NoLock(oldX, oldY, stopBuf); // Changed to AOI
             }
             
             if (tpl.wAtkInterval > 0 && tick - obj.dwLastAttackTime > tpl.wAtkInterval) { 
@@ -384,7 +415,7 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                 std::vector<BYTE> preFull; preFull.resize(4); preFull.insert(preFull.end(), preBuf.begin(), preBuf.end());
                 PACKET_HEADER* preHead = (PACKET_HEADER*)preFull.data(); preHead->id = 0x4004; preHead->payloadSize = preBuf.size();
                 EncryptPacket(preFull.data(), 0x42); 
-                BroadcastPacket(preFull);
+                BroadcastPacketAOI_NoLock(oldX, oldY, preFull); // Changed to AOI
                 
                 // 2. ATTACK_ACK 
                 std::vector<BYTE> ackBuf; ackBuf.reserve(64);
@@ -534,10 +565,13 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
             WORD nx = (WORD)obj.fPosX;
             WORD ny = (WORD)obj.fPosY;
             
-            bool canMove = true;
-            if (m_collisionGrid.size() > 0 && nx < m_width && ny < m_height && nx >= 0 && ny >= 0) {
-                if (m_collisionGrid[ny * m_width + nx] != 0) canMove = false;
-            }
+            auto Walkable = [&](WORD tx, WORD ty) -> bool {
+                if (m_collisionGrid.empty()) return true;
+                if (tx >= m_width || ty >= m_height) return false;
+                return m_collisionGrid[ty * m_width + tx] == 0;
+            };
+
+            bool canMove = Walkable(nx, ny);
             
             // DEBUG: log chase movement for type 187
             if (obj.bPropType == 187) {
@@ -575,7 +609,65 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                     
                     PACKET_HEADER* ackHead = (PACKET_HEADER*)ackBuf.data(); ackHead->id = 0x3508; ackHead->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);
                     EncryptPacket(ackBuf.data(), 0x42); 
-                    BroadcastPacket(ackBuf);
+                    BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, ackBuf); // Changed to AOI
+                }
+            } else {
+                // Slide Collision Option B
+                bool slid = false;
+                // Try X-only slide
+                WORD testX = (WORD)(obj.wPosX + (dirX > 0 ? 1 : (dirX < 0 ? -1 : 0)));
+                WORD testY = obj.wPosY;
+                if (testX != obj.wPosX && Walkable(testX, testY)) {
+                    int ox = obj.wPosX, oy = obj.wPosY;
+                    obj.wPosX = testX;
+                    obj.fPosX = (float)testX;
+                    obj.fPosY = (float)obj.wPosY; // clamp Y
+                    UpdateMonsterGrid(obj.dwObjectID, ox, oy, testX, testY);
+                    slid = true;
+                }
+                // Try Y-only slide
+                else {
+                    testX = obj.wPosX;
+                    testY = (WORD)(obj.wPosY + (dirY > 0 ? 1 : (dirY < 0 ? -1 : 0)));
+                    if (testY != obj.wPosY && Walkable(testX, testY)) {
+                        int ox = obj.wPosX, oy = obj.wPosY;
+                        obj.wPosY = testY;
+                        obj.fPosY = (float)testY;
+                        obj.fPosX = (float)obj.wPosX; // clamp X
+                        UpdateMonsterGrid(obj.dwObjectID, ox, oy, testX, testY);
+                        slid = true;
+                    }
+                }
+
+                if (slid) {
+                    obj.wDestX = bestPlayer->wPosX;
+                    obj.wDestY = bestPlayer->wPosY;
+
+                    if (abs(obj.wDestX - obj.wLastSentDestX) > 3 || abs(obj.wDestY - obj.wLastSentDestY) > 3) {
+                        obj.wLastSentDestX = obj.wDestX;
+                        obj.wLastSentDestY = obj.wDestY;
+
+                        std::vector<BYTE> ackBuf; ackBuf.resize(4); ackBuf.push_back(0); 
+                        DWORD oid = obj.dwObjectID; ackBuf.push_back(oid&0xFF); ackBuf.push_back((oid>>8)&0xFF); ackBuf.push_back((oid>>16)&0xFF); ackBuf.push_back(oid>>24);
+                        ackBuf.push_back(obj.bObjectType); 
+                        ackBuf.push_back(oldX & 0xFF); ackBuf.push_back(oldX >> 8);
+                        ackBuf.push_back(oldY & 0xFF); ackBuf.push_back(oldY >> 8);
+                        ackBuf.push_back(obj.bHeight);
+                        ackBuf.push_back(obj.wDestX & 0xFF); ackBuf.push_back(obj.wDestX >> 8);
+                        ackBuf.push_back(obj.wDestY & 0xFF); ackBuf.push_back(obj.wDestY >> 8);
+                        ackBuf.push_back(obj.bHeight); 
+                        ackBuf.push_back(wDirection & 0xFF); ackBuf.push_back(wDirection >> 8); 
+                        ackBuf.push_back(20); 
+                        ackBuf.push_back((BYTE)dbSpeed); 
+                        
+                        PACKET_HEADER* ackHead = (PACKET_HEADER*)ackBuf.data(); ackHead->id = 0x3508; ackHead->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);
+                        EncryptPacket(ackBuf.data(), 0x42); 
+                        BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, ackBuf); // Changed to AOI
+                    }
+                } else {
+                    // Fully blocked: clamp float coords back to grid cell
+                    obj.fPosX = (float)obj.wPosX;
+                    obj.fPosY = (float)obj.wPosY;
                 }
             }
         }
@@ -590,17 +682,34 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
 
         float distToSpawn = std::sqrt(std::pow((float)obj.wPosX - obj.wSpawnX, 2) + std::pow((float)obj.wPosY - obj.wSpawnY, 2));
 
-        if (distToSpawn > range) {
+        if (obj.bIsReturning) {
+            // Force destination to spawn point
             obj.wDestX = obj.wSpawnX;
             obj.wDestY = obj.wSpawnY;
-        } else if (obj.wDestX == 0 && obj.wDestY == 0) {
-            if (tick - obj.dwLastAttackTime > (DWORD)(2000 + rand() % 3000)) { 
-                if (tpl.bIdleRatio > 0 && (rand() % 100) < tpl.bIdleRatio) {
-                    obj.dwLastAttackTime = tick; 
-                } else {
-                    obj.wDestX = obj.wSpawnX + (rand() % (range * 2)) - range;
-                    obj.wDestY = obj.wSpawnY + (rand() % (range * 2)) - range;
-                    obj.dwLastAttackTime = tick;
+            
+            // If we have returned close to spawn (within 2 tiles), clear returning state
+            if (distToSpawn <= 2.0f) {
+                obj.bIsReturning = false;
+                obj.wDestX = 0;
+                obj.wDestY = 0;
+                obj.wLastSentDestX = 0;
+                obj.wLastSentDestY = 0;
+                
+                LOG("[MonsterAI] LEASH RETURN COMPLETED: ObjID=" + std::to_string(obj.dwObjectID) + " returned to spawn.");
+            }
+        } else {
+            if (distToSpawn > range) {
+                obj.wDestX = obj.wSpawnX;
+                obj.wDestY = obj.wSpawnY;
+            } else if (obj.wDestX == 0 && obj.wDestY == 0) {
+                if (tick - obj.dwLastAttackTime > (DWORD)(2000 + rand() % 3000)) { 
+                    if (tpl.bIdleRatio > 0 && (rand() % 100) < tpl.bIdleRatio) {
+                        obj.dwLastAttackTime = tick; 
+                    } else {
+                        obj.wDestX = obj.wSpawnX + (rand() % (range * 2)) - range;
+                        obj.wDestY = obj.wSpawnY + (rand() % (range * 2)) - range;
+                        obj.dwLastAttackTime = tick;
+                    }
                 }
             }
         }
@@ -633,7 +742,7 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                 stopBuf.push_back(0); 
                 PACKET_HEADER* stopHead = (PACKET_HEADER*)stopBuf.data(); stopHead->id = 0x350C; stopHead->payloadSize = stopBuf.size() - sizeof(PACKET_HEADER);
                 EncryptPacket(stopBuf.data(), 0x42); 
-                BroadcastPacket(stopBuf);
+                BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, stopBuf); // Changed to AOI
             } else {
                 float dirX = ((float)obj.wDestX - (float)obj.wPosX) / distToDest;
                 float dirY = ((float)obj.wDestY - (float)obj.wPosY) / distToDest;
@@ -648,10 +757,13 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                 WORD nx = (WORD)obj.fPosX;
                 WORD ny = (WORD)obj.fPosY;
                 
-                bool canMove = true;
-                if (m_collisionGrid.size() > 0 && nx < m_width && ny < m_height && nx >= 0 && ny >= 0) {
-                    if (m_collisionGrid[ny * m_width + nx] != 0) canMove = false;
-                }
+                auto Walkable = [&](WORD tx, WORD ty) -> bool {
+                    if (m_collisionGrid.empty()) return true;
+                    if (tx >= m_width || ty >= m_height) return false;
+                    return m_collisionGrid[ty * m_width + tx] == 0;
+                };
+
+                bool canMove = Walkable(nx, ny);
                 
                 if (canMove) {
                     int ox = obj.wPosX, oy = obj.wPosY;
@@ -677,13 +789,16 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                         
                         PACKET_HEADER* ackHead = (PACKET_HEADER*)ackBuf.data(); ackHead->id = 0x3508; ackHead->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);
                         EncryptPacket(ackBuf.data(), 0x42); 
-                        BroadcastPacket(ackBuf);
+                        BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, ackBuf); // Changed to AOI
                     }
                 } else {
                     obj.wDestX = 0;
                     obj.wDestY = 0;
                     obj.wLastSentDestX = 0;
                     obj.wLastSentDestY = 0;
+                    // Clamp float coords to grid to prevent drift on wander collision
+                    obj.fPosX = (float)obj.wPosX;
+                    obj.fPosY = (float)obj.wPosY;
                 }
             }
         }

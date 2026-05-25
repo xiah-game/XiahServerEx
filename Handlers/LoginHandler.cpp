@@ -50,6 +50,14 @@ void OnLoginCheckReq(SOCKET clientSocket, std::string& clientAccountName, BYTE* 
     // Overwrite the account name with the one secured by AuthTicket to prevent fake account spoofing!
     clientAccountName = ticket.account;
     LOG("[LoginHandler] Ticket verified successfully! Authenticated Account: " + clientAccountName);
+
+    // Detect and kick duplicate sessions to completely prevent WPE replay exploits and handle dirty reconnects gracefully
+    SOCKET oldSocket = SessionMgr::GetInstance().GetSocketByAccount(clientAccountName);
+    if (oldSocket != INVALID_SOCKET && oldSocket != clientSocket) {
+        LOG("[LoginHandler] WARNING: Account '" + clientAccountName + "' is already online! Kicking the older connection.");
+        closesocket(oldSocket);
+    }
+
     SessionMgr::GetInstance().SetAccount(clientSocket, clientAccountName);
     SessionMgr::GetInstance().SetTicketId(clientSocket, ticket.ticketId);
 
@@ -153,13 +161,26 @@ void OnEndGameReq(SOCKET clientSocket, DWORD dwCharID, BYTE* payload, WORD total
     // Save player data
     PlayerManager::GetInstance().SavePlayer(dwCharID);
 
+    BYTE bEnd = 1;
+    BYTE bChChange = 0;
+    if (totalSize >= 2) {
+        bEnd = payload[0];
+        bChChange = payload[1];
+    } else if (totalSize >= 1) {
+        bEnd = payload[0];
+    }
+
+    LOG("[LoginHandler] EndGame payload details: bEnd=" + std::to_string(bEnd) + " bChChange=" + std::to_string(bChChange));
+
     // Send ACK back to client
     std::vector<BYTE> ackBuf; ackBuf.resize(4); 
-    ackBuf.push_back(0); // Success
+    ackBuf.push_back(0); // Success (bStartOption)
+    ackBuf.push_back(bChChange); // Echo bChChange to client so it knows whether to exit or switch channel
+    
     PACKET_HEADER* ackHead = (PACKET_HEADER*)ackBuf.data();
     ackHead->id = CS_NV_ENDGAME_ACK; ackHead->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);
     EncryptPacket(ackBuf.data(), 0x42);
     SafeSend(clientSocket, (const char*)ackBuf.data(), ackBuf.size(), 0);
-    LOG("[LoginHandler] Sent CS_NV_ENDGAME_ACK!");
+    LOG("[LoginHandler] Sent CS_NV_ENDGAME_ACK! bChChange=" + std::to_string(bChChange));
 }
 
