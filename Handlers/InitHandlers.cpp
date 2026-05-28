@@ -155,6 +155,7 @@ void InitPacketHandlers() {
     RegisterHandler(0x4023, [](SOCKET s, BYTE* p, WORD size) { OnMugongLearnReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
     RegisterHandler(0x4017, [](SOCKET s, BYTE* p, WORD size) { OnSelMugongReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
     RegisterHandler(0x4005, [](SOCKET s, BYTE* p, WORD size) { OnAttackHitReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
+    RegisterHandler(0x3A00, [](SOCKET s, BYTE* p, WORD size) { OnSetOptionReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
 
     // Stat Point Allocation (Character Window +1 buttons)
     RegisterHandler(0x401D, [](SOCKET s, BYTE* p, WORD size) { StatHandler::OnExecSpReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });

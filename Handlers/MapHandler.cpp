@@ -101,7 +101,7 @@ void OnMapEnterReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
 
         // Initialize HP/IP from DB so RecalculateStats has valid initial values
         DWORD dbHpCur = 0, dbHpMax = 0;
-        WORD dbIpCur = 0, dbIpMax = 0;
+        DWORD dbIpCur = 0, dbIpMax = 0;
         CharacterDB::CharPower cpMap;
         if (CharacterDB::GetInstance().GetCharData(dwActualCharID, cpMap)) {
             dbHpCur = cpMap.dwHpCur; dbHpMax = cpMap.dwHpMax;

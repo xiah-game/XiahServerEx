@@ -273,8 +273,16 @@ void TradeManager::OnTradeItemReq(SOCKET s, DWORD charID, BYTE* payload, WORD si
 // Payload: dwMoney(4) or INT64 money
 // ============================================================
 void TradeManager::OnTradeSackOnMoneyReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
-    if (size < 4) return;
-    DWORD dwMoney = *(DWORD*)(payload);
+    if (size < 8) {
+        LOG("[Trade] OnTradeSackOnMoneyReq: payload size too small (" + std::to_string(size) + " bytes)");
+        return;
+    }
+    
+    // 业务设计意图：客户端在 0x3DA9 包中发送 8 字节：dwTraderID (4 字节) + dwMoney (4 字节)。
+    // 之前服务端解析偏移错误，误将 dwTraderID 当作了 dwMoney，导致身上所有金钱被截断并交易的严重 Bug。
+    // 此处修正解析偏移：前 4 字节为 dwTraderID，后 4 字节为真正的交易金额 dwMoney。
+    DWORD dwTraderID = *(DWORD*)(payload);
+    DWORD dwMoney = *(DWORD*)(payload + 4);
     
     std::lock_guard<std::mutex> lock(m_mutex);
     auto it = m_activeTrades.find(charID);
@@ -285,14 +293,27 @@ void TradeManager::OnTradeSackOnMoneyReq(SOCKET s, DWORD charID, BYTE* payload, 
     auto& myState = isA ? session->stateA : session->stateB;
     auto& myMoney = isA ? session->dwMoneyA : session->dwMoneyB;
     SOCKET otherSock = isA ? session->sockB : session->sockA;
+    DWORD otherCharID = isA ? session->dwPlayerB : session->dwPlayerA;
+    
+    // 业务边界校验：验证 dwTraderID 是否确实是本交易会话中对方的 ObjectID (800M 格式)，防御非法协议欺骗
+    DWORD expectedTraderObjID = otherCharID + 400000000;
+    if (dwTraderID != expectedTraderObjID) {
+        LOG("[Trade] OnTradeSackOnMoneyReq: WARNING - TraderID mismatch! Client sent: " + std::to_string(dwTraderID) + ", Expected: " + std::to_string(expectedTraderObjID));
+        return;
+    }
     
     if (myState != TradeState::OPEN) return;
     
     // Verify player has enough money
     DWORD currentMoney = (DWORD)CharacterDB::GetInstance().GetMoney(charID);
-    if (dwMoney > currentMoney) dwMoney = currentMoney;
     
-    myMoney = dwMoney;
+    // 业务设计意图：客户端在接收 ACK 后会直接执行 += 累加，因此服务端必须保持累加逻辑。
+    // 同时，已放入金币与当前新增金币之和不能超过玩家所持有的金钱上限。
+    if (myMoney + dwMoney > currentMoney) {
+        dwMoney = currentMoney - myMoney;
+    }
+    
+    myMoney += dwMoney;
     
     // Reset confirm states
     session->stateA = TradeState::OPEN;
@@ -557,11 +578,11 @@ void TradeManager::SendTradeSackItemAck(SOCKET targetSocket, WORD packetID, BYTE
                 if (cost == 0) cost = g_ItemTemplates[refid].dwCost;
                 if (amount == 0) amount = g_ItemTemplates[refid].wAmount;
                 charType = g_ItemTemplates[refid].bCharType;
-                nd1 = g_ItemTemplates[refid].nBasicData1;
-                nd2 = g_ItemTemplates[refid].nBasicData2;
-                nd3 = g_ItemTemplates[refid].nBasicData3;
-                nd4 = g_ItemTemplates[refid].nBasicData4;
-                nd5 = g_ItemTemplates[refid].nBasicData5;
+                nd1 = row.nBasicData1 != 0 ? row.nBasicData1 : g_ItemTemplates[refid].nBasicData1;
+                nd2 = row.nBasicData2 != 0 ? row.nBasicData2 : g_ItemTemplates[refid].nBasicData2;
+                nd3 = row.nBasicData3 != 0 ? row.nBasicData3 : g_ItemTemplates[refid].nBasicData3;
+                nd4 = row.nBasicData4 != 0 ? row.nBasicData4 : g_ItemTemplates[refid].nBasicData4;
+                nd5 = row.nBasicData5 != 0 ? row.nBasicData5 : g_ItemTemplates[refid].nBasicData5;
                 if (d[0] == -9999) d[0] = g_ItemTemplates[refid].nData1;
                 if (d[1] == -9999) d[1] = g_ItemTemplates[refid].nData2;
                 if (d[2] == -9999) d[2] = g_ItemTemplates[refid].nData3;
@@ -589,8 +610,8 @@ void TradeManager::SendTradeSackItemAck(SOCKET targetSocket, WORD packetID, BYTE
                 pushWord(payload, nd1); pushWord(payload, nd2); pushWord(payload, nd3); pushWord(payload, nd4); pushWord(payload, nd5);
                 pushByte(payload, d[0]);
                 pushWord(payload, d[1]); pushWord(payload, d[2]);
-                pushWord(payload, d[3]); pushWord(payload, d[4]); pushWord(payload, d[5]); pushWord(payload, d[6]); pushWord(payload, d[7]);
-                pushWord(payload, d[8]); pushWord(payload, d[9]); pushWord(payload, d[10]); pushWord(payload, d[11]); pushWord(payload, d[12]);
+                pushDWord(payload, d[3]); pushDWord(payload, d[4]); pushDWord(payload, d[5]); pushWord(payload, d[6]); pushWord(payload, d[7]);
+                pushDWord(payload, d[8]); pushDWord(payload, d[9]); pushWord(payload, d[10]); pushWord(payload, d[11]); pushWord(payload, d[12]);
                 pushByte(payload, dat18); pushByte(payload, dat19);
                 pushByte(payload, d[13]); pushByte(payload, d[14]); pushByte(payload, d[15]); pushByte(payload, d[16]);
                 if (type == 9) { pushDWord(payload, 0); pushWord(payload, 0); pushWord(payload, 0); pushWord(payload, 0); pushWord(payload, 0); }
@@ -606,8 +627,8 @@ void TradeManager::SendTradeSackItemAck(SOCKET targetSocket, WORD packetID, BYTE
                     case 19: pushWord(payload, 0); pushWord(payload, 0); break;
                     case 20: pushByte(payload, 0); pushDWord(payload, 0); break;
                     case 21: { DWORD mid=nd2; sMugongTemplate* mg=MugongManager::GetInstance()->GetTemplate(mid); pushWord(payload, lvl); pushDWord(payload, mid); pushByte(payload, mg?mg->bType:0); pushByte(payload, mg?mg->bKind:0); pushByte(payload, 1); break; }
-                    case 22: pushDWord(payload, 0); pushByte(payload, 0); pushWord(payload, 0); pushWord(payload, 0); break;
-                    case 23: pushDWord(payload, 0); pushWord(payload, 0); pushWord(payload, 0); pushByte(payload, 0); pushByte(payload, 0); break;
+                    case 22: pushDWord(payload, nd2); pushByte(payload, (BYTE)nd3); pushWord(payload, (WORD)nd4); pushWord(payload, (WORD)nd5); break;
+                    case 23: pushDWord(payload, 0); pushDWord(payload, 0); pushDWord(payload, 0); pushByte(payload, 0); pushByte(payload, 0); break;
                     case 25: pushByte(payload, 0); pushWord(payload, 0); pushWord(payload, 0); break;
                     case 27: pushByte(payload, 0); pushDWord(payload, 0); pushByte(payload, 0); pushByte(payload, 0); pushByte(payload, 0); pushByte(payload, 0); pushDWord(payload, 0); break;
                     case 29: pushWord(payload, 0); pushWord(payload, 0); break;
@@ -646,11 +667,11 @@ static void SendAddOnSackAck(SOCKET s, BYTE bSackID, BYTE bSackPos, DWORD dwItem
         if (cost == 0) cost = g_ItemTemplates[refid].dwCost;
         if (amount == 0) amount = g_ItemTemplates[refid].wAmount;
         charType = g_ItemTemplates[refid].bCharType;
-        nd1 = g_ItemTemplates[refid].nBasicData1;
-        nd2 = g_ItemTemplates[refid].nBasicData2;
-        nd3 = g_ItemTemplates[refid].nBasicData3;
-        nd4 = g_ItemTemplates[refid].nBasicData4;
-        nd5 = g_ItemTemplates[refid].nBasicData5;
+        nd1 = row.nBasicData1 != 0 ? row.nBasicData1 : g_ItemTemplates[refid].nBasicData1;
+        nd2 = row.nBasicData2 != 0 ? row.nBasicData2 : g_ItemTemplates[refid].nBasicData2;
+        nd3 = row.nBasicData3 != 0 ? row.nBasicData3 : g_ItemTemplates[refid].nBasicData3;
+        nd4 = row.nBasicData4 != 0 ? row.nBasicData4 : g_ItemTemplates[refid].nBasicData4;
+        nd5 = row.nBasicData5 != 0 ? row.nBasicData5 : g_ItemTemplates[refid].nBasicData5;
         if (d[0] == -9999) d[0] = g_ItemTemplates[refid].nData1;
         if (d[1] == -9999) d[1] = g_ItemTemplates[refid].nData2;
         if (d[2] == -9999) d[2] = g_ItemTemplates[refid].nData3;
@@ -682,8 +703,8 @@ static void SendAddOnSackAck(SOCKET s, BYTE bSackID, BYTE bSackPos, DWORD dwItem
         pushWord(bi, nd1); pushWord(bi, nd2); pushWord(bi, nd3); pushWord(bi, nd4); pushWord(bi, nd5);
         pushByte(bi, d[0]);
         pushWord(bi, d[1]); pushWord(bi, d[2]);
-        pushWord(bi, d[3]); pushWord(bi, d[4]); pushWord(bi, d[5]); pushWord(bi, d[6]); pushWord(bi, d[7]);
-        pushWord(bi, d[8]); pushWord(bi, d[9]); pushWord(bi, d[10]); pushWord(bi, d[11]); pushWord(bi, d[12]);
+        pushDWord(bi, d[3]); pushDWord(bi, d[4]); pushDWord(bi, d[5]); pushWord(bi, d[6]); pushWord(bi, d[7]);
+        pushDWord(bi, d[8]); pushDWord(bi, d[9]); pushWord(bi, d[10]); pushWord(bi, d[11]); pushWord(bi, d[12]);
         pushByte(bi, dat18); pushByte(bi, dat19);
         pushByte(bi, d[13]); pushByte(bi, d[14]); pushByte(bi, d[15]); pushByte(bi, d[16]);
         if (type == 9) { pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); }
@@ -699,8 +720,8 @@ static void SendAddOnSackAck(SOCKET s, BYTE bSackID, BYTE bSackPos, DWORD dwItem
             case 19: pushWord(bi, 0); pushWord(bi, 0); break;
             case 20: pushByte(bi, 0); pushDWord(bi, 0); break;
             case 21: { DWORD mid=nd2; sMugongTemplate* mg=MugongManager::GetInstance()->GetTemplate(mid); pushWord(bi, lvl); pushDWord(bi, mid); pushByte(bi, mg?mg->bType:0); pushByte(bi, mg?mg->bKind:0); pushByte(bi, 1); break; }
-            case 22: pushDWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
-            case 23: pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); break;
+            case 22: pushDWord(bi, nd2); pushByte(bi, (BYTE)nd3); pushWord(bi, (WORD)nd4); pushWord(bi, (WORD)nd5); break;
+            case 23: pushDWord(bi, 0); pushDWord(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); break;
             case 25: pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
             case 27: pushByte(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushDWord(bi, 0); break;
             case 29: pushWord(bi, 0); pushWord(bi, 0); break;

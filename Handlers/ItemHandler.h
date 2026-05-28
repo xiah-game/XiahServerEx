@@ -12,3 +12,5 @@ void OnItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
 void OnItemMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize); // 0x420D
 void OnItemDropReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize); // 0x442D
 void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize); // 0x4219
+void SendCharPremiumList(SOCKET clientSocket, DWORD charID);
+

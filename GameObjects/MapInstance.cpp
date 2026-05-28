@@ -570,8 +570,8 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                     auto push2hp = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
                     push4hp(playerHpMax);
                     push4hp(playerHpCur);
-                    push2hp(targetPlayer.wIpMax);
-                    push2hp(targetPlayer.wIpCur);
+                    push4hp(targetPlayer.wIpMax);
+                    push4hp(targetPlayer.wIpCur);
                     hpBuf.push_back(0); // bType = 0 (silent update, no effect)
                     PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
                     hpHead->id = 0x3B0D;

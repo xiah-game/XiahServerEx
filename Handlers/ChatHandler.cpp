@@ -3,6 +3,7 @@
 #include "../Network/PacketRouter.h"
 #include "../Network/SessionMgr.h"
 #include "../GameObjects/MapInstance.h"
+#include "../DB/CharacterDB.h"
 #include <cstring>
 
 // =========================================================
@@ -136,6 +137,8 @@ void OnChatReq(SOCKET clientSocket, DWORD dwCharID, BYTE* pPayload, WORD wSize) 
     // Sender info
     DWORD dwSenderObjectID = dwCharID + 400000000;
     std::string senderName = GetPlayerName(dwCharID);
+    
+
 
     LOG("[CHAT] Type=" + std::to_string(bType) +
         " Sender=" + senderName +

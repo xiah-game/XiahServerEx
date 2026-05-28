@@ -91,10 +91,11 @@ struct PlayerData : EntityBase {
     // Weapon stats
     DWORD wWepAtk = 0, wWepDef = 0, wWepMag = 0;
     // IP (Mana)
-    WORD  wIpCur = 0, wIpMax = 0;
+    DWORD wIpCur = 0, wIpMax = 0;
     // Equipment bonuses
     WORD  wPlusSpeed = 0, wCritical = 0;
-    WORD  wEquipHp = 0, wEquipIp = 0;
+    WORD  wEquipHp = 0;
+    DWORD wEquipIp = 0;
     WORD  wEquipRestoreHp = 0, wEquipRestoreIp = 0;
     DWORD dwLastRegenTime = 0;
     DWORD dwInvulnerableUntil = 0;  // Death/respawn protection
@@ -129,6 +130,9 @@ struct PlayerData : EntityBase {
     std::string szMunpaName;
     std::string szMunpaNickName;
     DWORD dwMunpaMarkID = 0;
+
+    // 武功攻击与物理PK保护选项：0 = 保护所有角色, 1 = 保护本门派成员, 2 = 无对象/自由PK
+    BYTE  bSafeMode = 0;
 
     // Visual equipment and Fame sync
     DWORD dwFame = 0;

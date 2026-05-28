@@ -22,7 +22,7 @@ public:
     struct CharPower {
         WORD wLevel = 0, wStr = 0, wSus = 0, wDex = 0, wVit = 0;
         BYTE bCharType = 0;
-        WORD wIpMax = 0, wIpCur = 0;
+        DWORD wIpMax = 0, wIpCur = 0;
         DWORD dwHpMax = 0, dwHpCur = 0;
         long long int dwExp = 0;
         DWORD dwTotalSp = 0, dwTotalTp = 0;
@@ -60,7 +60,7 @@ public:
     INT64 GetMoney(DWORD dwCharID);
 
     // Update HP/IP in database
-    void UpdateHpIp(DWORD dwCharID, DWORD dwHpCur, WORD wIpCur);
+    void UpdateHpIp(DWORD dwCharID, DWORD dwHpCur, DWORD wIpCur);
 
     // Restore HP/IP to max in database (used on level-up)
     void RestoreHpIpToMax(DWORD dwCharID);
@@ -90,6 +90,9 @@ public:
 
     // Get account name from CHAR_ACCOUNT
     std::string GetAccountName(DWORD dwCharID);
+
+    // 获取账号 VIP 等级 (0-5)
+    int GetVipLevel(DWORD dwCharID);
 
     // Get name and char type from CHAR_VISUAL view
     bool GetCharVisual(DWORD dwCharID, std::string& szNickName, BYTE& bCharType);
@@ -128,7 +131,7 @@ public:
     struct CharSelectEntry {
         int dwCharID = 0; char szNickName[256] = {0}; char bCharType = 0;
         int dwBirthDate = 0; int dwMapID = 0; short wLevel = 0;
-        int dwHpCur = 0; int dwHpMax = 0; short wIpCur = 0; short wIpMax = 0;
+        int dwHpCur = 0; int dwHpMax = 0; int wIpCur = 0; int wIpMax = 0;
         short wVit = 0; short wStr = 0; short wSus = 0; short wDex = 0;
         char bRebirth = 0;
         EquipSlot items[9];

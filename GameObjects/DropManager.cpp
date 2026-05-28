@@ -347,8 +347,22 @@ void DropManager::GenerateDrops(DWORD killerID, const MonsterData& obj) {
     auto tplIt = g_NpcTemplates.find(obj.bPropType);
     if (tplIt == g_NpcTemplates.end()) return;
     
+    // 获取 VIP 爆率加倍缩减系数
+    int vipLevel = CharacterDB::GetInstance().GetVipLevel(killerID);
+    double multiplier = 1.0;
+    if (vipLevel >= 1 && vipLevel <= 5) {
+        multiplier += vipLevel * 0.2; // VIP 1-5 分别提升 20%~100% 爆率
+    }
+    
+    // 计算并应用 VIP 爆率提升
+    int finalRootItem = obj.wRootItem;
+    if (multiplier > 1.0 && finalRootItem > 0) {
+        finalRootItem = (int)(finalRootItem / multiplier);
+        if (finalRootItem < 1) finalRootItem = 1;
+    }
+    
     // ===== Item Drop (wRootItem = master gate, 1:N) =====
-    if (obj.wRootItem > 0 && (rand() % obj.wRootItem == 0)) {
+    if (obj.wRootItem > 0 && (rand() % finalRootItem == 0)) {
         
         // Try new Drop Group system first
         auto groupIt = m_dropGroups.find(obj.bPropType);
@@ -358,8 +372,15 @@ void DropManager::GenerateDrops(DWORD killerID, const MonsterData& obj) {
                 if (group.wDropRate == 0) continue;
                 if (group.items.empty()) continue;
                 
+                // 应用 VIP 组爆率提升
+                int finalDropRate = group.wDropRate;
+                if (multiplier > 1.0 && finalDropRate > 0) {
+                    finalDropRate = (int)(finalDropRate / multiplier);
+                    if (finalDropRate < 1) finalDropRate = 1;
+                }
+                
                 // Per-group 1/N probability
-                if (rand() % group.wDropRate != 0) continue;
+                if (rand() % finalDropRate != 0) continue;
                 
                 // Determine pick count: bMinDrop ~ bMaxDrop
                 int picks = group.bMinDrop;
@@ -414,7 +435,12 @@ void DropManager::GenerateDrops(DWORD killerID, const MonsterData& obj) {
     }
     
     // ===== Money Drop (wRootMoney, 1:N) =====
-    if (obj.wRootMoney > 0 && (rand() % obj.wRootMoney == 0)) {
+    int finalRootMoney = obj.wRootMoney;
+    if (multiplier > 1.0 && finalRootMoney > 0) {
+        finalRootMoney = (int)(finalRootMoney / multiplier);
+        if (finalRootMoney < 1) finalRootMoney = 1;
+    }
+    if (obj.wRootMoney > 0 && (rand() % finalRootMoney == 0)) {
         DWORD moneyAmount = obj.bPropType * 10 + (rand() % 100);
         DropMoneyToMap(killerID, obj, moneyAmount);
     }
@@ -587,11 +613,11 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
                 if (cost == 0) cost = g_ItemTemplates[refid].dwCost;
                 if (amount == 0) amount = g_ItemTemplates[refid].wAmount;
                 charType = g_ItemTemplates[refid].bCharType;
-                nd1 = g_ItemTemplates[refid].nBasicData1;
-                nd2 = g_ItemTemplates[refid].nBasicData2;
-                nd3 = g_ItemTemplates[refid].nBasicData3;
-                nd4 = g_ItemTemplates[refid].nBasicData4;
-                nd5 = g_ItemTemplates[refid].nBasicData5;
+                nd1 = row.nBasicData1 != 0 ? row.nBasicData1 : g_ItemTemplates[refid].nBasicData1;
+                nd2 = row.nBasicData2 != 0 ? row.nBasicData2 : g_ItemTemplates[refid].nBasicData2;
+                nd3 = row.nBasicData3 != 0 ? row.nBasicData3 : g_ItemTemplates[refid].nBasicData3;
+                nd4 = row.nBasicData4 != 0 ? row.nBasicData4 : g_ItemTemplates[refid].nBasicData4;
+                nd5 = row.nBasicData5 != 0 ? row.nBasicData5 : g_ItemTemplates[refid].nBasicData5;
                 if (d1 == -9999) d1 = g_ItemTemplates[refid].nData1;
                 if (d2 == -9999) d2 = g_ItemTemplates[refid].nData2;
                 if (d3 == -9999) d3 = g_ItemTemplates[refid].nData3;
@@ -624,8 +650,8 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
                 pushWord(bi, nd1); pushWord(bi, nd2); pushWord(bi, nd3); pushWord(bi, nd4); pushWord(bi, nd5);
                 pushByte(bi, d1);
                 pushWord(bi, d2); pushWord(bi, d3);
-                pushWord(bi, d4); pushWord(bi, d5); pushWord(bi, d6); pushWord(bi, d7); pushWord(bi, d8);
-                pushWord(bi, d9); pushWord(bi, d10); pushWord(bi, d11); pushWord(bi, d12); pushWord(bi, d13);
+                pushDWord(bi, d4); pushDWord(bi, d5); pushDWord(bi, d6); pushWord(bi, d7); pushWord(bi, d8);
+                pushDWord(bi, d9); pushDWord(bi, d10); pushWord(bi, d11); pushWord(bi, d12); pushWord(bi, d13);
                 pushByte(bi, dat18); pushByte(bi, dat19);
                 pushByte(bi, d14); pushByte(bi, d15); pushByte(bi, d16); pushByte(bi, d17);
                 if (type == 9) { pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); }
@@ -641,8 +667,8 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
                     case 19: pushWord(bi, 0); pushWord(bi, 0); break;
                     case 20: pushByte(bi, 0); pushDWord(bi, 0); break;
                     case 21: { DWORD mid=nd2; sMugongTemplate* mg=MugongManager::GetInstance()->GetTemplate(mid); pushWord(bi, lvl); pushDWord(bi, mid); pushByte(bi, mg?mg->bType:0); pushByte(bi, mg?mg->bKind:0); pushByte(bi, 1); break; }
-                    case 22: pushDWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
-                    case 23: pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); break;
+                    case 22: pushDWord(bi, nd2); pushByte(bi, (BYTE)nd3); pushWord(bi, (WORD)nd4); pushWord(bi, (WORD)nd5); break;
+                    case 23: pushDWord(bi, 0); pushDWord(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); break;
                     case 25: pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
                     case 27: pushByte(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushDWord(bi, 0); break;
                     case 29: pushWord(bi, 0); pushWord(bi, 0); break;
@@ -665,8 +691,8 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
                 pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0);
                 pushByte(bi, 0);
                 pushWord(bi, drop.nData[1]); pushWord(bi, drop.nData[3]);
-                pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0);
-                pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0);
+                pushDWord(bi, 0); pushDWord(bi, 0); pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0);
+                pushDWord(bi, 0); pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0);
                 pushByte(bi, 0); pushByte(bi, 0);
                 pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0);
                 if (drop.bType == 9) { pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); }
@@ -682,8 +708,17 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
                     case 19: pushWord(bi, 0); pushWord(bi, 0); break;
                     case 20: pushByte(bi, 0); pushDWord(bi, 0); break;
                     case 21: pushWord(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 1); break;
-                    case 22: pushDWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
-                    case 23: pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); break;
+                    case 22: {
+                        DWORD nd2_val = 0; BYTE nd3_val = 0; WORD nd4_val = 0; WORD nd5_val = 0;
+                        if (g_ItemTemplates.count(drop.wRefID)) {
+                            nd2_val = g_ItemTemplates[drop.wRefID].nBasicData2;
+                            nd3_val = (BYTE)g_ItemTemplates[drop.wRefID].nBasicData3;
+                            nd4_val = (WORD)g_ItemTemplates[drop.wRefID].nBasicData4;
+                            nd5_val = (WORD)g_ItemTemplates[drop.wRefID].nBasicData5;
+                        }
+                        pushDWord(bi, nd2_val); pushByte(bi, nd3_val); pushWord(bi, nd4_val); pushWord(bi, nd5_val); break;
+                    }
+                    case 23: pushDWord(bi, 0); pushDWord(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); break;
                     case 25: pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
                     case 27: pushByte(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushDWord(bi, 0); break;
                     case 29: pushWord(bi, 0); pushWord(bi, 0); break;

@@ -34,6 +34,35 @@ void OnPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                 std::lock_guard<std::mutex> lock(g_MapInstances[pMapID]->GetMutex());
                 PlayerData* pAtk = g_MapInstances[pMapID]->GetPlayer(atkId);
                 if (pAtk) {
+                    // 检查控制类 Debuff (定身/冰冻/眩晕) 拦截物理起手
+                    bool isCC = false;
+                    for (const auto& bf : pAtk->activeBuffs) {
+                        if (bf.second.bIsDebuff) {
+                            DWORD mugID = bf.second.dwMugongID;
+                            if (mugID == 94 || mugID == 95 || mugID == 35 || mugID == 65 || mugID == 125) {
+                                isCC = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (isCC) {
+                        std::vector<BYTE> buf; buf.resize(4, 0);
+                        DWORD senderObjID = 0;
+                        buf.push_back(senderObjID & 0xFF); buf.push_back((senderObjID >> 8) & 0xFF); buf.push_back((senderObjID >> 16) & 0xFF); buf.push_back(senderObjID >> 24);
+                        buf.push_back(8); // CT_TIMEMESSAGE
+                        std::string msg = "[Control] You are frozen, stunned or immobilized and cannot attack!";
+                        WORD len = (WORD)msg.size();
+                        buf.push_back(len & 0xFF); buf.push_back((len >> 8) & 0xFF);
+                        buf.insert(buf.end(), msg.begin(), msg.end());
+                        WORD packetID = 0x3E02; // CS_CH_CHAT_ACK
+                        WORD payloadSize = (WORD)(buf.size() - 4);
+                        memcpy(&buf[0], &packetID, 2);
+                        memcpy(&buf[2], &payloadSize, 2);
+                        EncryptPacket(buf.data(), 0x42);
+                        SafeSend(clientSocket, (const char*)buf.data(), (int)buf.size(), 0);
+                        return;
+                    }
+
                     if (pAtk->activeBuffs.count(130) > 0) {
                         pAtk->activeBuffs[130].dwEndTime = 0; // Mark for instant expiry in MonsterAI loop
                         LOG("[CombatHandler] Player " + std::to_string(atkId) + " pre-attacked. Expiring Turtle Breath.");
@@ -98,6 +127,35 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
             std::lock_guard<std::mutex> lock(mapInst->GetMutex());
             PlayerData* pAttacker = mapInst->GetPlayer(attackerId);
             if (pAttacker) {
+                // 检查控制类 Debuff (定身/冰冻/眩晕) 拦截物理命中伤害
+                bool isCC = false;
+                for (const auto& bf : pAttacker->activeBuffs) {
+                    if (bf.second.bIsDebuff) {
+                        DWORD mugID = bf.second.dwMugongID;
+                        if (mugID == 94 || mugID == 95 || mugID == 35 || mugID == 65 || mugID == 125) {
+                            isCC = true;
+                            break;
+                        }
+                    }
+                }
+                if (isCC) {
+                    std::vector<BYTE> buf; buf.resize(4, 0);
+                    DWORD senderObjID = 0;
+                    buf.push_back(senderObjID & 0xFF); buf.push_back((senderObjID >> 8) & 0xFF); buf.push_back((senderObjID >> 16) & 0xFF); buf.push_back(senderObjID >> 24);
+                    buf.push_back(8); // CT_TIMEMESSAGE
+                    std::string msg = "[Control] You are frozen, stunned or immobilized and cannot attack!";
+                    WORD len = (WORD)msg.size();
+                    buf.push_back(len & 0xFF); buf.push_back((len >> 8) & 0xFF);
+                    buf.insert(buf.end(), msg.begin(), msg.end());
+                    WORD packetID = 0x3E02; // CS_CH_CHAT_ACK
+                    WORD payloadSize = (WORD)(buf.size() - 4);
+                    memcpy(&buf[0], &packetID, 2);
+                    memcpy(&buf[2], &payloadSize, 2);
+                    EncryptPacket(buf.data(), 0x42);
+                    SafeSend(clientSocket, (const char*)buf.data(), (int)buf.size(), 0);
+                    return;
+                }
+
                 if (pAttacker->activeBuffs.count(130) > 0) {
                     pAttacker->activeBuffs[130].dwEndTime = 0; // Mark for instant expiry in MonsterAI loop
                     LOG("[CombatHandler] Player " + std::to_string(attackerId) + " attacked. Expiring Turtle Breath.");
@@ -122,7 +180,7 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                     if (g_NpcTemplates.count(pTarget->bPropType))
                         monsterDef = g_NpcTemplates[pTarget->bPropType].dwDefInit;
                     
-                    // 动态扣减：检测并应用怪物当前受到的减防等 Debuff 属性效果
+                    // 鍔ㄦ€佹墸鍑忥細妫€娴嬪苟搴旂敤鎬�墿褰撳墠鍙楀埌鐨勫噺闃茬瓑 Debuff 灞炴€ф晥鏋�
                     for (auto& bf : pTarget->activeBuffs) {
                         sMugongList* bd = MugongManager::GetInstance()->GetMugongLevelData(bf.second.dwMugongID, bf.second.bLevel);
                         if (bd) {
@@ -289,6 +347,78 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                 dwHpMax = pTarget->dwHpMax;
                 dwHpCur = pTarget->dwHpCur;
             }
+
+            PlayerData* pTargetPlayer = mapInst->GetPlayer(targetId);
+            if (pTargetPlayer) {
+                // 物理 PvP 伤害与命中判定分支
+                if (pAttacker) {
+                    // A. 组队（队友）免伤保护 (最高级硬核保护)
+                    DWORD pID1 = PartyManager::GetInstance().GetPartyID(attackerId - 400000000);
+                    DWORD pID2 = PartyManager::GetInstance().GetPartyID(pTargetPlayer->dwObjectID - 400000000);
+                    if (pID1 != 0 && pID1 == pID2) {
+                        bResult = 1; // MISS
+                        finalDmg = 0;
+                        LOG("[CombatHandler] Friendly fire physical attack blocked: " + pAttacker->szName + " -> " + pTargetPlayer->szName);
+                        goto APPLY_PHYSICAL_DAMAGE;
+                    }
+                    
+                    // B. 安全非PK模式保护校验
+                    if (pAttacker->bSafeMode != 2) {
+                        bResult = 1; // MISS
+                        finalDmg = 0;
+                        LOG("[CombatHandler] Safe Mode physical attack blocked: " + pAttacker->szName + " -> " + pTargetPlayer->szName);
+                        goto APPLY_PHYSICAL_DAMAGE;
+                    }
+                }
+                
+                // 命中计算（物理平A PK 命中率计算）
+                DWORD playerAtkRating = 50 + (pAttacker ? pAttacker->dwTotalHit : 0);
+                DWORD targetDodge = pTargetPlayer->dwTotalDodge;
+                float hitChance = (float)playerAtkRating / (float)(playerAtkRating + targetDodge);
+                float roll = (float)(rand() % 10000) / 10000.0f;
+                
+                if (targetDodge > 0 && roll > hitChance) {
+                    bResult = 1; // MISS
+                    finalDmg = 0;
+                } else if (pTargetPlayer->activeBuffs.count(130) > 0) {
+                    // 130 龟息大法 PVP 免疫
+                    bResult = 1; // MISS
+                    finalDmg = 0;
+                } else {
+                    if (pTargetPlayer->activeBuffs.count(178) > 0) {
+                        pTargetPlayer->activeBuffs[178].dwEndTime = 0; // 破隐
+                    }
+                    bResult = 2; // HIT
+                    
+                    float dmgFloat = (float)finalDmg;
+                    float variance = 0.9f + ((float)(rand() % 2000) / 10000.0f);
+                    dmgFloat *= variance;
+                    
+                    WORD critRate = (pAttacker && pAttacker->wCritical > 0) ? pAttacker->wCritical : 5;
+                    if ((WORD)(rand() % 100) < critRate) {
+                        dmgFloat *= 1.5f;
+                        bHitFlag = 1; // Critical
+                    }
+                    
+                    finalDmg = (DWORD)dmgFloat;
+                    DWORD targetDef = pTargetPlayer->dwTotalDef;
+                    if (finalDmg > targetDef) finalDmg -= targetDef;
+                    else finalDmg = 1;
+                    
+                    pTargetPlayer->dwHpCur = (pTargetPlayer->dwHpCur > finalDmg) ? (pTargetPlayer->dwHpCur - finalDmg) : 0;
+                    if (pTargetPlayer->dwHpCur == 0) {
+                        pTargetPlayer->dwDeadTime = GetTickCount();
+                        monsterDied = true; // 复用死亡动画触发机制
+                        deadObjType = 1; // OBJTYPE_PC
+                        deadObjID = pTargetPlayer->dwObjectID;
+                        LOG("[CombatHandler] Player " + pTargetPlayer->szName + " died from physical attack by " + (pAttacker ? pAttacker->szName : "Unknown"));
+                    }
+                }
+                
+APPLY_PHYSICAL_DAMAGE:
+                dwHpMax = pTargetPlayer->dwHpMax;
+                dwHpCur = pTargetPlayer->dwHpCur;
+            }
         } // unlock
 
         // Send status refresh AFTER mutex release (avoids deadlock)
@@ -319,8 +449,8 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                     auto push2 = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
                     push4(pObj->dwHpMax);
                     push4(pObj->dwHpCur);
-                    push2(pObj->wIpMax);
-                    push2(pObj->wIpCur);
+                    push4(pObj->wIpMax);
+                    push4(pObj->wIpCur);
                     hpBuf.push_back(1); // bType = 1 (with restore effect)
                     PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
                     hpHead->id = 0x3B0D;

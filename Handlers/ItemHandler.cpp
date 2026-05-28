@@ -9,6 +9,73 @@
 
 extern std::map<DWORD, CMapInstance*> g_MapInstances;
 #include "ShopHandler.h"
+#include "../Network/SystemMessage.h"
+#include "../DBHelper.h"
+
+// 外部声明，用于打开随身仓库
+void OnItemListInBankReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);
+
+void SendCharPremiumList(SOCKET clientSocket, DWORD charID) {
+    if (charID == 0) return;
+    
+    struct BuffNode {
+        WORD wRefID;
+        BYTE bEndDay;
+        BYTE bEndHour;
+        BYTE bEndMin;
+    };
+    std::vector<BuffNode> activeBuffs;
+    
+    // 利用 DATEDIFF + 分钟模除，直接在 SQL 引擎端完成高精度时区及时间差换算，防止跨天误差！
+    std::string query = 
+        "SELECT wRefID, "
+        "       DATEDIFF(minute, GETDATE(), dateEnd) / 1440 AS endDay, "
+        "       (DATEDIFF(minute, GETDATE(), dateEnd) % 1440) / 60 AS endHour, "
+        "       DATEDIFF(minute, GETDATE(), dateEnd) % 60 AS endMin "
+        "FROM CHAR_PREMIUM "
+        "WHERE dwCharID = " + std::to_string(charID) + " AND dateEnd > GETDATE()";
+        
+    DBHelper::GetInstance().ExecuteQuery(query, [&](SQLHSTMT hStmt) {
+        WORD wRefID = 0;
+        int d = 0, h = 0, m = 0;
+        SQLLEN l1 = 0, l2 = 0, l3 = 0, l4 = 0;
+        while (SQLFetch(hStmt) == SQL_SUCCESS) {
+            SQLGetData(hStmt, 1, SQL_C_USHORT, &wRefID, 0, &l1);
+            SQLGetData(hStmt, 2, SQL_C_LONG, &d, 0, &l2);
+            SQLGetData(hStmt, 3, SQL_C_LONG, &h, 0, &l3);
+            SQLGetData(hStmt, 4, SQL_C_LONG, &m, 0, &l4);
+            
+            BuffNode node;
+            node.wRefID = wRefID;
+            node.bEndDay = (BYTE)d;
+            node.bEndHour = (BYTE)h;
+            node.bEndMin = (BYTE)m;
+            activeBuffs.push_back(node);
+        }
+    });
+    
+    // 组装并发送 0x4321 (CS_NV_CHARPREMIUM_ACK) 封包
+    std::vector<BYTE> buf;
+    buf.resize(4, 0); // 预留包头
+    buf.push_back((BYTE)activeBuffs.size()); // bCount
+    
+    for (auto& b : activeBuffs) {
+        buf.push_back(b.wRefID & 0xFF); buf.push_back(b.wRefID >> 8); // wRefID
+        buf.push_back(b.bEndDay);   // bEndDay
+        buf.push_back(b.bEndHour);  // bEndHour
+        buf.push_back(b.bEndMin);   // bEndMin
+    }
+    
+    WORD packetID = 0x4321; // CS_NV_CHARPREMIUM_ACK
+    WORD payloadSize = (WORD)(buf.size() - 4);
+    memcpy(&buf[0], &packetID, 2);
+    memcpy(&buf[2], &payloadSize, 2);
+    
+    EncryptPacket(buf.data(), 0x42);
+    SafeSend(clientSocket, (const char*)buf.data(), (int)buf.size(), 0);
+    LOG("[PremiumBuff] Sent " + std::to_string(activeBuffs.size()) + " active buffs to client for charID=" + std::to_string(charID));
+}
+
 
 static void SendSystemWarningChat(SOCKET clientSocket, const std::string& msg) {
     std::vector<BYTE> buf;
@@ -75,11 +142,11 @@ void OnItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
                 if (amount == 0) amount = g_ItemTemplates[refid].wAmount;
                 charType = g_ItemTemplates[refid].bCharType;
 
-                nd1 = g_ItemTemplates[refid].nBasicData1;
-                nd2 = g_ItemTemplates[refid].nBasicData2;
-                nd3 = g_ItemTemplates[refid].nBasicData3;
-                nd4 = g_ItemTemplates[refid].nBasicData4;
-                nd5 = g_ItemTemplates[refid].nBasicData5;
+                nd1 = row.nBasicData1 != 0 ? row.nBasicData1 : g_ItemTemplates[refid].nBasicData1;
+                nd2 = row.nBasicData2 != 0 ? row.nBasicData2 : g_ItemTemplates[refid].nBasicData2;
+                nd3 = row.nBasicData3 != 0 ? row.nBasicData3 : g_ItemTemplates[refid].nBasicData3;
+                nd4 = row.nBasicData4 != 0 ? row.nBasicData4 : g_ItemTemplates[refid].nBasicData4;
+                nd5 = row.nBasicData5 != 0 ? row.nBasicData5 : g_ItemTemplates[refid].nBasicData5;
                 if (d[0] == -9999) d[0] = g_ItemTemplates[refid].nData1;
                 if (d[1] == -9999) d[1] = g_ItemTemplates[refid].nData2;
                 if (d[2] == -9999) d[2] = g_ItemTemplates[refid].nData3;
@@ -114,8 +181,8 @@ void OnItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
                 pushWord(nd1); pushWord(nd2); pushWord(nd3); pushWord(nd4); pushWord(nd5); // BasicData 1-5
                 pushByte(d[0]); // DecrDurRate
                 pushWord(d[1]); pushWord(d[2]); // CurDur, MaxDur
-                pushWord(d[3]); pushWord(d[4]); pushWord(d[5]); pushWord(d[6]); pushWord(d[7]); // Attacks
-                pushWord(d[8]); pushWord(d[9]); pushWord(d[10]); pushWord(d[11]); pushWord(d[12]); // HP/IP
+                pushDWord(d[3]); pushDWord(d[4]); pushDWord(d[5]); pushWord(d[6]); pushWord(d[7]); // Attacks (AtkPwr, DefPwr, AtkRating upgraded to DWORD)
+                pushDWord(d[8]); pushDWord(d[9]); pushWord(d[10]); pushWord(d[11]); pushWord(d[12]); // HP/IP (IncrHp, IncrIp upgraded to DWORD)
                 pushByte(dat18); pushByte(dat19); // bRarity, bStxType
                 pushByte(d[13]); pushByte(d[14]); pushByte(d[15]); pushByte(d[16]); // Limit/Modify/Repair/Discount
                 
@@ -149,9 +216,9 @@ void OnItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
                         pushWord(lvl); pushDWord(mid); pushByte(typeVal); pushByte(kindVal); pushByte(1); break;
                     }
                     case 22:
-                        pushDWord(0); pushByte(0); pushWord(0); pushWord(0); break;
+                        pushDWord(nd2); pushByte((BYTE)nd3); pushWord((WORD)nd4); pushWord((WORD)nd5); break;
                     case 23:
-                        pushDWord(0); pushWord(0); pushWord(0); pushByte(0); pushByte(0); break;
+                        pushDWord(0); pushDWord(0); pushDWord(0); pushByte(0); pushByte(0); break;
                     case 25:
                         pushByte(0); pushWord(0); pushWord(0); break;
                     case 27:
@@ -185,6 +252,11 @@ void OnItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
     
     PACKET_HEADER* ackHead = (PACKET_HEADER*)ackBuf.data(); ackHead->id = 0x4418; ackHead->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);
     EncryptPacket(ackBuf.data(), 0x42); SafeSend(clientSocket, (const char*)ackBuf.data(), ackBuf.size(), 0);
+    
+    // 当客户端请求加载主装备栏物品 (Sack 0) 时，同步特权 Buff 列表（用于上线和跨图重连）
+    if (sackId == 0) {
+        SendCharPremiumList(clientSocket, charID);
+    }
 }
 
 void OnItemMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
@@ -198,10 +270,27 @@ void OnItemMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
         if (totalSize >= 12) {
             dwDesObjID = *(DWORD*)(payload + 8);
         }
+
+        // 非 VIP 玩家拖拽移入第三页背包的安全静默拦截
+        if (bDesSackID == 3) {
+            if (CharacterDB::GetInstance().GetVipLevel(charID) == 0) {
+                std::vector<BYTE> ackBuf; ackBuf.resize(4); ackBuf.push_back(1); // 1 = 失败/复位
+                ackBuf.push_back(bSrcSackID); ackBuf.push_back(bSrcSackPos);
+                ackBuf.push_back(bDesSackID); ackBuf.push_back(bDesSackPos);
+                PACKET_HEADER* ackHead = (PACKET_HEADER*)ackBuf.data(); 
+                ackHead->id = 0x420E; 
+                ackHead->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);
+                EncryptPacket(ackBuf.data(), 0x42); 
+                SafeSend(clientSocket, (const char*)ackBuf.data(), ackBuf.size(), 0);
+                return; // 直接静默结束，不再往下进行任何移动和 DB 写入
+            }
+        }
         
         LOG("[ItemHandler] ITEM MOVE: CharID=" + std::to_string(charID) + " " + std::to_string(bSrcSackID) + ":" + std::to_string(bSrcSackPos) + " -> " + std::to_string(bDesSackID) + ":" + std::to_string(bDesSackPos));
         
         if (charID > 0) {
+            // Check if source and destination are same position
+
             // Boundary validation: if a specific position is given for a backpack sack,
             // check that the item's bCX×bCY dimensions actually fit within the 6×6 grid.
             // If not, switch to auto-find mode (bDesSackPos=255).
@@ -320,6 +409,7 @@ void OnItemMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
                     else if (t == 7 && bDesSackPos == 6) validPos = true;
                     else if (t == 5 && bDesSackPos == 7) validPos = true;
                     else if (t == 9 && bDesSackPos == 8) validPos = true;
+                    else if (t == 8 && (bDesSackPos == 4 || bDesSackPos == 9)) validPos = true;
                     else if (t == 36 && bDesSackPos == 10) validPos = true;
 
                     if (!validPos) {
@@ -462,6 +552,11 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
     WORD wAmount = 0;
     bool foundItem = false;
 
+    // 存储过程开箱子临时产出锁定变量
+    WORD openRefID = 0;
+    BYTE boxItemCount = 0;
+    BYTE boxResult = 0;
+
     { ItemDB::ItemBasicInfo ib;
       if (ItemDB::GetInstance().GetItemBasicInfo(dwItemID, ib)) {
           wRefID = ib.wRefID; wAmount = (WORD)ib.wAmount; foundItem = true;
@@ -489,6 +584,69 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
     }
 
     // 0. Pre-checks (Do NOT deduct if fails!)
+    if (tpl.bType == 19 && tpl.bKind == 17) {
+        std::string itemName = tpl.szName;
+        WORD premiumRefID = 0;
+        
+        // 前置校验：查询该卡片在 ITEM_PREMIUM 中是否有效配置
+        std::string qPremium = "SELECT wRefID FROM ITEM_PREMIUM WHERE szName = '" + itemName + "'";
+        DBHelper::GetInstance().ExecuteQuery(qPremium, [&](SQLHSTMT hStmt) {
+            SQLGetData(hStmt, 1, SQL_C_USHORT, &premiumRefID, 0, NULL);
+        });
+        
+        if (premiumRefID == 0) {
+            LOG("[ItemHandler] Premium card mismatch! itemName=" + itemName);
+            SendSystemWarningChat(clientSocket, "增益卡激活失败：无法识别该增益卡或其已失效！");
+            return;
+        }
+    }
+
+    if (tpl.bType == 19 && tpl.bKind == 4) {
+        // 纯 SQL 数据库随机开箱计算逻辑，取代原有 spBoxItemOpen 存储过程
+        std::string query = 
+            "DECLARE @MaxRand INT; "
+            "SELECT @MaxRand = MAX(wMaxRand) FROM BOX_ITEM_CONFIG WHERE dwBoxRefID = " + std::to_string(tpl.wRefID) + "; "
+            "IF @MaxRand IS NOT NULL AND @MaxRand > 0 "
+            "BEGIN "
+            "    DECLARE @RandVal INT = ABS(CHECKSUM(NewId())) % @MaxRand; "
+            "    SELECT TOP 1 dwOpenRefID AS wOpenRefID, wAmount AS bItemCount, 0 AS bResult "
+            "    FROM BOX_ITEM_CONFIG "
+            "    WHERE dwBoxRefID = " + std::to_string(tpl.wRefID) + " AND @RandVal >= wMinRand AND @RandVal < wMaxRand "
+            "    ORDER BY id; "
+            "END "
+            "ELSE "
+            "BEGIN "
+            "    SELECT 0 AS wOpenRefID, 0 AS bItemCount, 1 AS bResult; "
+            "END";
+        
+        DBHelper::GetInstance().ExecuteQuery(query, [&](SQLHSTMT hStmt) {
+            SQLGetData(hStmt, 1, SQL_C_USHORT, &openRefID, 0, NULL);
+            SQLGetData(hStmt, 2, SQL_C_UTINYINT, &boxItemCount, 0, NULL);
+            SQLGetData(hStmt, 3, SQL_C_UTINYINT, &boxResult, 0, NULL);
+        });
+
+        if (boxResult != 0 || openRefID == 0 || g_ItemTemplates.find(openRefID) == g_ItemTemplates.end()) {
+            LOG("[ItemHandler] Box pre-open failed or invalid openRefID! wBoxItemRefID: " + std::to_string(tpl.wRefID) + " openRefID: " + std::to_string(openRefID));
+            SendSystemWarningChat(clientSocket, "宝箱开启失败：无法识别该宝箱或其无产出！");
+            return;
+        }
+
+        sItemTemplate& tplOpen = g_ItemTemplates[openRefID];
+        BYTE freePos = FindFreeSackPos(charID, 1, tplOpen.bCX, tplOpen.bCY);
+        if (freePos == 255) {
+            freePos = FindFreeSackPos(charID, 2, tplOpen.bCX, tplOpen.bCY);
+        }
+        if (freePos == 255) {
+            freePos = FindFreeSackPos(charID, 3, tplOpen.bCX, tplOpen.bCY);
+        }
+
+        if (freePos == 255) {
+            LOG("[ItemHandler] Box open blocked: Inventory full for charID: " + std::to_string(charID));
+            SendSystemWarningChat(clientSocket, "背包空间不足，请先清理背包！");
+            return;
+        }
+    }
+
     BYTE targetLevel = 1;
     if (tpl.bType == 21) { // Book (Skill)
         int playerLevel = 0, playerType = 0;
@@ -577,12 +735,234 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
     }
 
     // 2. Apply Effect
-    if (tpl.bType == 22) { // Scroll
+    if (tpl.bType == 19 && tpl.bKind == 4) {
+        sItemTemplate& tplOpen = g_ItemTemplates[openRefID];
+        BYTE actualSackID = 1;
+        BYTE freePos = FindFreeSackPos(charID, 1, tplOpen.bCX, tplOpen.bCY);
+        if (freePos == 255) {
+            freePos = FindFreeSackPos(charID, 2, tplOpen.bCX, tplOpen.bCY);
+            actualSackID = 2;
+        }
+        if (freePos == 255) {
+            freePos = FindFreeSackPos(charID, 3, tplOpen.bCX, tplOpen.bCY);
+            actualSackID = 3;
+        }
+
+        if (freePos != 255) {
+            DWORD newDbItemID = ItemDB::GetInstance().CreateItemFromTemplate(openRefID);
+            if (newDbItemID == 0) {
+                newDbItemID = rand() * rand();
+            } else {
+                if (tplOpen.bType < 10) {
+                    int nData[25] = {0};
+                    nData[0] = tplOpen.nData1;
+                    nData[1] = tplOpen.nData2;
+                    nData[2] = tplOpen.nData3;
+                    nData[3] = tplOpen.nData4;
+                    nData[4] = tplOpen.nData5;
+                    nData[5] = tplOpen.nData6;
+                    nData[6] = tplOpen.nData7;
+                    nData[7] = tplOpen.nData8;
+                    nData[8] = tplOpen.nData9;
+                    nData[9] = tplOpen.nData10;
+                    nData[12] = tplOpen.nData13;
+                    ItemDB::GetInstance().InsertItemData(newDbItemID, nData);
+                }
+                if (boxItemCount > 1) {
+                    ItemDB::GetInstance().UpdateItemAmount(newDbItemID, boxItemCount);
+                }
+            }
+
+            ItemDB::GetInstance().AddToSack(charID, freePos, newDbItemID);
+
+            int startPos = (actualSackID == 1) ? 20 : (actualSackID == 2) ? 60 : 100;
+            BYTE relativeSackPos = freePos - startPos;
+
+            std::vector<BYTE> bi;
+            bi.resize(4);
+            auto pushByte = [&](BYTE v) { bi.push_back(v); };
+            auto pushWord = [&](WORD v) { bi.push_back(v & 0xFF); bi.push_back(v >> 8); };
+            auto pushDWord = [&](DWORD v) { bi.push_back(v & 0xFF); bi.push_back((v >> 8) & 0xFF); bi.push_back((v >> 16) & 0xFF); bi.push_back(v >> 24); };
+            
+            pushDWord(newDbItemID);
+            pushWord(tplOpen.wRefID);
+            pushByte(tplOpen.bType);
+            pushByte(tplOpen.bKind);
+            pushWord(tplOpen.wVisualID);
+            std::string openItemName = tplOpen.szName;
+            pushWord((WORD)openItemName.length());
+            for (char c : openItemName) pushByte(c);
+            pushDWord(tplOpen.dwCost);
+            pushWord(tplOpen.wLevel);
+            pushByte(tplOpen.bCharType);
+            pushWord((WORD)boxItemCount);
+
+            if (tplOpen.bType >= 1 && tplOpen.bType <= 9) {
+                pushWord((WORD)tplOpen.nBasicData1);
+                pushWord((WORD)tplOpen.nBasicData2);
+                pushWord((WORD)tplOpen.nBasicData3);
+                pushWord((WORD)tplOpen.nBasicData4);
+                pushWord((WORD)tplOpen.nBasicData5);
+                pushByte((BYTE)tplOpen.nData1);
+                pushWord((WORD)tplOpen.nData2);
+                pushWord((WORD)tplOpen.nData3);
+                pushDWord(tplOpen.nData4);
+                pushDWord(tplOpen.nData5);
+                pushDWord(tplOpen.nData6);
+                pushWord((WORD)tplOpen.nData7);
+                pushWord((WORD)tplOpen.nData8);
+                pushDWord(tplOpen.nData9);
+                pushDWord(tplOpen.nData10);
+                pushWord(0); pushWord(0);
+                pushWord((WORD)tplOpen.nData13);
+                pushByte(0); pushByte(0); pushByte(0); pushByte(0); pushByte(0); pushByte(0);
+                if (tplOpen.bType == 9) {
+                    pushDWord(0); pushWord(0); pushWord(0); pushWord(0); pushWord(0);
+                } else if (tplOpen.bType == 8) {
+                    for (int k = 0; k < 8; k++) pushByte(0);
+                } else {
+                    pushByte(0);
+                }
+                if (tplOpen.bType >= 1 && tplOpen.bType <= 4) {
+                    pushByte(0); pushByte(0); pushByte(0); pushWord(0);
+                }
+            } else {
+                switch (tplOpen.bType) {
+                    case 11: case 12: case 13: case 14: case 17:
+                        pushByte(0); pushWord((WORD)tplOpen.nData2); pushWord((WORD)tplOpen.nData3); break;
+                    case 15:
+                        pushByte(0); pushWord((WORD)tplOpen.nBasicData1); pushWord((WORD)tplOpen.nBasicData1); pushByte(0); pushByte(0); break;
+                    case 16:
+                        pushWord((WORD)tplOpen.nData1); pushByte((BYTE)tplOpen.nData2); pushWord((WORD)tplOpen.nData3); pushByte((BYTE)tplOpen.nData4); pushWord((WORD)tplOpen.nData5); break;
+                    case 18:
+                        pushByte(0); break;
+                    case 19:
+                        pushWord(0); pushWord(0); break;
+                    case 20:
+                        pushByte(0); pushDWord(0); break;
+                    case 21: {
+                        DWORD mid = tplOpen.nBasicData2;
+                        sMugongTemplate* mg = MugongManager::GetInstance()->GetTemplate(mid);
+                        pushWord(tplOpen.wLevel); pushDWord(mid); pushByte(mg ? mg->bType : 0); pushByte(mg ? mg->bKind : 0); pushByte(1); break;
+                    }
+                    case 22:
+                        pushDWord((DWORD)tplOpen.nBasicData2); pushByte(0); pushWord(0); pushWord(0); break;
+                    case 23:
+                        pushDWord(0); pushDWord((DWORD)tplOpen.nBasicData2); pushDWord((DWORD)tplOpen.nBasicData3); pushByte(0); pushByte(0); break;
+                    case 32:
+                        pushWord((WORD)tplOpen.nData1); pushWord((WORD)tplOpen.nBasicData1); pushWord((WORD)tplOpen.nBasicData1); pushDWord(tplOpen.nData3); break;
+                }
+            }
+            pushWord(0);
+            
+            PACKET_HEADER* addHead = (PACKET_HEADER*)bi.data();
+            addHead->id = 0x420A;
+            addHead->payloadSize = (WORD)(bi.size() - 4);
+            EncryptPacket(bi.data(), 0x42);
+            SafeSend(clientSocket, (const char*)bi.data(), bi.size(), 0);
+
+            std::string announceName = tplOpen.szName;
+            SystemMessage::SendHelpMessage(clientSocket, SystemMessage::MsgType::PICK_ITEM, announceName, boxItemCount);
+            LOG("[ItemHandler] Box open success! charID=" + std::to_string(charID) + " BoxRefID=" + std::to_string(tpl.wRefID) + " OpenedRefID=" + std::to_string(openRefID));
+        }
+    } else if (tpl.bType == 19 && tpl.bKind == 17) {
+        std::string itemName = tpl.szName;
+        WORD premiumRefID = 0;
+        BYTE premiumType = 0;
+        BYTE premiumKind = 0;
+        WORD premiumValue = 0;
+        BYTE premiumDay = 0;
+        
+        // 1. 查询 ITEM_PREMIUM 取得效果配置
+        std::string qPremium = "SELECT wRefID, bType, bKind, wValue, bDay FROM ITEM_PREMIUM WHERE szName = '" + itemName + "'";
+        DBHelper::GetInstance().ExecuteQuery(qPremium, [&](SQLHSTMT hStmt) {
+            SQLGetData(hStmt, 1, SQL_C_USHORT, &premiumRefID, 0, NULL);
+            SQLGetData(hStmt, 2, SQL_C_UTINYINT, &premiumType, 0, NULL);
+            SQLGetData(hStmt, 3, SQL_C_UTINYINT, &premiumKind, 0, NULL);
+            SQLGetData(hStmt, 4, SQL_C_USHORT, &premiumValue, 0, NULL);
+            SQLGetData(hStmt, 5, SQL_C_UTINYINT, &premiumDay, 0, NULL);
+        });
+        
+        if (premiumRefID > 0) {
+            // 2. 查出角色的账号 szAccount
+            char szAccount[32] = {0};
+            std::string qAcc = "SELECT szAccount FROM CHARACTER WHERE dwCharID = " + std::to_string(charID);
+            DBHelper::GetInstance().ExecuteQuery(qAcc, [&](SQLHSTMT hStmt) {
+                SQLGetData(hStmt, 1, SQL_C_CHAR, szAccount, sizeof(szAccount), NULL);
+            });
+            
+            // 3. 计算时间增量
+            int addMinutes = 0;
+            if (premiumRefID == 1 || premiumRefID == 2 || premiumRefID == 3 || premiumRefID == 5 || 
+                premiumRefID == 8 || premiumRefID == 21 || premiumRefID == 22 || 
+                premiumRefID == 22500 || premiumRefID == 22501 || premiumRefID == 22502 || 
+                premiumRefID == 22503 || premiumRefID == 22504) {
+                addMinutes = premiumDay * 60; // 小时换算
+            } else {
+                addMinutes = premiumDay * 1440; // 天数换算
+            }
+            
+            // 4. 时效叠加防刷更新 SQL：如果已有同类有效卡，直接延长 dateEnd，否则以当前 GETDATE() 起始写入
+            std::string qCheck = "SELECT COUNT(*) FROM CHAR_PREMIUM WHERE dwCharID = " + std::to_string(charID) + " AND wRefID = " + std::to_string(premiumRefID) + " AND dateEnd > GETDATE()";
+            int hasActive = 0;
+            DBHelper::GetInstance().ExecuteQuery(qCheck, [&](SQLHSTMT hStmt) {
+                SQLGetData(hStmt, 1, SQL_C_LONG, &hasActive, 0, NULL);
+            });
+            
+            std::string qWrite = "";
+            if (hasActive > 0) {
+                qWrite = "UPDATE CHAR_PREMIUM SET dateEnd = DATEADD(minute, " + std::to_string(addMinutes) + ", dateEnd) WHERE dwCharID = " + std::to_string(charID) + " AND wRefID = " + std::to_string(premiumRefID) + " AND dateEnd > GETDATE()";
+            } else {
+                qWrite = "INSERT INTO CHAR_PREMIUM (szAccount, dwCharID, wRefID, bType, bKind, dateStart, dateEnd, dwDupID) VALUES ('" 
+                        + std::string(szAccount) + "', " + std::to_string(charID) + ", " + std::to_string(premiumRefID) + ", " 
+                        + std::to_string(premiumType) + ", " + std::to_string(premiumKind) + ", GETDATE(), DATEADD(minute, " 
+                        + std::to_string(addMinutes) + ", GETDATE()), 0)";
+            }
+            
+            DBHelper::GetInstance().ExecuteUpdate(qWrite);
+            
+            // 5. 瞬间同步刷新客户端 Buff 栏与倒计时提示！
+            SendCharPremiumList(clientSocket, charID);
+            
+            // 6. 系统文字提示（物品使用成功）
+            SystemMessage::SendHelpMessage(clientSocket, SystemMessage::MsgType::PICK_ITEM, itemName, 1);
+            LOG("[PremiumBuff] Buff activated for charID=" + std::to_string(charID) + " RefID=" + std::to_string(premiumRefID) + " Minutes=" + std::to_string(addMinutes));
+        }
+    } else if (tpl.bType == 22) { // Scroll
         DWORD destMap = tpl.nBasicData2;
         WORD startX = 1024, startY = 1024;
-        { int spX = startX, spY = startY;
-          CharacterDB::GetInstance().GetSpawnPosition(destMap, spX, spY);
-          startX = spX; startY = spY; }
+        bool useInstanceCoords = false;
+
+        // 如果是特殊记录传送符，优先从该物品的具体实例中读取已经记录的目标地图及坐标X/Y
+        ItemDB::FullItemRow instRow;
+        if (ItemDB::GetInstance().GetFullItemData(dwItemID, instRow)) {
+            if (instRow.nBasicData2 > 0 && instRow.nBasicData4 > 0 && instRow.nBasicData5 > 0) {
+                destMap = instRow.nBasicData2;
+                startX = (WORD)instRow.nBasicData4;
+                startY = (WORD)instRow.nBasicData5;
+                useInstanceCoords = true;
+                LOG("[ItemHandler] Teleporting using scroll saved coords: destMap=" + std::to_string(destMap) + " pos=(" + std::to_string(startX) + "," + std::to_string(startY) + ")");
+            }
+        }
+
+        if (!useInstanceCoords) {
+            // 修复回城符（destMap == 0）：读取当前所在地图的安全坐标，进行返回！
+            if (destMap == 0) {
+                destMap = SessionMgr::GetInstance().GetMapID(clientSocket);
+            }
+            int spX = -1, spY = -1;
+            CharacterDB::GetInstance().GetSpawnPosition(destMap, spX, spY);
+
+            // 熔断兜底防御：如果在 location 表中没有记录此地图坐标，则直接退回到 map 6 (草原地带新手村) 的出生点坐标
+            if (spX == -1 || spY == -1) {
+                destMap = 6;
+                CharacterDB::GetInstance().GetSpawnPosition(destMap, spX, spY);
+            }
+
+            startX = (WORD)spX; startY = (WORD)spY;
+            LOG("[ItemHandler] Teleporting using map location: destMap=" + std::to_string(destMap) + " pos=(" + std::to_string(startX) + "," + std::to_string(startY) + ")");
+        }
+
 
 
 
@@ -629,7 +1009,7 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
         DWORD incrHp = tpl.nBasicData2;  // HP recovery from nBasicData2
         DWORD incrIp = tpl.nBasicData3;  // MP/IP recovery from nBasicData3
         DWORD curHp = 0, maxHp = 0;
-        WORD curIp = 0, maxIp = 0;
+        DWORD curIp = 0, maxIp = 0;
 
         DWORD pMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
         if (g_MapInstances.count(pMapID)) {
@@ -651,8 +1031,8 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
         std::vector<BYTE> hpBuf(4);
         pushDWord(hpBuf, maxHp);
         pushDWord(hpBuf, curHp);
-        pushWord(hpBuf, maxIp);
-        pushWord(hpBuf, curIp);
+        pushDWord(hpBuf, maxIp);
+        pushDWord(hpBuf, curIp);
         hpBuf.push_back(0); // bType
         PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
         hpHead->id = 0x3B0D; // CS_IF_CHARHP_ACK
@@ -664,7 +1044,13 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
     } else if (tpl.bType == 21) { // Book (Skill)
         DWORD dwMugongID = tpl.nBasicData2;
         MugongManager::GetInstance()->LearnMugong(clientSocket, charID, dwMugongID, targetLevel);
-    } else if (tpl.bType == 32) { // Shop Token
-        ShopHandler::OnOpenShop(clientSocket, charID);
+    } else if (tpl.bType == 32) { // Shop Token / GISDURABLITY 功能令牌
+        if (tpl.nBasicData2 == 1) {
+            // 远程仓库账簿：直接拉起随身个人仓库 UI 
+            OnItemListInBankReq(clientSocket, charID, nullptr, 0);
+        } else {
+            // 默认摆摊店铺令牌
+            ShopHandler::OnOpenShop(clientSocket, charID);
+        }
     }
 }

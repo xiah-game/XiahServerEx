@@ -6,3 +6,4 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 void OnMugongLearnReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);
 void OnSelMugongReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);
 void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);
+void OnSetOptionReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);

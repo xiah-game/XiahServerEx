@@ -47,6 +47,24 @@ void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize,
             return;
         }
 
+        // 检查控制类 Debuff (定身/冰冻/眩晕) 拦截玩家移动
+        bool isCC = false;
+        if (pObj) {
+            for (const auto& bf : pObj->activeBuffs) {
+                if (bf.second.bIsDebuff) {
+                    DWORD mugID = bf.second.dwMugongID;
+                    if (mugID == 94 || mugID == 95 || mugID == 35 || mugID == 65 || mugID == 125) {
+                        isCC = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (isCC) {
+            SendSystemWarningChat(clientSocket, "[Control] You are frozen, stunned or immobilized and cannot move!");
+            return;
+        }
+
         if (pObj && pObj->activeBuffs.count(130) > 0) {
             pObj->activeBuffs[130].dwEndTime = 0; // Mark for instant expiry in MonsterAI loop
             LOG("[MoveHandler] Player " + std::to_string(dwMoveID) + " moved during Turtle Breath. Expiring buff 130.");

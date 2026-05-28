@@ -135,6 +135,9 @@ public:
     // Check if character owns item in SACKITEM
     bool IsSackItemOwned(DWORD dwCharID, DWORD dwItemID);
 
+    // Check if character has equipped an item of specific kind (bType == 8, bKind == specific)
+    int GetEquippedItemDataValue(DWORD dwCharID, BYTE bKind, int dataIndex);
+
     // Check if item exists in a storage table (BANKITEM/MALLITEM) by account
     bool IsItemInStorage(const std::string& tableName, const std::string& account, DWORD dwItemID);
 
@@ -157,6 +160,7 @@ public:
         int d[18] = {0}; // d[0]=nData1..d[16]=nData17, d[17] unused
         int nData20=0, nData21=0, nData25=0;
         char szName[128] = {0};
+        int nBasicData1=0, nBasicData2=0, nBasicData3=0, nBasicData4=0, nBasicData5=0;
     };
     // Get full item data for a single item (by dwItemID)
     bool GetFullItemData(DWORD dwItemID, FullItemRow& out);

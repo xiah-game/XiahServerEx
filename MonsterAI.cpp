@@ -77,7 +77,7 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
                     struct RegenInfo {
                         DWORD dwObjectID;
                         DWORD dwHpMax, dwHpCur;
-                        WORD wIpMax, wIpCur;
+                        DWORD wIpMax, wIpCur;
                     };
                     std::vector<RegenInfo> regenPackets;
                     {
@@ -142,7 +142,7 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
                             if (pl.dwHpCur >= pl.dwHpMax && pl.wIpCur >= pl.wIpMax) continue;
 
                             bool changed = false;
-                            DWORD oldHp = pl.dwHpCur; WORD oldIp = pl.wIpCur;
+                            DWORD oldHp = pl.dwHpCur; DWORD oldIp = pl.wIpCur;
                             
                             if (pl.dwHpCur < pl.dwHpMax && totalRegenHp > 0) {
                                 pl.dwHpCur += totalRegenHp;
@@ -150,7 +150,7 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
                                 changed = true;
                             }
                             if (pl.wIpCur < pl.wIpMax && totalRegenIp > 0) {
-                                pl.wIpCur += (WORD)totalRegenIp;
+                                pl.wIpCur += totalRegenIp;
                                 if (pl.wIpCur > pl.wIpMax) pl.wIpCur = pl.wIpMax;
                                 changed = true;
                             }
@@ -177,11 +177,10 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
                             
                             std::vector<BYTE> hpBuf(4);
                             auto push4 = [&](DWORD d) { hpBuf.push_back(d&0xFF); hpBuf.push_back((d>>8)&0xFF); hpBuf.push_back((d>>16)&0xFF); hpBuf.push_back((d>>24)&0xFF); };
-                            auto push2 = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
                             push4(ri.dwHpMax);
                             push4(ri.dwHpCur);
-                            push2(ri.wIpMax);
-                            push2(ri.wIpCur);
+                            push4(ri.wIpMax);
+                            push4(ri.wIpCur);
                             hpBuf.push_back(0); // bType = 0 (auto recovery, no effect)
                             PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
                             hpHead->id = 0x3B0D; // CS_IF_CHARHP_ACK

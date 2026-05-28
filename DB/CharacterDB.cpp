@@ -15,8 +15,8 @@ bool CharacterDB::GetCharData(DWORD dwCharID, CharPower& out) {
         SQLGetData(hStmt, 3, SQL_C_SLONG, &tmp, 0, &c); out.wSus = (WORD)tmp;
         SQLGetData(hStmt, 4, SQL_C_SLONG, &tmp, 0, &c); out.wDex = (WORD)tmp;
         SQLGetData(hStmt, 5, SQL_C_SLONG, &tmp, 0, &c); out.wVit = (WORD)tmp;
-        SQLGetData(hStmt, 6, SQL_C_SLONG, &tmp, 0, &c); out.wIpMax = (WORD)tmp;
-        SQLGetData(hStmt, 7, SQL_C_SLONG, &tmp, 0, &c); out.wIpCur = (WORD)tmp;
+        SQLGetData(hStmt, 6, SQL_C_SLONG, &tmp, 0, &c); out.wIpMax = (DWORD)tmp;
+        SQLGetData(hStmt, 7, SQL_C_SLONG, &tmp, 0, &c); out.wIpCur = (DWORD)tmp;
         SQLGetData(hStmt, 8, SQL_C_ULONG, &out.dwHpMax, 0, &c);
         SQLGetData(hStmt, 9, SQL_C_ULONG, &out.dwHpCur, 0, &c);
         SQLGetData(hStmt, 10, SQL_C_SBIGINT, &out.dwExp, 0, &c);
@@ -80,7 +80,7 @@ void CharacterDB::SubtractMoney(DWORD dwCharID, DWORD amount) {
     DBHelper::GetInstance().ExecuteUpdate(q);
 }
 
-void CharacterDB::UpdateHpIp(DWORD dwCharID, DWORD dwHpCur, WORD wIpCur) {
+void CharacterDB::UpdateHpIp(DWORD dwCharID, DWORD dwHpCur, DWORD wIpCur) {
     std::string q = "UPDATE CHAR_POWER SET dwHpCur=" + std::to_string(dwHpCur)
         + ", wIpCur=" + std::to_string(wIpCur)
         + " WHERE dwCharID=" + std::to_string(dwCharID);
@@ -363,6 +363,23 @@ std::string CharacterDB::GetAccountName(DWORD dwCharID) {
     return result;
 }
 
+int CharacterDB::GetVipLevel(DWORD dwCharID) {
+    DWORD cleanCharID = dwCharID;
+    if (cleanCharID >= 800000000) cleanCharID -= 400000000;
+    
+    std::string szAccount = GetAccountName(cleanCharID);
+    if (szAccount.empty()) return 0;
+    
+    int vipLevel = 0;
+    std::string q = "SELECT nVIPLevel FROM ACCOUNT_VIP WHERE szAccount = '" + szAccount + "' AND dateExpire > GETDATE()";
+    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+        SQLLEN cb;
+        SQLGetData(hStmt, 1, SQL_C_LONG, &vipLevel, 0, &cb);
+        if (cb == SQL_NULL_DATA) vipLevel = 0;
+    });
+    return vipLevel;
+}
+
 int CharacterDB::GetMugongLevel(DWORD dwCharID, DWORD dwMugongID) {
     int level = 0;
     DBHelper::GetInstance().ExecuteQuery(
@@ -383,8 +400,8 @@ bool CharacterDB::GetCharSelectList(const std::string& accountName, std::vector<
         SQLGetData(hStmt, 6, SQL_C_SSHORT, &d.wLevel, 0, &cb[5]);
         SQLGetData(hStmt, 7, SQL_C_SLONG, &d.dwHpCur, 0, &cb[6]);
         SQLGetData(hStmt, 8, SQL_C_SLONG, &d.dwHpMax, 0, &cb[7]);
-        SQLGetData(hStmt, 9, SQL_C_SSHORT, &d.wIpCur, 0, &cb[8]);
-        SQLGetData(hStmt, 10, SQL_C_SSHORT, &d.wIpMax, 0, &cb[9]);
+        SQLGetData(hStmt, 9, SQL_C_SLONG, &d.wIpCur, 0, &cb[8]);
+        SQLGetData(hStmt, 10, SQL_C_SLONG, &d.wIpMax, 0, &cb[9]);
         SQLGetData(hStmt, 11, SQL_C_SSHORT, &d.wVit, 0, &cb[10]);
         SQLGetData(hStmt, 12, SQL_C_SSHORT, &d.wStr, 0, &cb[11]);
         SQLGetData(hStmt, 13, SQL_C_SSHORT, &d.wSus, 0, &cb[12]);

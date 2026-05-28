@@ -53,11 +53,11 @@ static void SendBankOrMallList(SOCKET clientSocket, DWORD charID, WORD opCodeACK
                 if (amount == 0) amount = g_ItemTemplates[refid].wAmount;
                 charType = g_ItemTemplates[refid].bCharType;
 
-                nd1 = g_ItemTemplates[refid].nBasicData1;
-                nd2 = g_ItemTemplates[refid].nBasicData2;
-                nd3 = g_ItemTemplates[refid].nBasicData3;
-                nd4 = g_ItemTemplates[refid].nBasicData4;
-                nd5 = g_ItemTemplates[refid].nBasicData5;
+                nd1 = row.nBasicData1 != 0 ? row.nBasicData1 : g_ItemTemplates[refid].nBasicData1;
+                nd2 = row.nBasicData2 != 0 ? row.nBasicData2 : g_ItemTemplates[refid].nBasicData2;
+                nd3 = row.nBasicData3 != 0 ? row.nBasicData3 : g_ItemTemplates[refid].nBasicData3;
+                nd4 = row.nBasicData4 != 0 ? row.nBasicData4 : g_ItemTemplates[refid].nBasicData4;
+                nd5 = row.nBasicData5 != 0 ? row.nBasicData5 : g_ItemTemplates[refid].nBasicData5;
                 if (d1 == -9999) d1 = g_ItemTemplates[refid].nData1;
                 if (d2 == -9999) d2 = g_ItemTemplates[refid].nData2;
                 if (d3 == -9999) d3 = g_ItemTemplates[refid].nData3;
@@ -93,8 +93,8 @@ static void SendBankOrMallList(SOCKET clientSocket, DWORD charID, WORD opCodeACK
                 pushWord(bi, nd1); pushWord(bi, nd2); pushWord(bi, nd3); pushWord(bi, nd4); pushWord(bi, nd5); 
                 pushByte(bi, d1); 
                 pushWord(bi, d2); pushWord(bi, d3); 
-                pushWord(bi, d4); pushWord(bi, d5); pushWord(bi, d6); pushWord(bi, d7); pushWord(bi, d8); 
-                pushWord(bi, d9); pushWord(bi, d10); pushWord(bi, d11); pushWord(bi, d12); pushWord(bi, d13); 
+                pushDWord(bi, d4); pushDWord(bi, d5); pushDWord(bi, d6); pushWord(bi, d7); pushWord(bi, d8); 
+                pushDWord(bi, d9); pushDWord(bi, d10); pushWord(bi, d11); pushWord(bi, d12); pushWord(bi, d13); 
                 pushByte(bi, dat18); pushByte(bi, dat19); 
                 pushByte(bi, d14); pushByte(bi, d15); pushByte(bi, d16); pushByte(bi, d17); 
                 
@@ -128,9 +128,9 @@ static void SendBankOrMallList(SOCKET clientSocket, DWORD charID, WORD opCodeACK
                         pushWord(bi, lvl); pushDWord(bi, mid); pushByte(bi, typeVal); pushByte(bi, kindVal); pushByte(bi, 1); break;
                     }
                     case 22:
-                        pushDWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
+                        pushDWord(bi, nd2); pushByte(bi, (BYTE)nd3); pushWord(bi, (WORD)nd4); pushWord(bi, (WORD)nd5); break;
                     case 23:
-                        pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); break;
+                        pushDWord(bi, 0); pushDWord(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); break;
                     case 25:
                         pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
                     case 27:
@@ -255,11 +255,11 @@ void OnDrawInBankReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tota
                 if (cost == 0) cost = g_ItemTemplates[refid].dwCost;
                 if (amount == 0) amount = g_ItemTemplates[refid].wAmount;
                 charType = g_ItemTemplates[refid].bCharType;
-                nd1 = g_ItemTemplates[refid].nBasicData1;
-                nd2 = g_ItemTemplates[refid].nBasicData2;
-                nd3 = g_ItemTemplates[refid].nBasicData3;
-                nd4 = g_ItemTemplates[refid].nBasicData4;
-                nd5 = g_ItemTemplates[refid].nBasicData5;
+                nd1 = row.nBasicData1 != 0 ? row.nBasicData1 : g_ItemTemplates[refid].nBasicData1;
+                nd2 = row.nBasicData2 != 0 ? row.nBasicData2 : g_ItemTemplates[refid].nBasicData2;
+                nd3 = row.nBasicData3 != 0 ? row.nBasicData3 : g_ItemTemplates[refid].nBasicData3;
+                nd4 = row.nBasicData4 != 0 ? row.nBasicData4 : g_ItemTemplates[refid].nBasicData4;
+                nd5 = row.nBasicData5 != 0 ? row.nBasicData5 : g_ItemTemplates[refid].nBasicData5;
                 if (d1 == -9999) d1 = g_ItemTemplates[refid].nData1;
                 if (d2 == -9999) d2 = g_ItemTemplates[refid].nData2;
                 if (d3 == -9999) d3 = g_ItemTemplates[refid].nData3;
@@ -295,8 +295,8 @@ void OnDrawInBankReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tota
                 pushWord(iBuf, nd1); pushWord(iBuf, nd2); pushWord(iBuf, nd3); pushWord(iBuf, nd4); pushWord(iBuf, nd5);
                 pushByte(iBuf, d1);
                 pushWord(iBuf, d2); pushWord(iBuf, d3);
-                pushWord(iBuf, d4); pushWord(iBuf, d5); pushWord(iBuf, d6); pushWord(iBuf, d7); pushWord(iBuf, d8);
-                pushWord(iBuf, d9); pushWord(iBuf, d10); pushWord(iBuf, d11); pushWord(iBuf, d12); pushWord(iBuf, d13);
+                pushDWord(iBuf, d4); pushDWord(iBuf, d5); pushDWord(iBuf, d6); pushWord(iBuf, d7); pushWord(iBuf, d8);
+                pushDWord(iBuf, d9); pushDWord(iBuf, d10); pushWord(iBuf, d11); pushWord(iBuf, d12); pushWord(iBuf, d13);
                 pushByte(iBuf, dat18); pushByte(iBuf, dat19);
                 pushByte(iBuf, d14); pushByte(iBuf, d15); pushByte(iBuf, d16); pushByte(iBuf, d17);
                 if (type == 9) { pushDWord(iBuf, 0); pushWord(iBuf, 0); pushWord(iBuf, 0); pushWord(iBuf, 0); pushWord(iBuf, 0); }
@@ -312,8 +312,8 @@ void OnDrawInBankReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tota
                     case 19: pushWord(iBuf, 0); pushWord(iBuf, 0); break;
                     case 20: pushByte(iBuf, 0); pushDWord(iBuf, 0); break;
                     case 21: { DWORD mid=nd2; sMugongTemplate* mg=MugongManager::GetInstance()->GetTemplate(mid); pushWord(iBuf, lvl); pushDWord(iBuf, mid); pushByte(iBuf, mg?mg->bType:0); pushByte(iBuf, mg?mg->bKind:0); pushByte(iBuf, 1); break; }
-                    case 22: pushDWord(iBuf, 0); pushByte(iBuf, 0); pushWord(iBuf, 0); pushWord(iBuf, 0); break;
-                    case 23: pushDWord(iBuf, 0); pushWord(iBuf, 0); pushWord(iBuf, 0); pushByte(iBuf, 0); pushByte(iBuf, 0); break;
+                    case 22: pushDWord(iBuf, nd2); pushByte(iBuf, (BYTE)nd3); pushWord(iBuf, (WORD)nd4); pushWord(iBuf, (WORD)nd5); break;
+                    case 23: pushDWord(iBuf, 0); pushDWord(iBuf, 0); pushDWord(iBuf, 0); pushByte(iBuf, 0); pushByte(iBuf, 0); break;
                     case 25: pushByte(iBuf, 0); pushWord(iBuf, 0); pushWord(iBuf, 0); break;
                     case 27: pushByte(iBuf, 0); pushDWord(iBuf, 0); pushByte(iBuf, 0); pushByte(iBuf, 0); pushByte(iBuf, 0); pushByte(iBuf, 0); pushDWord(iBuf, 0); break;
                     case 29: pushWord(iBuf, 0); pushWord(iBuf, 0); break;
@@ -443,11 +443,11 @@ static void ProcessDrawOut(SOCKET clientSocket, DWORD charID, BYTE* payload, WOR
                 if (cost == 0) cost = g_ItemTemplates[refid].dwCost;
                 if (amount == 0) amount = g_ItemTemplates[refid].wAmount;
                 charType = g_ItemTemplates[refid].bCharType;
-                nd1 = g_ItemTemplates[refid].nBasicData1;
-                nd2 = g_ItemTemplates[refid].nBasicData2;
-                nd3 = g_ItemTemplates[refid].nBasicData3;
-                nd4 = g_ItemTemplates[refid].nBasicData4;
-                nd5 = g_ItemTemplates[refid].nBasicData5;
+                nd1 = row.nBasicData1 != 0 ? row.nBasicData1 : g_ItemTemplates[refid].nBasicData1;
+                nd2 = row.nBasicData2 != 0 ? row.nBasicData2 : g_ItemTemplates[refid].nBasicData2;
+                nd3 = row.nBasicData3 != 0 ? row.nBasicData3 : g_ItemTemplates[refid].nBasicData3;
+                nd4 = row.nBasicData4 != 0 ? row.nBasicData4 : g_ItemTemplates[refid].nBasicData4;
+                nd5 = row.nBasicData5 != 0 ? row.nBasicData5 : g_ItemTemplates[refid].nBasicData5;
                 if (d1 == -9999) d1 = g_ItemTemplates[refid].nData1;
                 if (d2 == -9999) d2 = g_ItemTemplates[refid].nData2;
                 if (d3 == -9999) d3 = g_ItemTemplates[refid].nData3;
@@ -484,8 +484,8 @@ static void ProcessDrawOut(SOCKET clientSocket, DWORD charID, BYTE* payload, WOR
                 pushWord(bi, nd1); pushWord(bi, nd2); pushWord(bi, nd3); pushWord(bi, nd4); pushWord(bi, nd5);
                 pushByte(bi, d1);
                 pushWord(bi, d2); pushWord(bi, d3);
-                pushWord(bi, d4); pushWord(bi, d5); pushWord(bi, d6); pushWord(bi, d7); pushWord(bi, d8);
-                pushWord(bi, d9); pushWord(bi, d10); pushWord(bi, d11); pushWord(bi, d12); pushWord(bi, d13);
+                pushDWord(bi, d4); pushDWord(bi, d5); pushDWord(bi, d6); pushWord(bi, d7); pushWord(bi, d8);
+                pushDWord(bi, d9); pushDWord(bi, d10); pushWord(bi, d11); pushWord(bi, d12); pushWord(bi, d13);
                 pushByte(bi, dat18); pushByte(bi, dat19);
                 pushByte(bi, d14); pushByte(bi, d15); pushByte(bi, d16); pushByte(bi, d17);
                 if (type == 9) { pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); }
@@ -501,8 +501,8 @@ static void ProcessDrawOut(SOCKET clientSocket, DWORD charID, BYTE* payload, WOR
                     case 19: pushWord(bi, 0); pushWord(bi, 0); break;
                     case 20: pushByte(bi, 0); pushDWord(bi, 0); break;
                     case 21: { DWORD mid=nd2; sMugongTemplate* mg=MugongManager::GetInstance()->GetTemplate(mid); pushWord(bi, lvl); pushDWord(bi, mid); pushByte(bi, mg?mg->bType:0); pushByte(bi, mg?mg->bKind:0); pushByte(bi, 1); break; }
-                    case 22: pushDWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
-                    case 23: pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); break;
+                    case 22: pushDWord(bi, nd2); pushByte(bi, (BYTE)nd3); pushWord(bi, (WORD)nd4); pushWord(bi, (WORD)nd5); break;
+                    case 23: pushDWord(bi, 0); pushDWord(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); break;
                     case 25: pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
                     case 27: pushByte(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushDWord(bi, 0); break;
                     case 29: pushWord(bi, 0); pushWord(bi, 0); break;

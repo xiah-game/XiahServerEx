@@ -1,4 +1,5 @@
-#include "MugongHandler.h"
+#include "MugongHandler.h"#include "PartyHandler.h"
+
 #include "../GameObjects/MugongManager.h"
 #include "../GameObjects/PlayerManager.h"
 #include "../GameObjects/ExpSystem.h"
@@ -172,7 +173,77 @@ void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
     sMugongList* pd = MugongManager::GetInstance()->GetMugongLevelData(dwMugongID, bMugongLevel);
     bool isBuff = (pd && pd->dwKeepUpTime > 0);
 
-    DWORD playerMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+    DWORD playerMapID = SessionMgr::GetInstance().GetMapID(clientSocket);    // ¼ì²é¿ØÖÆÀà Debuff (¶¨Éí/±ù¶³/Ñ£ÔÎ) À¹½Ø¼¼ÄÜÆğÊÖ
+    if (g_MapInstances.count(playerMapID)) {
+        CMapInstance* mapInst = g_MapInstances[playerMapID];
+        std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+        sServerObject* pObj = mapInst->GetPlayer(dwAttackID);
+        if (pObj) {
+            bool isCC = false;
+            for (const auto& bf : pObj->activeBuffs) {
+                if (bf.second.bIsDebuff) {
+                    DWORD mugID = bf.second.dwMugongID;
+                    if (mugID == 94 || mugID == 95 || mugID == 35 || mugID == 65 || mugID == 125) {
+                        isCC = true;
+                        break;
+                    }
+                }
+            }
+            if (isCC) {
+                std::vector<BYTE> buf; buf.resize(4, 0);
+                DWORD senderObjID = 0;
+                buf.push_back(senderObjID & 0xFF); buf.push_back((senderObjID >> 8) & 0xFF); buf.push_back((senderObjID >> 16) & 0xFF); buf.push_back(senderObjID >> 24);
+                buf.push_back(8); // CT_TIMEMESSAGE
+                std::string msg = "[Control] You are frozen, stunned or immobilized and cannot cast skills!";
+                WORD len = (WORD)msg.size();
+                buf.push_back(len & 0xFF); buf.push_back((len >> 8) & 0xFF);
+                buf.insert(buf.end(), msg.begin(), msg.end());
+                WORD packetID = 0x3E02; // CS_CH_CHAT_ACK
+                WORD payloadSize = (WORD)(buf.size() - 4);
+                memcpy(&buf[0], &packetID, 2);
+                memcpy(&buf[2], &payloadSize, 2);
+                EncryptPacket(buf.data(), 0x42);
+                SafeSend(clientSocket, (const char*)buf.data(), (int)buf.size(), 0);
+                return;
+            }
+        }
+    }
+    // ¼ì²é¿ØÖÆÀà Debuff (¶¨Éí/±ù¶³/Ñ£ÔÎ) À¹½Ø¼¼ÄÜÆğÊÖ
+    if (g_MapInstances.count(playerMapID)) {
+        CMapInstance* mapInst = g_MapInstances[playerMapID];
+        std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+        sServerObject* pObj = mapInst->GetPlayer(dwAttackID);
+        if (pObj) {
+            bool isCC = false;
+            for (const auto& bf : pObj->activeBuffs) {
+                if (bf.second.bIsDebuff) {
+                    DWORD mugID = bf.second.dwMugongID;
+                    if (mugID == 94 || mugID == 95 || mugID == 35 || mugID == 65 || mugID == 125) {
+                        isCC = true;
+                        break;
+                    }
+                }
+            }
+            if (isCC) {
+                std::vector<BYTE> buf; buf.resize(4, 0);
+                DWORD senderObjID = 0;
+                buf.push_back(senderObjID & 0xFF); buf.push_back((senderObjID >> 8) & 0xFF); buf.push_back((senderObjID >> 16) & 0xFF); buf.push_back(senderObjID >> 24);
+                buf.push_back(8); // CT_TIMEMESSAGE
+                std::string msg = "[Control] You are frozen, stunned or immobilized and cannot cast skills!";
+                WORD len = (WORD)msg.size();
+                buf.push_back(len & 0xFF); buf.push_back((len >> 8) & 0xFF);
+                buf.insert(buf.end(), msg.begin(), msg.end());
+                WORD packetID = 0x3E02; // CS_CH_CHAT_ACK
+                WORD payloadSize = (WORD)(buf.size() - 4);
+                memcpy(&buf[0], &packetID, 2);
+                memcpy(&buf[2], &payloadSize, 2);
+                EncryptPacket(buf.data(), 0x42);
+                SafeSend(clientSocket, (const char*)buf.data(), (int)buf.size(), 0);
+                return;
+            }
+        }
+    }
+
 
     if (isBuff) {
         if (g_MapInstances.count(playerMapID)) {
@@ -181,7 +252,7 @@ void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
             sServerObject* pObj = mapInst->GetPlayer(dwAttackID);
             if (pObj) {
                 // Verify IP cost
-                if (pObj->wIpCur < (WORD)pd->dwCostMp) {
+                if (pObj->wIpCur < pd->dwCostMp) {
                     LOG("[MugongHandler] Buff " + std::to_string(dwMugongID) + " blocked: IP " 
                         + std::to_string(pObj->wIpCur) + " < cost " + std::to_string(pd->dwCostMp));
                     // Send 0x4016 with bResult=3 (IP insufficient) so client shows error message
@@ -206,7 +277,7 @@ void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
                 }
                 
                 // Deduct IP
-                pObj->wIpCur -= (WORD)pd->dwCostMp;
+                pObj->wIpCur -= pd->dwCostMp;
                 
                 // Send 0x3B0D to update client HP/IP bars
                 std::vector<BYTE> hpBuf(4);
@@ -214,8 +285,8 @@ void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
                 auto push2 = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
                 push4(pObj->dwHpMax);
                 push4(pObj->dwHpCur);
-                push2(pObj->wIpMax);
-                push2(pObj->wIpCur);
+                push4(pObj->wIpMax);
+                push4(pObj->wIpCur);
                 hpBuf.push_back(0); // bType
                 PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
                 hpHead->id = 0x3B0D;
@@ -253,7 +324,7 @@ void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
         // Immediately recalculate stats so buff bonuses take effect (do NOT send 0x4414 to prevent clearing client visuals)
         PlayerManager::GetInstance().RecalculateStats(charID, false);
     } else {
-        // é Buff ä¸»åŠ¨ä¼¤å®³ç±»æŠ€èƒ½ï¼šå‘èµ·æ”»å‡»èµ·æ‰‹æ—¶å¼ºåˆ¶è§£é™¤éšèº«æœ¯ 178
+        // ¨¦ Buff ¡§¡è¡À¨¨¨¨¡¤¨¨¡¤¨¨¡ì¨¦¡è¨¦¨¨ 178
         if (g_MapInstances.count(playerMapID)) {
             CMapInstance* mapInst = g_MapInstances[playerMapID];
             std::lock_guard<std::mutex> lock(mapInst->GetMutex());
@@ -306,11 +377,11 @@ void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
 
 bool IsAoeSkill(DWORD dwMugongID, sMugongTemplate* tpl) {
     if (!tpl) return false;
-    // 1. äº”è¡Œå±æ€§å¤§ç±»æŠ€èƒ½ (bKind 80-84) ä¾ç„¶å±äºç¾¤ä½“æ”»å‡»
+    // 1. ¨¨¡À¡ì¡è¡ì¡À¨¨ (bKind 80-84) ¡À¡è
     if (tpl->bKind >= 80 && tpl->bKind <= 84) return true;
     
-    // 2. æ ¸å¿ƒé‡æ„ï¼šåºŸé™¤ç²—æš´çš„ 80~120 ç¡¬ç¼–ç ï¼Œç»Ÿä¸€ä½¿ç”¨æ•°æ®åº“é…ç½®è§„åˆ™
-    // ä¸»åŠ¨ä¼¤å®³ç±»æŠ€èƒ½ (bType = 3) ä¸”æŠ€èƒ½å¤§ç±»ä¸ºç¾¤æ”»å¤§ç±» (bKind = 0) åˆ¤å®šä¸ºç¾¤ä½“æ”»å‡»
+    // 2. ¨¦¨¦¡è 80~120 ¡§¡ã¨¦¨¨¡ì
+    // ¡§¡è¡À¨¨ (bType = 3) ¨¨¡è¡ì¡À¡è¡è¡ì¡À (bKind = 0) ¡è¡è
     if (tpl->bType == 3 && tpl->bKind == 0) return true;
     
     return false;
@@ -342,7 +413,65 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
     if (g_MapInstances.count(playerMapID)) {
         CMapInstance* mapInst = g_MapInstances[playerMapID];
         std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-        sServerObject* pObj = mapInst->GetPlayer(dwAttackID);
+        sServerObject* pObj = mapInst->GetPlayer(dwAttackID);        if (pObj) {
+            bool isCC = false;
+            for (const auto& bf : pObj->activeBuffs) {
+                if (bf.second.bIsDebuff) {
+                    DWORD mugID = bf.second.dwMugongID;
+                    if (mugID == 94 || mugID == 95 || mugID == 35 || mugID == 65 || mugID == 125) {
+                        isCC = true;
+                        break;
+                    }
+                }
+            }
+            if (isCC) {
+                std::vector<BYTE> buf; buf.resize(4, 0);
+                DWORD senderObjID = 0;
+                buf.push_back(senderObjID & 0xFF); buf.push_back((senderObjID >> 8) & 0xFF); buf.push_back((senderObjID >> 16) & 0xFF); buf.push_back(senderObjID >> 24);
+                buf.push_back(8); // CT_TIMEMESSAGE
+                std::string msg = "[Control] You are frozen, stunned or immobilized and cannot cast skills!";
+                WORD len = (WORD)msg.size();
+                buf.push_back(len & 0xFF); buf.push_back((len >> 8) & 0xFF);
+                buf.insert(buf.end(), msg.begin(), msg.end());
+                WORD packetID = 0x3E02; // CS_CH_CHAT_ACK
+                WORD payloadSize = (WORD)(buf.size() - 4);
+                memcpy(&buf[0], &packetID, 2);
+                memcpy(&buf[2], &payloadSize, 2);
+                EncryptPacket(buf.data(), 0x42);
+                SafeSend(clientSocket, (const char*)buf.data(), (int)buf.size(), 0);
+                return;
+            }
+        }
+        if (pObj) {
+            bool isCC = false;
+            for (const auto& bf : pObj->activeBuffs) {
+                if (bf.second.bIsDebuff) {
+                    DWORD mugID = bf.second.dwMugongID;
+                    if (mugID == 94 || mugID == 95 || mugID == 35 || mugID == 65 || mugID == 125) {
+                        isCC = true;
+                        break;
+                    }
+                }
+            }
+            if (isCC) {
+                std::vector<BYTE> buf; buf.resize(4, 0);
+                DWORD senderObjID = 0;
+                buf.push_back(senderObjID & 0xFF); buf.push_back((senderObjID >> 8) & 0xFF); buf.push_back((senderObjID >> 16) & 0xFF); buf.push_back(senderObjID >> 24);
+                buf.push_back(8); // CT_TIMEMESSAGE
+                std::string msg = "[Control] You are frozen, stunned or immobilized and cannot cast skills!";
+                WORD len = (WORD)msg.size();
+                buf.push_back(len & 0xFF); buf.push_back((len >> 8) & 0xFF);
+                buf.insert(buf.end(), msg.begin(), msg.end());
+                WORD packetID = 0x3E02; // CS_CH_CHAT_ACK
+                WORD payloadSize = (WORD)(buf.size() - 4);
+                memcpy(&buf[0], &packetID, 2);
+                memcpy(&buf[2], &payloadSize, 2);
+                EncryptPacket(buf.data(), 0x42);
+                SafeSend(clientSocket, (const char*)buf.data(), (int)buf.size(), 0);
+                return;
+            }
+        }
+
         if (pObj && pObj->activeBuffs.count(130) > 0) {
             pObj->activeBuffs[130].dwEndTime = 0; // Mark for instant expiry in MonsterAI loop
             LOG("[MugongHandler] Player " + std::to_string(dwAttackID) + " used skill " + std::to_string(dwMugongID) + ". Expiring Turtle Breath.");
@@ -369,7 +498,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
             std::lock_guard<std::mutex> lock(mapInst->GetMutex());
             sServerObject* pObj = mapInst->GetPlayer(dwAttackID);
             if (pObj) {
-                if (pObj->wIpCur < (WORD)pMugongData->dwCostMp) {
+                if (pObj->wIpCur < pMugongData->dwCostMp) {
                     LOG("[MugongHandler] Skill " + std::to_string(dwMugongID) + " blocked: IP " 
                         + std::to_string(pObj->wIpCur) + " < cost " + std::to_string(pMugongData->dwCostMp));
                     // Send 0x4016 with bResult=5 (IP insufficient) so client shows error message
@@ -393,7 +522,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                     return;
                 }
                 WORD oldIp = pObj->wIpCur;
-                pObj->wIpCur -= (WORD)pMugongData->dwCostMp;
+                pObj->wIpCur -= pMugongData->dwCostMp;
 
                 // Send 0x3B0D to update client HP/IP bars
                 std::vector<BYTE> hpBuf(4);
@@ -401,8 +530,8 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                 auto push2 = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
                 push4(pObj->dwHpMax);
                 push4(pObj->dwHpCur);
-                push2(pObj->wIpMax);
-                push2(pObj->wIpCur);
+                push4(pObj->wIpMax);
+                push4(pObj->wIpCur);
                 hpBuf.push_back(0); // bType
                 PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
                 hpHead->id = 0x3B0D;
@@ -422,30 +551,30 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
         if (g_MapInstances.count(playerMapID)) {
             CMapInstance* mapInst = g_MapInstances[playerMapID];
             std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-            sServerObject* pObj = mapInst->GetPlayer(dwAttackID); // æ–½æ³•è€…
+            sServerObject* pObj = mapInst->GetPlayer(dwAttackID); // ¨¨
             if (pObj) {
                 // 1. IP Cost deduction first from caster (pObj)
                 DWORD cost = pMugongData ? pMugongData->dwCostMp : 0;
-                if (pObj->wIpCur < (WORD)cost) {
+                if (pObj->wIpCur < cost) {
                     LOG("[MugongHandler] Heal Skill " + std::to_string(dwMugongID) + " blocked: IP " 
                         + std::to_string(pObj->wIpCur) + " < cost " + std::to_string(cost));
                     return;
                 }
-                pObj->wIpCur -= (WORD)cost;
+                pObj->wIpCur -= cost;
 
-                // 2. ç¡®å®šçœŸæ­£çš„åŠ è¡€å—æ²»ç–—ç›®æ ‡ç©å®¶ (ç»™è‡ªå·± bKind=0 åŠ ï¼Œæˆ–æŒ‡å‘æ€§ bKind=1/2 ç»™ä»–äººåŠ )
+                // 2. ¨¨ (¨¨¡¤¡À bKind=0 ¡ì bKind=1/2 )
                 sServerObject* pTarget = nullptr;
                 SOCKET targetSocket = clientSocket;
                 
                 sMugongTemplate* pTpl = MugongManager::GetInstance()->GetTemplate(dwMugongID);
                 BYTE bKind = pTpl ? pTpl->bKind : 0;
 
-                // åªæœ‰æŒ‡å‘æ€§æŠ€èƒ½(bKind==1æˆ–2ï¼Œå¦‚å›é­‚èˆã€ç„å¤©æ°”è¯€)æ‰å…è®¸ç»™ä»–äººåŠ è¡€
+                // ¡ì¨¨(bKind==12¨¦¨¨¡è¡ã¨¨)¨¨¨¨
                 if (bKind == 1 || bKind == 2) {
                     if (bDefenseType == 1 && dwDefenseID > 0 && dwDefenseID != dwAttackID) {
                         sServerObject* pPotentialTarget = mapInst->GetPlayer(dwDefenseID);
                         if (pPotentialTarget) {
-                            // æ ¡éªŒæ–½æ³•è·ç¦» (å¦‚æœæŠ€èƒ½é…æœ‰ wAttackRange ä¸” > 0)
+                            // ¨¦¨¨¡¤ (¨¨¨¦ wAttackRange  > 0)
                             float dx = (float)pObj->wPosX - (float)pPotentialTarget->wPosX;
                             float dy = (float)pObj->wPosY - (float)pPotentialTarget->wPosY;
                             float dist = sqrtf(dx * dx + dy * dy);
@@ -453,7 +582,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                             if (pMugongData && pMugongData->wAttackRange > 0 && dist > (float)pMugongData->wAttackRange) {
                                 LOG("[MugongHandler] Heal Skill " + std::to_string(dwMugongID) + " target out of range: " 
                                     + std::to_string((int)dist) + " > " + std::to_string(pMugongData->wAttackRange));
-                                return; // è¶…å‡ºè·ç¦»ï¼Œæ‹¦æˆªæ–½æ³•
+                                return; // ¨¨¨¨¡¤
                             }
                             
                             pTarget = pPotentialTarget;
@@ -462,7 +591,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                     }
                 }
                 
-                // é€€åŒ–é™çº§æ‹¦æˆªï¼šè‹¥æ— æŒ‡å®šä»–äººï¼Œæˆ–æŠ€èƒ½ä¸ºåªèƒ½ç»™è‡ªå·±åŠ (bKind==0)ï¼Œåˆ™è‡ªåŠ¨ç»™è‡ªå·±åŠ è¡€
+                // ¨¦¨¦¡ì¨¨¨¨¨¨¨¨¡¤¡À(bKind==0)¨¨¡§¨¨¡¤¡À¨¨
                 if (!pTarget) {
                     pTarget = pObj;
                     targetSocket = clientSocket;
@@ -490,7 +619,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
                 // 4. Apply Heals to target player (Self or Coterie Member)
                 pTarget->dwHpCur = (std::min)(pTarget->dwHpMax, pTarget->dwHpCur + hpHeal);
-                pTarget->wIpCur  = (std::min)(pTarget->wIpMax, (WORD)(pTarget->wIpCur + ipHeal));
+                pTarget->wIpCur  = (std::min)(pTarget->wIpMax, (DWORD)(pTarget->wIpCur + ipHeal));
 
                 // 5. Send 0x3B0D (HP/IP status sync) to the healed player character
                 std::vector<BYTE> hpBuf(4);
@@ -498,8 +627,8 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                 auto push2 = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
                 push4(pTarget->dwHpMax);
                 push4(pTarget->dwHpCur);
-                push2(pTarget->wIpMax);
-                push2(pTarget->wIpCur);
+                push4(pTarget->wIpMax);
+                push4(pTarget->wIpCur);
                 hpBuf.push_back(0); // bType = 0
                 PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
                 hpHead->id = 0x3B0D;
@@ -507,13 +636,13 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                 EncryptPacket(hpBuf.data(), 0x42);
                 SafeSend(targetSocket, (const char*)hpBuf.data(), hpBuf.size(), 0);
 
-                // 6. å¦‚æœæ˜¯æ–½æ³•è€…è‡ªå·±åŠ è¡€ï¼Œä¸”æ¶ˆè€—äº†å†…åŠ›ï¼Œä¹Ÿé¢å¤–ç»™è‡ªå·±å‘ä¸€æ¬¡ 0x3B0D æ›´æ–°è‡ªèº«çš„å†…åŠ›æ¡
+                // 6. ¨¨¨¨¡¤¡À¨¨¨¨¨¦¡è¨¨¡¤¡À 0x3B0D ¡ã¨¨¨¨
                 if (pTarget != pObj && cost > 0) {
                     std::vector<BYTE> selfIpBuf(4);
                     selfIpBuf.push_back(pObj->dwHpMax & 0xFF); selfIpBuf.push_back((pObj->dwHpMax >> 8) & 0xFF); selfIpBuf.push_back((pObj->dwHpMax >> 16) & 0xFF); selfIpBuf.push_back(pObj->dwHpMax >> 24);
                     selfIpBuf.push_back(pObj->dwHpCur & 0xFF); selfIpBuf.push_back((pObj->dwHpCur >> 8) & 0xFF); selfIpBuf.push_back((pObj->dwHpCur >> 16) & 0xFF); selfIpBuf.push_back(pObj->dwHpCur >> 24);
-                    selfIpBuf.push_back(pObj->wIpMax & 0xFF); selfIpBuf.push_back(pObj->wIpMax >> 8);
-                    selfIpBuf.push_back(pObj->wIpCur & 0xFF); selfIpBuf.push_back(pObj->wIpCur >> 8);
+                    selfIpBuf.push_back(pObj->wIpMax & 0xFF); selfIpBuf.push_back((pObj->wIpMax >> 8) & 0xFF); selfIpBuf.push_back((pObj->wIpMax >> 16) & 0xFF); selfIpBuf.push_back(pObj->wIpMax >> 24);
+                    selfIpBuf.push_back(pObj->wIpCur & 0xFF); selfIpBuf.push_back((pObj->wIpCur >> 8) & 0xFF); selfIpBuf.push_back((pObj->wIpCur >> 16) & 0xFF); selfIpBuf.push_back(pObj->wIpCur >> 24);
                     selfIpBuf.push_back(0);
                     PACKET_HEADER* selfHead = (PACKET_HEADER*)selfIpBuf.data();
                     selfHead->id = 0x3B0D;
@@ -539,7 +668,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
         *(WORD*)(p + 13) = wAttackPosY;
         p[15] = bAttackHeight;
         
-        // åŠ¨æ€ç»‘å®šåŠ è¡€çš„ç›®æ ‡ï¼Œä»¥æ”¯æŒä»–äººåŠ è¡€æ—¶çš„è§†è§‰è¡¨ç°
+        // ¡§¨¨¨¨¨¨¡ì¨¨¡ì¨¨¡§¡ã
         CMapInstance* mapInst2 = g_MapInstances.count(playerMapID) ? g_MapInstances[playerMapID] : nullptr;
         if (mapInst2) {
             std::lock_guard<std::mutex> lock(mapInst2->GetMutex());
@@ -551,7 +680,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
             if (!pTarget) pTarget = pObj;
 
             if (pTarget) {
-                p[16] = pTarget->bObjectType; // åŠ¨æ€ç»‘å®šå—å‡»ç±»å‹ (é€šå¸¸ä¸º 1=PC)
+                p[16] = pTarget->bObjectType; // ¡§¡À (¨¦ 1=PC)
                 *(DWORD*)(p + 17) = pTarget->dwObjectID;
                 *(DWORD*)(p + 21) = pTarget->dwHpMax;
                 *(DWORD*)(p + 25) = pTarget->dwHpCur;
@@ -697,7 +826,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                 // Use template defense since MonsterData doesn't store wWepDef
                 DWORD monsterDef = g_NpcTemplates.count(pTarget->bPropType) ? g_NpcTemplates[pTarget->bPropType].dwDefInit : 0;
                 
-                // åŠ¨æ€æ‰£å‡ï¼šæ£€æµ‹å¹¶åº”ç”¨æ€ªç‰©å½“å‰å—åˆ°çš„å‡é˜²ç­‰ Debuff å±æ€§æ•ˆæœ
+                // ¡§¡§¡ã¨¦ Debuff ¡À¡ì
                 for (auto& bf : pTarget->activeBuffs) {
                     sMugongList* bd = MugongManager::GetInstance()->GetMugongLevelData(bf.second.dwMugongID, bf.second.bLevel);
                     if (bd) {
@@ -731,8 +860,8 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                         auto push2 = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
                         push4(pAttacker->dwHpMax);
                         push4(pAttacker->dwHpCur);
-                        push2(pAttacker->wIpMax);
-                        push2(pAttacker->wIpCur);
+                        push4(pAttacker->wIpMax);
+                        push4(pAttacker->wIpCur);
                         hpBuf.push_back(0); // bType
                         PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
                         hpHead->id = 0x3B0D;
@@ -805,7 +934,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                     }
                 }
                 
-                // Debuff çŠ¶æ€å†™å…¥æ€ªç‰© (è‹¥ä¼¤å®³æŠ€èƒ½å‘½ä¸­ä¸”é…ç½®æœ‰æŒç»­æ—¶é—´)
+                // Debuff  (¨¨¡è¨¨¨¦¨¦)
                 if (pMugongData && pMugongData->dwKeepUpTime > 0 && p[0] == 2) {
                     PlayerData::sActiveBuff debuff;
                     debuff.dwMugongID = dwMugongID;
@@ -816,16 +945,16 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                     LOG("[MugongHandler] Applied debuff skill " + std::to_string(dwMugongID) + " to monster " + std::to_string(dwDefenseID));
                 }
                 
-                // AOE / Splash Damage Logic (Class 6 skills) - ç»Ÿä¸€åŒå‘æº…å°„ä¸ Debuff çŠ¶æ€æ‰©æ•£
+                // AOE / Splash Damage Logic (Class 6 skills) - ¡ã Debuff 
                 sMugongTemplate* sTpl = MugongManager::GetInstance()->GetTemplate(dwMugongID);
                 if (IsAoeSkill(dwMugongID, sTpl)) {
-                    // åœ†å¿ƒç‰©ç†åæ ‡ç»å¯¹é”å®šåœ¨æ–½æ³•è€…è‡ªèº«ä½ç½®ï¼Œé¿å…å®¢æˆ·ç«¯å› è¿œå¤„æ€ªæ®‹ç•™å¯¼è‡´åœ†å¿ƒé”™ä½
+                    // ¨¦¡§¨¨¨¨¨¨¨¦¡¤¨¨¡è¨¨¨¦
                     WORD wAoeCenterX = pAttacker ? pAttacker->wPosX : wAttackPosX;
                     WORD wAoeCenterY = pAttacker ? pAttacker->wPosY : wAttackPosY;
                     
                     LOG("[MugongHandler] [AOE-Monster] Skill ID: " + std::to_string(dwMugongID) + " Attacker OID: " + std::to_string(dwAttackID) + " Pos: (" + std::to_string(wAoeCenterX) + "," + std::to_string(wAoeCenterY) + ")");
 
-                    // 1. æº…å°„åŒºåŸŸå†…çš„æ€ªç‰©ç›®æ ‡
+                    // 1. ¡ã
                     std::vector<MonsterData*> aoiMonsters = mapInst->GetMonstersInAOI(wAoeCenterX, wAoeCenterY);
                     std::vector<MonsterData*> splashMonsters;
                     
@@ -839,7 +968,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                         LOG("[MugongHandler] [AOE-Monster] -> Mon OID: " + std::to_string(pMon->dwObjectID) + " Pos: (" + std::to_string(pMon->wPosX) + "," + std::to_string(pMon->wPosY) + ") Dist: " + std::to_string(dist));
                         if (dist <= 10.0f) {
                             splashMonsters.push_back(pMon);
-                            if (splashMonsters.size() >= 5) break; // æœ€å¤šæº…å°„5ä¸ªæ€ªç‰©
+                            if (splashMonsters.size() >= 5) break; // ¡è¡ã5
                         }
                     }
                     LOG("[MugongHandler] [AOE-Monster] -> Splash monsters count selected: " + std::to_string(splashMonsters.size()));
@@ -847,7 +976,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                     for (MonsterData* pSplashMon : splashMonsters) {
                         DWORD sMonDef = g_NpcTemplates.count(pSplashMon->bPropType) ? g_NpcTemplates[pSplashMon->bPropType].dwDefInit : 0;
                         
-                        // åŠ¨æ€åº”ç”¨è¢«æ³¢åŠæ€ªç‰©èº«ä¸Šçš„å‡ä¼¤ç­‰ Debuff æ•ˆæœ
+                        // ¡§¡§¨¨¨¨¡è Debuff 
                         for (auto& bf : pSplashMon->activeBuffs) {
                             sMugongList* bd = MugongManager::GetInstance()->GetMugongLevelData(bf.second.dwMugongID, bf.second.bLevel);
                             if (bd) {
@@ -875,7 +1004,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                             DWORD skillFlatDmg = pMugongData ? pMugongData->dwDamageMul : 0;
                             DWORD skillPerc = pMugongData ? pMugongData->wIncAtkPerc : 0;
                             
-                            // ç¾¤ä¼¤æº…å°„ä¼¤å®³ç³»æ•°ï¼šé¦–è¦ç›®æ ‡çš„ 70%
+                            // ¡è¡è¡ã¡è¡ã¨¦¨¨ 70%
                             float rawDmg = ((pAtk * ((100.0f + skillPerc) / 100.0f)) + skillFlatDmg) * 0.7f;
                             float var = 0.9f + ((float)(rand() % 2000) / 10000.0f);
                             rawDmg *= var;
@@ -905,7 +1034,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                             }
                         }
 
-                        // Debuff çŠ¶æ€æŒç»­å½±å“è‡ªåŠ¨æ‰©æ•£è‡³æº…å°„åˆ°çš„æ€ªç‰©ä¸Š
+                        // Debuff ¡À¨¨¡§¨¨¡ã¡ã
                         if (pMugongData && pMugongData->dwKeepUpTime > 0 && sResult == 2) {
                             PlayerData::sActiveBuff debuff;
                             debuff.dwMugongID = dwMugongID;
@@ -920,7 +1049,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                             pSplashMon->dwTargetID = dwAttackID;
                         }
                         
-                        // å¹¿æ’­è¢«æº…å°„æ€ªç‰©çš„ 0x4016 ä¼¤å®³åŠ¨ç”»åŒ…
+                        // ¨¨¡ã 0x4016 ¡è¡§
                         std::vector<BYTE> splashAckBuf(4 + 38);
                         BYTE* sp = splashAckBuf.data() + 4;
                         sp[0] = sResult; 
@@ -946,7 +1075,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                         BroadcastPacketToMap(playerMapID, splashAckBuf);
                     }
 
-                    // 2. æº…å°„åŒºåŸŸå†…çš„ PC ç©å®¶ç›®æ ‡ (PVP)
+                    // 2. ¡ã PC  (PVP)
                     std::vector<PlayerData*> aoiPlayers = mapInst->GetPlayersInAOI(wAoeCenterX, wAoeCenterY);
                     std::vector<PlayerData*> splashPlayers;
                     
@@ -960,7 +1089,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                         LOG("[MugongHandler] [AOE-Monster] -> Player OID: " + std::to_string(pPl->dwObjectID) + " Name: " + pPl->szName + " Pos: (" + std::to_string(pPl->wPosX) + "," + std::to_string(pPl->wPosY) + ") Dist: " + std::to_string(dist));
                         if (dist <= 10.0f) {
                             splashPlayers.push_back(pPl);
-                            if (splashPlayers.size() >= 5) break; // æœ€å¤šæº…å°„5ä¸ªç©å®¶
+                            if (splashPlayers.size() >= 5) break; // ¡è¡ã5
                         }
                     }
                     LOG("[MugongHandler] [AOE-Monster] -> Splash players count selected: " + std::to_string(splashPlayers.size()));
@@ -1010,7 +1139,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                             }
                         }
 
-                        // Debuff çŠ¶æ€æŒç»­å½±å“è‡ªåŠ¨æ‰©æ•£è‡³æº…å°„åˆ°çš„ PC ç©å®¶ä¸Š
+                        // Debuff ¡À¨¨¡§¨¨¡ã¡ã PC 
                         if (pMugongData && pMugongData->dwKeepUpTime > 0 && sResult == 2) {
                             sServerObject::sActiveBuff debuff;
                             debuff.dwMugongID = dwMugongID;
@@ -1021,7 +1150,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                             LOG("[MugongHandler] Applied PvP splash debuff skill " + std::to_string(dwMugongID) + " to player " + std::to_string(pSplashPlayer->dwObjectID));
                         }
                         
-                        // å¹¿æ’­è¢«æº…å°„ç©å®¶çš„ 0x4016 ä¼¤å®³åŠ¨ç”»åŒ…
+                        // ¨¨¡ã 0x4016 ¡è¡§
                         std::vector<BYTE> splashAckBuf(4 + 38);
                         BYTE* sp = splashAckBuf.data() + 4;
                         sp[0] = sResult; 
@@ -1046,7 +1175,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                         EncryptPacket(splashAckBuf.data(), 0x42);
                         BroadcastPacketToMap(playerMapID, splashAckBuf);
 
-                        // å‘è¢«æº…å°„ç©å®¶çš„å®¢æˆ·ç«¯ä¸‹å‘ 0x3B0D å®æ—¶åŒæ­¥è¡€æ¡å¹¶é‡ç®—å±æ€§ (ä½¿å‡ç›ŠçŠ¶æ€ç«‹å³ç”Ÿæ•ˆ)
+                        // ¨¨¡ã¡¤ 0x3B0D ¨¨¨¦¡À¡ì ()
                         DWORD splashCharID = pSplashPlayer->dwObjectID - 400000000;
                         SOCKET targetSock = SessionMgr::GetInstance().GetSocketByCharID(splashCharID);
                         if (targetSock != INVALID_SOCKET) {
@@ -1055,8 +1184,8 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                             auto push2 = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
                             push4(pSplashPlayer->dwHpMax);
                             push4(pSplashPlayer->dwHpCur);
-                            push2(pSplashPlayer->wIpMax);
-                            push2(pSplashPlayer->wIpCur);
+                            push4(pSplashPlayer->wIpMax);
+                            push4(pSplashPlayer->wIpCur);
                             hpBuf.push_back(0); 
                             PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
                             hpHead->id = 0x3B0D;
@@ -1078,7 +1207,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
         }
     }
     else if (!isBuff && dwMugongID != 64 && bDefenseType == 1) {
-        // PvP (Player vs Player) ä¼¤å®³ä¸å‘½ä¸­åˆ¤å®šåˆ†æ”¯
+        // PvP (Player vs Player) ¡è¡è
         if (g_MapInstances.count(playerMapID)) {
             CMapInstance* mapInst = g_MapInstances[playerMapID];
             std::lock_guard<std::mutex> lock(mapInst->GetMutex());
@@ -1086,7 +1215,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
             if (pTarget) {
                 PlayerData* pAttacker = mapInst->GetPlayer(dwAttackID);
                 
-                // ä¸ƒçº§çŒ®ç¥­ç±»å‹æŠ€èƒ½ç”Ÿå‘½æ¶ˆè€—
+                // ¡ì¡À¨¨¨¨
                 DWORD hpSacrificed = 0;
                 bool isSacrifice = (dwMugongID == 37 || (pMugongData && pMugongData->wIncHpCurPerc > 0 && pMugongData->wIncHpCurPerc < 100));
                 if (isSacrifice && pAttacker) {
@@ -1097,14 +1226,14 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                         LOG("[MugongHandler] PvP Sacrifice Skill " + std::to_string(dwMugongID) + " consumed " 
                             + std::to_string(hpSacrificed) + " HP");
                         
-                        // å³æ—¶åˆ·æ–°è‡ªèº«è¡€æ¡
+                        // ¡¤¡ã¨¨¨¨¨¨
                         std::vector<BYTE> hpBuf(4);
                         auto push4 = [&](DWORD d) { hpBuf.push_back(d&0xFF); hpBuf.push_back((d>>8)&0xFF); hpBuf.push_back((d>>16)&0xFF); hpBuf.push_back((d>>24)&0xFF); };
                         auto push2 = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
                         push4(pAttacker->dwHpMax);
                         push4(pAttacker->dwHpCur);
-                        push2(pAttacker->wIpMax);
-                        push2(pAttacker->wIpCur);
+                        push4(pAttacker->wIpMax);
+                        push4(pAttacker->wIpCur);
                         hpBuf.push_back(0); 
                         PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
                         hpHead->id = 0x3B0D;
@@ -1114,7 +1243,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                     }
                 }
 
-                // PvP å‘½ä¸­åˆ¤å®šï¼šåŸºäºæ”»æ–¹æ€»å‘½ä¸­å¯¹é˜²æ–¹æ€»é¿è®©è®¡ç®—å‘½ä¸­æ¦‚ç‡
+                // PvP ¡è¨¦¨¦¨¨¨¨
                 DWORD playerAtkRating = 50; 
                 if (pAttacker) {
                     playerAtkRating += pAttacker->dwTotalHit;
@@ -1128,14 +1257,14 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                     p[0] = 1; // MISS
                     finalDmg = 0;
                 } else if (pTarget->activeBuffs.count(130) > 0) {
-                    // 130 é¾Ÿæ¯å¤§æ³• PVP é˜²å®ˆç«¯æ— æ•Œå…ä¼¤æ‹¦æˆª
-                    p[0] = 1; // MISS (å®Œå…¨å…ç–«)
+                    // 130 ¨¦¡è¡ì PVP ¨¦¡è
+                    p[0] = 1; // MISS (¡§)
                     finalDmg = 0;
                     LOG("[MugongPvp] Player " + pTarget->szName + " protected by Turtle Breath. Zero Damage.");
                 } else {
-                    // å¦‚æœé˜²å¾¡æ–¹ç©å®¶æŒ‚æœ‰éšèº«æœ¯ 178 å—åˆ›ï¼Œç ´éš
+                    // ¨¦¨¦¨¨ 178 ¨¦
                     if (pTarget->activeBuffs.count(178) > 0) {
-                        pTarget->activeBuffs[178].dwEndTime = 0; // å—ä¼¤ç ´éš
+                        pTarget->activeBuffs[178].dwEndTime = 0; // ¡è¨¦
                         LOG("[MugongPvp] Player " + pTarget->szName + " hit while stealth. Expiring Stealth.");
                     }
                     p[0] = 2; // HIT
@@ -1150,7 +1279,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
                     float rawDmg = (playerAtk * ((100.0f + skillPerc) / 100.0f)) + skillFlatDmg;
                     if (hpSacrificed > 0) {
-                        rawDmg += hpSacrificed * 2.0f; // çŒ®ç¥­æ•°å€¼å¢å¹…
+                        rawDmg += hpSacrificed * 2.0f; // ¡ã
                     }
 
                     float roll = 0.9f + ((float)(rand() % 2000) / 10000.0f);
@@ -1159,10 +1288,10 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                     WORD critRate = (pAttacker && pAttacker->wCritical > 0) ? pAttacker->wCritical : 5;
                     if ((WORD)(rand() % 100) < critRate) {
                         rawDmg *= 1.5f;
-                        bCritHit = 1; // æš´å‡»
+                        bCritHit = 1; // 
                     }
 
-                    // æ‰£é™¤é˜²å®ˆæ–¹ç©å®¶é˜²å¾¡åŠ›
+                    // ¨¦¡è¨¦¨¦
                     DWORD targetDef = pTarget->dwTotalDef;
                     if (rawDmg > targetDef) rawDmg -= targetDef;
                     else rawDmg = 1;
@@ -1180,7 +1309,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                     }
                 }
                 
-                // Debuff çŠ¶æ€å†™å…¥ç©å®¶ (è‹¥ä¼¤å®³æŠ€èƒ½å‘½ä¸­ä¸”é…ç½®æœ‰æŒç»­æ—¶é—´)
+                // Debuff  (¨¨¡è¨¨¨¦¨¦)
                 if (pMugongData && pMugongData->dwKeepUpTime > 0 && p[0] == 2) {
                     sServerObject::sActiveBuff debuff;
                     debuff.dwMugongID = dwMugongID;
@@ -1191,16 +1320,16 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                     LOG("[MugongHandler] PvP Debuff Applied skill " + std::to_string(dwMugongID) + " to target player " + std::to_string(dwDefenseID));
                 }
 
-                // AOE / Splash Damage Logic (Class 6 skills) - PVP Target AOE (åŒå‘æº…å°„ä¸ Debuff çŠ¶æ€æ‰©æ•£)
+                // AOE / Splash Damage Logic (Class 6 skills) - PVP Target AOE (¡ã Debuff )
                 sMugongTemplate* sTpl = MugongManager::GetInstance()->GetTemplate(dwMugongID);
                 if (IsAoeSkill(dwMugongID, sTpl)) {
-                    // åœ†å¿ƒç‰©ç†åæ ‡ç»å¯¹é”å®šåœ¨æ–½æ³•è€…è‡ªèº«ä½ç½®ï¼Œé¿å…å®¢æˆ·ç«¯å› è¿œå¤„PC/æ€ªæ®‹ç•™å¯¼è‡´åœ†å¿ƒé”™ä½
+                    // ¨¦¡§¨¨¨¨¨¨¨¦¡¤¨¨¡èPC/¨¨¨¦
                     WORD wAoeCenterX = pAttacker ? pAttacker->wPosX : wAttackPosX;
                     WORD wAoeCenterY = pAttacker ? pAttacker->wPosY : wAttackPosY;
                     
                     LOG("[MugongHandler] [AOE-PvP] Skill ID: " + std::to_string(dwMugongID) + " Attacker OID: " + std::to_string(dwAttackID) + " Pos: (" + std::to_string(wAoeCenterX) + "," + std::to_string(wAoeCenterY) + ")");
 
-                    // 1. æº…å°„åŒºåŸŸå†…çš„æ€ªç‰©ç›®æ ‡
+                    // 1. ¡ã
                     std::vector<MonsterData*> aoiMonsters = mapInst->GetMonstersInAOI(wAoeCenterX, wAoeCenterY);
                     std::vector<MonsterData*> splashMonsters;
                     
@@ -1222,7 +1351,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                     for (MonsterData* pSplashMon : splashMonsters) {
                         DWORD sMonDef = g_NpcTemplates.count(pSplashMon->bPropType) ? g_NpcTemplates[pSplashMon->bPropType].dwDefInit : 0;
                         
-                        // åŠ¨æ€åº”ç”¨ Debuff å‡é˜²
+                        // ¡§¡§ Debuff ¨¦
                         for (auto& bf : pSplashMon->activeBuffs) {
                             sMugongList* bd = MugongManager::GetInstance()->GetMugongLevelData(bf.second.dwMugongID, bf.second.bLevel);
                             if (bd) {
@@ -1279,7 +1408,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                             }
                         }
 
-                        // Debuff çŠ¶æ€æŒç»­å½±å“è‡ªåŠ¨æ‰©æ•£è‡³è¢«æº…å°„æ€ªç‰©
+                        // Debuff ¡À¨¨¡§¨¨¨¨¡ã
                         if (pMugongData && pMugongData->dwKeepUpTime > 0 && sResult == 2) {
                             PlayerData::sActiveBuff debuff;
                             debuff.dwMugongID = dwMugongID;
@@ -1294,7 +1423,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                             pSplashMon->dwTargetID = dwAttackID;
                         }
                         
-                        // å¹¿æ’­ 0x4016 ä¼¤å®³åŠ¨ç”»åŒ…
+                        //  0x4016 ¡è¡§
                         std::vector<BYTE> splashAckBuf(4 + 38);
                         BYTE* sp = splashAckBuf.data() + 4;
                         sp[0] = sResult; 
@@ -1320,7 +1449,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                         BroadcastPacketToMap(playerMapID, splashAckBuf);
                     }
 
-                    // 2. æº…å°„åŒºåŸŸå†…çš„ PC ç©å®¶ç›®æ ‡ (PVP)
+                    // 2. ¡ã PC  (PVP)
                     std::vector<PlayerData*> aoiPlayers = mapInst->GetPlayersInAOI(wAoeCenterX, wAoeCenterY);
                     std::vector<PlayerData*> splashPlayers;
                     
@@ -1384,7 +1513,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                             }
                         }
 
-                        // Debuff çŠ¶æ€æŒç»­å½±å“è‡ªåŠ¨æ‰©æ•£è‡³è¢«æº…å°„ PC ç©å®¶
+                        // Debuff ¡À¨¨¡§¨¨¨¨¡ã PC 
                         if (pMugongData && pMugongData->dwKeepUpTime > 0 && sResult == 2) {
                             sServerObject::sActiveBuff debuff;
                             debuff.dwMugongID = dwMugongID;
@@ -1395,7 +1524,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                             LOG("[MugongHandler] Applied PvP splash debuff skill " + std::to_string(dwMugongID) + " to player " + std::to_string(pSplashPlayer->dwObjectID));
                         }
                         
-                        // å¹¿æ’­ 0x4016 ä¼¤å®³åŠ¨ç”»åŒ…
+                        //  0x4016 ¡è¡§
                         std::vector<BYTE> splashAckBuf(4 + 38);
                         BYTE* sp = splashAckBuf.data() + 4;
                         sp[0] = sResult; 
@@ -1420,7 +1549,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                         EncryptPacket(splashAckBuf.data(), 0x42);
                         BroadcastPacketToMap(playerMapID, splashAckBuf);
 
-                        // å‘è¢«æº…å°„ç©å®¶å®¢æˆ·ç«¯ä¸‹å‘ 0x3B0D å®æ—¶åŒæ­¥å¹¶é‡ç®— stats å±æ€§
+                        // ¨¨¡ã¡¤ 0x3B0D ¨¦ stats ¡À¡ì
                         DWORD splashCharID = pSplashPlayer->dwObjectID - 400000000;
                         SOCKET targetSock = SessionMgr::GetInstance().GetSocketByCharID(splashCharID);
                         if (targetSock != INVALID_SOCKET) {
@@ -1429,8 +1558,8 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                             auto push2 = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
                             push4(pSplashPlayer->dwHpMax);
                             push4(pSplashPlayer->dwHpCur);
-                            push2(pSplashPlayer->wIpMax);
-                            push2(pSplashPlayer->wIpCur);
+                            push4(pSplashPlayer->wIpMax);
+                            push4(pSplashPlayer->wIpCur);
                             hpBuf.push_back(0); 
                             PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
                             hpHead->id = 0x3B0D;
@@ -1468,7 +1597,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
     // Using bResult = 0 ensures no self-hit stagger animation is played.
     BroadcastPacketToMap(playerMapID, ackBuf);
 
-    // PvP é˜²å®ˆæ–¹è¡€æ§½æ•°æ®åŒæ­¥ä¸ Debuff å®æ—¶å±æ€§åˆ·æ–°
+    // PvP ¨¦¨¨¡ì¡ã Debuff ¡À¡ì¡¤¡ã
     if (bDefenseType == 1 && dwDefenseID > 0) {
         DWORD defenderCharID = dwDefenseID - 400000000;
         SOCKET targetSock = SessionMgr::GetInstance().GetSocketByCharID(defenderCharID);
@@ -1487,7 +1616,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
             EncryptPacket(hpBuf.data(), 0x42);
             SafeSend(targetSock, (const char*)hpBuf.data(), hpBuf.size(), 0);
 
-            // è§¦å‘é˜²å®ˆæ–¹å±æ€§é‡ç®—ä½¿ Debuff æ‰£å‡ç«‹å³ç”Ÿæ•ˆ
+            // ¨¨¡ì¨¦¡À¡ì¨¦ Debuff 
             PlayerManager::GetInstance().RecalculateStats(defenderCharID, true);
         }
     }
@@ -1522,8 +1651,8 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                         auto push2 = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
                         push4(pObj->dwHpMax);
                         push4(pObj->dwHpCur);
-                        push2(pObj->wIpMax);
-                        push2(pObj->wIpCur);
+                        push4(pObj->wIpMax);
+                        push4(pObj->wIpCur);
                         hpBuf.push_back(1);
                         PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
                         hpHead->id = 0x3B0D;
@@ -1565,4 +1694,30 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
         EncryptPacket(killBuf.data(), 0x42);
         SafeSend(clientSocket, (char*)killBuf.data(), killBuf.size(), 0);
     }
+}
+// ----------------------------------------------------------------------------
+// Ñ¡ÏîÉèÖÃ´¦ÀíÆ÷ (Í¬²½¿Í»§¶Ë°²È«±£»¤ÉèÖÃ: ËùÓĞ½ÇÉ«/±¾ÃÅÅÉ³ÉÔ±/ÎŞ¶ÔÏó)
+// ----------------------------------------------------------------------------
+void OnSetOptionReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
+    if (totalSize < 1) return;
+    BYTE opt = payload[0];
+    DWORD playerMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+    if (g_MapInstances.count(playerMapID)) {
+        CMapInstance* mapInst = g_MapInstances[playerMapID];
+        std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+        sServerObject* pObj = mapInst->GetPlayer(charID + 400000000);
+        if (pObj) {
+            pObj->bSafeMode = opt;
+            LOG("[MugongHandler] OnSetOptionReq: Player " + std::to_string(charID + 400000000) + " set bSafeMode to " + std::to_string(opt));
+        }
+    }
+
+    std::vector<BYTE> ackBuf(4 + 1);
+    BYTE* p = ackBuf.data() + 4;
+    p[0] = opt;
+    PACKET_HEADER* head = (PACKET_HEADER*)ackBuf.data();
+    head->id = 0x3A01; // CS_OP_SETOPTION_ACK
+    head->payloadSize = 1;
+    EncryptPacket(ackBuf.data(), 0x42);
+    SafeSend(clientSocket, (const char*)ackBuf.data(), ackBuf.size(), 0);
 }

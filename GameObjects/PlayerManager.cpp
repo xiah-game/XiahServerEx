@@ -48,6 +48,18 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
         LOG("[RecalcStats] EquipRow ref=" + std::to_string(ref) + " d7(spd)=" + std::to_string(d7) + " d9(hp)=" + std::to_string(d9) + " d10(ip)=" + std::to_string(d10) + " d11(restHp)=" + std::to_string(d11) + " d12(restIp)=" + std::to_string(d12) + " d13(crit)=" + std::to_string(d13));
     }
 
+    // 动态拉取夺命符在数据库 nData22 配置的暴击值 (若为 0 且检测到装备则兼容性降级为默认的 +20 暴击加成)
+    int critBonus = ItemDB::GetInstance().GetEquippedItemDataValue(dwCharID, 9, 22); // 9 = 夺命符
+    if (critBonus <= 0) {
+        // 如果数据库中未配置或配置为 0，我们通过检查其使用时间 (nData2) 间接证明玩家确实装备了夺命符，从而启动降级保护
+        if (ItemDB::GetInstance().GetEquippedItemDataValue(dwCharID, 9, 2) > 0) { 
+            critBonus = 20;
+        }
+    }
+    if (critBonus > 0) {
+        equipCrit += critBonus;
+    }
+
     LOG("[RecalcStats] charID=" + std::to_string(dwCharID) + " TOTALS: equipAtk=" + std::to_string(equipAtk) + " equipDef=" + std::to_string(equipDef) + " equipSpd=" + std::to_string(equipSpd) + " equipCrit=" + std::to_string(equipCrit) + " equipHp=" + std::to_string(equipHp) + " equipIp=" + std::to_string(equipIp) + " restoreHp=" + std::to_string(equipRestoreHp) + " restoreIp=" + std::to_string(equipRestoreIp));
 
     // 3. Combine them in memory
@@ -103,34 +115,35 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
             pObj->wEquipRestoreIp = equipRestoreIp;
             
             int maxBuffSpd = 0;
-            if (pObj->activeBuffs.count(124) > 0) { // ���Ϸ�
+            if (pObj->activeBuffs.count(124) > 0) { // 草上飞
                 BYTE lvl = pObj->activeBuffs[124].bLevel;
                 int currentSpd = 4 + (lvl > 0 ? lvl : 1);
                 if (currentSpd > maxBuffSpd) maxBuffSpd = currentSpd;
             }
-            if (pObj->activeBuffs.count(94) > 0) { // ���粽
+            if (pObj->activeBuffs.count(94) > 0) { // 疾风步
                 BYTE lvl = pObj->activeBuffs[94].bLevel;
                 int currentSpd = 5 + (lvl > 0 ? lvl : 1);
                 if (currentSpd > maxBuffSpd) maxBuffSpd = currentSpd;
             }
-            if (pObj->activeBuffs.count(64) > 0) { // �貨΢��
+            if (pObj->activeBuffs.count(64) > 0) { // 凌波微步
                 BYTE lvl = pObj->activeBuffs[64].bLevel;
                 int currentSpd = 4 + (lvl > 0 ? lvl : 1);
                 if (currentSpd > maxBuffSpd) maxBuffSpd = currentSpd;
             }
-            if (pObj->activeBuffs.count(34) > 0) { // ��ת����
+            if (pObj->activeBuffs.count(34) > 0) { // 斗转星移
                 BYTE lvl = pObj->activeBuffs[34].bLevel;
                 int currentSpd = 3 + (lvl > 0 ? lvl : 1);
                 if (currentSpd > maxBuffSpd) maxBuffSpd = currentSpd;
             }
 
-            // ��ʼ���������ٶȵ����� 4 �񣬷���Ϸ�����ٶȷ�Ʈ˲��������Ϊװ���ɳ�����ƽ��ռ�
+            // 初始基础行走速度调低至 4 格，防游戏后期速度发飘瞬移拉扯，为装备成长留出平衡空间
             pObj->wWalkSpeed = 4 + equipSpd + maxBuffSpd;
             // Attack speed: computed on-the-fly in PreAttackReq, not stored on PlayerData
 
             // Calculate and update HP/IP max on the object (same formula as SendCharStatusInfoAck)
             pObj->dwHpMax = (baseInt * 8) + ((baseLevel - 1) * 8) + equipHp; // baseInt = wSus
-            pObj->wIpMax = (baseVit * 0) + ((baseLevel - 1) * 4) + equipIp;
+            DWORD computedIpMax = (baseVit * 0) + ((baseLevel - 1) * 4) + (DWORD)equipIp;
+            pObj->wIpMax = computedIpMax;
             // Don't let current exceed max
             if (pObj->dwHpCur > pObj->dwHpMax) pObj->dwHpCur = pObj->dwHpMax;
             if (pObj->wIpCur > pObj->wIpMax) pObj->wIpCur = pObj->wIpMax;
@@ -153,7 +166,7 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
             int percHit  = 0;
             int percCrit = 0;
 
-            // 4.5. Passive Inner Skill (�����) flat + perc (dwMugongID 1-29)
+            // 4.5. Passive Inner Skill (崘懎濮) flat + perc (dwMugongID 1-29)
             for (auto& mg : pObj->learnedMugongs) {
                 DWORD mugID = mg.first;
                 BYTE mugLvl = mg.second;
@@ -203,7 +216,7 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
                 }
             }
 
-            // Phase 3: Apply percentages once ��?totalFlat * (100 + totalPerc) / 100
+            // Phase 3: Apply percentages once 垾?totalFlat * (100 + totalPerc) / 100
             int finalAtkPerc = 100 + percAtk; if (finalAtkPerc < 1) finalAtkPerc = 1;
             int finalDefPerc = 100 + percDef; if (finalDefPerc < 1) finalDefPerc = 1;
             int finalHitPerc = 100 + percHit; if (finalHitPerc < 1) finalHitPerc = 1;
@@ -217,7 +230,7 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
 
             // Update HP/IP max with all bonuses
             pObj->dwHpMax += flatHpMax;
-            pObj->wIpMax  += (WORD)flatIpMax;
+            pObj->wIpMax  += (DWORD)flatIpMax;
 
             // 6. Save final stats to the object
             pObj->dwTotalAtk = totalAtk;
@@ -238,9 +251,9 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
             SendCharStatusInfoAck(s, dwCharID, 0x4414); // CS_IT_CHARSTATUSINFO_ACK
             // Client's Init_WindowOutSide/InSide clears mugong data upon receiving 0x4414,
             // so we must immediately re-send the mugong lists to repopulate the UI.
-            BYTE typeGeneral = 0; // General/Outgong (�����)
+            BYTE typeGeneral = 0; // General/Outgong (灂垐杞)
             OnMugongListReq(s, dwCharID, &typeGeneral, 1);
-            BYTE typePassive = 1; // Passive/Ingong (�����)  also triggers Active list
+            BYTE typePassive = 1; // Passive/Ingong (洰悡杞)  also triggers Active list
             OnMugongListReq(s, dwCharID, &typePassive, 1);
 
             // Send 0x3B0D (HP/IP bar update) to ensure bars are refreshed with in-memory values
@@ -254,8 +267,8 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
                     auto push2 = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
                     push4(pObj2->dwHpMax);
                     push4(pObj2->dwHpCur);
-                    push2(pObj2->wIpMax);
-                    push2(pObj2->wIpCur);
+                    push4(pObj2->wIpMax);
+                    push4(pObj2->wIpCur);
                     hpBuf.push_back(0); // bType
                     PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
                     hpHead->id = 0x3B0D; // CS_IF_CHARHP_ACK
@@ -339,13 +352,15 @@ void SendCharStatusInfoAck(SOCKET clientSocket, DWORD dwCharID, WORD opCode) {
     if (dbRet) {
         LOG("[PlayerManager] DB Query returned a row for dwCharID: " + std::to_string(dwCharID));
         WORD wLevel = fs.wLevel, wStr = fs.wStr, wSus = fs.wSus, wDex = fs.wDex, wVit = fs.wVit;
-        WORD wIpMax = fs.wIpMax, wIpCur = fs.wIpCur, wRemainSp = fs.wRemainSp, wRemainTp = fs.wRemainTp;
+        DWORD wIpMax = fs.wIpMax, wIpCur = fs.wIpCur;
+        WORD wRemainSp = fs.wRemainSp, wRemainTp = fs.wRemainTp;
         DWORD dwHpMax = fs.dwHpMax, dwHpCur = fs.dwHpCur, dwTotalSp = fs.dwTotalSp, dwTotalTp = fs.dwTotalTp, dwMoney = fs.dwMoney, dwFame = fs.dwFame;
         long long int dwExp = fs.dwExp, levelExp = 0, nextLevelExp = 0;
         
         // Calculate Max HP and Max IP dynamically
         dwHpMax = (wSus * 8) + ((wLevel - 1) * 8) + playerObj.wEquipHp;
-        wIpMax = (wVit * 0) + ((wLevel - 1) * 4) + playerObj.wEquipIp;
+        DWORD computedIpMax = (wVit * 0) + ((wLevel - 1) * 4) + (DWORD)playerObj.wEquipIp;
+        wIpMax = computedIpMax;
         
         LOG("[SendStatusAck] BEFORE fix: dwHpCur=" + std::to_string(dwHpCur) + " dwHpMax=" + std::to_string(dwHpMax)
             + " wIpCur=" + std::to_string(wIpCur) + " wIpMax=" + std::to_string(wIpMax)
@@ -401,7 +416,7 @@ void SendCharStatusInfoAck(SOCKET clientSocket, DWORD dwCharID, WORD opCode) {
             ackBuf.push_back(0);
             ackBuf.push_back(playerObj.wWalkSpeed & 0xFF);
             pushDword(dwHpCur); pushDword(dwHpMax); 
-            pushWord(wIpCur); pushWord(wIpMax);
+            pushDword(wIpCur); pushDword(wIpMax);
             pushWord(playerObj.wCritical);
             pushWord(wStr); pushWord(wSus * 2); pushWord(wDex);
             ackBuf.push_back(10);
@@ -414,7 +429,7 @@ void SendCharStatusInfoAck(SOCKET clientSocket, DWORD dwCharID, WORD opCode) {
         } else if (opCode == CS_IT_CHARSTATUSINFO_ACK) {
             pushWord(wLevel); pushWord(wStr); pushWord(wSus); pushWord(wDex); pushWord(wVit);
             ackBuf.push_back(0); ackBuf.push_back(0); ackBuf.push_back(0); ackBuf.push_back(0);
-            pushWord(wIpMax); pushWord(wIpCur); pushDword(dwHpMax); pushDword(dwHpCur);
+            pushDword(wIpMax); pushDword(wIpCur); pushDword(dwHpMax); pushDword(dwHpCur);
             pushInt64(dwExp); pushInt64(levelExp); pushInt64(nextLevelExp); pushInt64(tpExp); pushInt64(nextTpExp);
             pushDword(dwTotalSp); pushWord(wRemainSp); pushDword(dwTotalTp); pushWord(wRemainTp);
             pushWord(wStr); pushDword(playerObj.dwTotalAtk);

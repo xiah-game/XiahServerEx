@@ -204,13 +204,13 @@ void OnFunctionalNpcItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload
                     pushWord((WORD)tpl.nData1); // wDecrDurRate
                     pushWord((WORD)tpl.nData2); // wCurDur (from template nData2)
                     pushWord((WORD)tpl.nData3); // wMaxDur (from template nData3)
-                    pushWord((WORD)tpl.nData4); // wAtkPwr
-                    pushWord((WORD)tpl.nData5); // wDefPwr
-                    pushWord((WORD)tpl.nData6); // wAtkRating
+                    pushDWord(tpl.nData4); // wAtkPwr (DWORD)
+                    pushDWord(tpl.nData5); // wDefPwr (DWORD)
+                    pushDWord(tpl.nData6); // wAtkRating (DWORD)
                     pushWord((WORD)tpl.nData7); // wStkSpeed
                     pushWord((WORD)tpl.nData8); // wAtkRange
-                    pushWord((WORD)tpl.nData9); // wIncrHp
-                    pushWord((WORD)tpl.nData10); // wIncrIp
+                    pushDWord(tpl.nData9); // wIncrHp (DWORD)
+                    pushDWord(tpl.nData10); // wIncrIp (DWORD)
                     pushWord(0); // wRestoreHp
                     pushWord(0); // wRestoreIp
                     pushWord((WORD)tpl.nData13); // wIncrCritical
@@ -245,7 +245,7 @@ void OnFunctionalNpcItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload
                     pushWord((WORD)tpl.nData2); // wNpcItemType
                     pushWord((WORD)tpl.nData3); // wTamingRate
                     pushWord((WORD)tpl.nData4); // wWildRate
-                    pushWord((WORD)tpl.nData5); // wIncrHp
+                    pushDWord((DWORD)tpl.nData5); // wIncrHp
                     break;
                 case 18: // SUNANG (event item)
                     pushByte(0); // bModifyCnt
@@ -255,8 +255,8 @@ void OnFunctionalNpcItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload
                     pushDWord(0); // dwValue
                     break;
                 case 23: // ITEMTYPE_POTION
-                    pushWord((WORD)tpl.nBasicData2); // wIncrHp (HP recovery)
-                    pushWord((WORD)tpl.nBasicData3); // wIncrIp (IP recovery)
+                    pushDWord((DWORD)tpl.nBasicData2); // wIncrHp (HP recovery)
+                    pushDWord((DWORD)tpl.nBasicData3); // wIncrIp (IP recovery)
                     break;
                 case 27: // ITEMTYPE_LOTTO
                     pushByte(0); // bPrizeRank
@@ -264,7 +264,8 @@ void OnFunctionalNpcItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload
                     pushByte(0); // bLottoNum[0]
                     pushByte(0); // bLottoNum[1]
                     pushByte(0); // bLottoNum[2]
-
+                    pushByte(0); // bLottoNum[3]
+                    pushDWord(0); // dwPrizeMoney
                     break;
                 case 32: // ITEMTYPE_GISDURABLITY
                     pushWord((WORD)tpl.nData1); // wFunctionItem
@@ -462,13 +463,13 @@ MonsterData* pObj = NULL;
             pushByte((BYTE)tpl.nData1); // bDecrDurRate
             pushWord((WORD)tpl.nData2); // wCurDur
             pushWord((WORD)tpl.nData3); // wMaxDur
-            pushWord((WORD)tpl.nData4); // wAtkPwr
-            pushWord((WORD)tpl.nData5); // wDefPwr
-            pushWord((WORD)tpl.nData6); // wAtkRating
+            pushDWord(tpl.nData4); // wAtkPwr (DWORD)
+            pushDWord(tpl.nData5); // wDefPwr (DWORD)
+            pushDWord(tpl.nData6); // wAtkRating (DWORD)
             pushWord((WORD)tpl.nData7); // wStkSpeed
             pushWord((WORD)tpl.nData8); // wAtkRange
-            pushWord((WORD)tpl.nData9); // wIncrHp
-            pushWord((WORD)tpl.nData10); // wIncrIp
+            pushDWord(tpl.nData9); // wIncrHp (DWORD)
+            pushDWord(tpl.nData10); // wIncrIp (DWORD)
             pushWord(0); // wRestoreHp
             pushWord(0); // wRestoreIp
             pushWord((WORD)tpl.nData13); // wIncrCritical

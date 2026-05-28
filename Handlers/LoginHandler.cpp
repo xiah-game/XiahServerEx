@@ -4,6 +4,9 @@
 #include "../GameObjects/PlayerManager.h"
 #include "SlotHandler.h"
 #include "../Network/AuthCenter.h"
+#include "../ServerCore.h"
+#include "../GameObjects/MapInstance.h"
+#include "TradeHandler.h"
 
 void OnLoginCheckReq(SOCKET clientSocket, std::string& clientAccountName, BYTE* payload, WORD totalSize) {
     LOG("[LoginHandler] Received CS_IT_LOGINCHECK_REQ!");
@@ -94,8 +97,8 @@ void OnCharacterListReq(SOCKET clientSocket, const std::string& clientAccountNam
             pushWord(ch.wLevel); 
             pushDWord(ch.dwHpCur); 
             pushDWord(ch.dwHpMax); 
-            pushWord(ch.wIpCur); 
-            pushWord(ch.wIpMax); 
+            pushDWord(ch.wIpCur); 
+            pushDWord(ch.wIpMax); 
             pushWord(ch.wVit); 
             pushWord(ch.wStr); 
             pushWord(ch.wSus); 
@@ -160,6 +163,62 @@ void OnEndGameReq(SOCKET clientSocket, DWORD dwCharID, BYTE* payload, WORD total
 
     // Save player data
     PlayerManager::GetInstance().SavePlayer(dwCharID);
+
+    // 清理玩家地图及相关内存状态，防止切换角色时旧角色残留在游戏世界中
+    DWORD mapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+    if (dwCharID > 0 && g_MapInstances.count(mapID)) {
+        CMapInstance* pMap = g_MapInstances[mapID];
+        DWORD dwObjectID = dwCharID + 400000000;
+        
+        // 1. 向该玩家视野内（AOI）的所有其他玩家广播玩家离开，避免显示残影
+        WORD wPosX = 0, wPosY = 0;
+        {
+            std::lock_guard<std::mutex> lockP(pMap->GetMutex());
+            sServerObject* pObj = pMap->GetPlayer(dwObjectID);
+            if (pObj) {
+                wPosX = pObj->wPosX;
+                wPosY = pObj->wPosY;
+            }
+        }
+        
+        if (wPosX > 0 && wPosY > 0) {
+            std::vector<BYTE> leaveBuf;
+            leaveBuf.resize(4);
+            leaveBuf.push_back(0); // bResult = 0 (success)
+            leaveBuf.push_back(dwObjectID & 0xFF);
+            leaveBuf.push_back((dwObjectID >> 8) & 0xFF);
+            leaveBuf.push_back((dwObjectID >> 16) & 0xFF);
+            leaveBuf.push_back(dwObjectID >> 24);
+            leaveBuf.push_back(1); // bObjectType = 1 (PC)
+            leaveBuf.push_back(mapID & 0xFF);
+            leaveBuf.push_back((mapID >> 8) & 0xFF);
+            leaveBuf.push_back((mapID >> 16) & 0xFF);
+            leaveBuf.push_back(mapID >> 24);
+            leaveBuf.push_back(0); // bType = 0 (normal leave)
+            
+            PACKET_HEADER* leaveHead = (PACKET_HEADER*)leaveBuf.data();
+            leaveHead->id = 0x3506; // CS_NV_MAPLEAVE_ACK / MAPLEAVE
+            leaveHead->payloadSize = leaveBuf.size() - sizeof(PACKET_HEADER);
+            EncryptPacket(leaveBuf.data(), 0x42);
+            
+            pMap->BroadcastPacketAOI(wPosX, wPosY, leaveBuf);
+        }
+
+        // 2. 从地图实例中彻底移除玩家实体
+        {
+            std::lock_guard<std::mutex> lockP(pMap->GetMutex());
+            pMap->RemovePlayer(dwObjectID);
+        }
+    }
+
+    // 3. 清理交易模块中该玩家的离线/小退状态
+    if (dwCharID > 0) {
+        TradeManager::GetInstance().OnPlayerDisconnect(dwCharID);
+    }
+
+    // 4. 重置该客户端 Session 关联的角色 ID 和地图 ID 状态，防止同一个 Socket 后续重新登录其他角色发生数据混淆
+    SessionMgr::GetInstance().SetCharID(clientSocket, 0);
+    SessionMgr::GetInstance().SetMapID(clientSocket, 0);
 
     BYTE bEnd = 1;
     BYTE bChChange = 0;

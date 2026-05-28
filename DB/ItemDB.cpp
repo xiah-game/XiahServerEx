@@ -316,6 +316,28 @@ bool ItemDB::IsSackItemOwned(DWORD dwCharID, DWORD dwItemID) {
     return owned;
 }
 
+int ItemDB::GetEquippedItemDataValue(DWORD dwCharID, BYTE bKind, int dataIndex) {
+    int value = 0;
+    if (dataIndex < 1 || dataIndex > 25) return 0;
+    
+    std::string columnName = "T.nData" + std::to_string(dataIndex);
+    std::string q = 
+        "SELECT TOP 1 " + columnName + " "
+        "FROM SACKITEM S "
+        "INNER JOIN ITEM I ON S.dwItemID = I.dwItemID "
+        "INNER JOIN ITEMTEMPLATE T ON I.wRefID = T.wRefID "
+        "WHERE S.dwCharID = " + std::to_string(dwCharID) + " "
+        "  AND S.bSackPos < 20 "
+        "  AND T.bType = 8 "
+        "  AND T.bKind = " + std::to_string(bKind);
+        
+    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+        SQLLEN c;
+        SQLGetData(hStmt, 1, SQL_C_LONG, &value, 0, &c);
+    });
+    return value;
+}
+
 bool ItemDB::IsItemInStorage(const std::string& tableName, const std::string& account, DWORD dwItemID) {
     bool found = false;
     DBHelper::GetInstance().ExecuteQuery(
@@ -362,7 +384,7 @@ void ItemDB::GetSackOccupancy(DWORD dwCharID, int startPos, int endPos, std::vec
 }
 
 static void ParseFullItemRow(SQLHSTMT hStmt, ItemDB::FullItemRow& r, int colOffset) {
-    SQLLEN c[32] = {0};
+    SQLLEN c[37] = {0};
     int col = colOffset;
     SQLGetData(hStmt, col++, SQL_C_SLONG, &r.wVisualID, 0, &c[0]);
     SQLGetData(hStmt, col++, SQL_C_SLONG, &r.bType, 0, &c[1]);
@@ -378,9 +400,14 @@ static void ParseFullItemRow(SQLHSTMT hStmt, ItemDB::FullItemRow& r, int colOffs
     SQLGetData(hStmt, col++, SQL_C_SLONG, &r.nData21, 0, &c[27]);
     SQLGetData(hStmt, col++, SQL_C_SLONG, &r.nData25, 0, &c[28]);
     SQLGetData(hStmt, col++, SQL_C_CHAR, r.szName, sizeof(r.szName), &c[29]);
+    SQLGetData(hStmt, col++, SQL_C_SLONG, &r.nBasicData1, 0, &c[30]);
+    SQLGetData(hStmt, col++, SQL_C_SLONG, &r.nBasicData2, 0, &c[31]);
+    SQLGetData(hStmt, col++, SQL_C_SLONG, &r.nBasicData3, 0, &c[32]);
+    SQLGetData(hStmt, col++, SQL_C_SLONG, &r.nBasicData4, 0, &c[33]);
+    SQLGetData(hStmt, col++, SQL_C_SLONG, &r.nBasicData5, 0, &c[34]);
 }
 
-static const char* FULL_ITEM_COLS = "I.wVisualID, I.bType, I.bKind, I.wLevel, I.dwCost, ISNULL(D.nData18,0), ISNULL(D.nData19,0), I.wRefID, I.wAmount, ISNULL(D.nData1,-9999), ISNULL(D.nData2,-9999), ISNULL(D.nData3,-9999), ISNULL(D.nData4,-9999), ISNULL(D.nData5,-9999), ISNULL(D.nData6,-9999), ISNULL(D.nData7,-9999), ISNULL(D.nData8,-9999), ISNULL(D.nData9,-9999), ISNULL(D.nData10,-9999), ISNULL(D.nData11,-9999), ISNULL(D.nData12,-9999), ISNULL(D.nData13,-9999), ISNULL(D.nData14,-9999), ISNULL(D.nData15,-9999), ISNULL(D.nData16,-9999), ISNULL(D.nData17,-9999), ISNULL(D.nData20,0), ISNULL(D.nData21,0), ISNULL(D.nData25,0), I.szName";
+static const char* FULL_ITEM_COLS = "I.wVisualID, I.bType, I.bKind, I.wLevel, I.dwCost, ISNULL(D.nData18,0), ISNULL(D.nData19,0), I.wRefID, I.wAmount, ISNULL(D.nData1,-9999), ISNULL(D.nData2,-9999), ISNULL(D.nData3,-9999), ISNULL(D.nData4,-9999), ISNULL(D.nData5,-9999), ISNULL(D.nData6,-9999), ISNULL(D.nData7,-9999), ISNULL(D.nData8,-9999), ISNULL(D.nData9,-9999), ISNULL(D.nData10,-9999), ISNULL(D.nData11,-9999), ISNULL(D.nData12,-9999), ISNULL(D.nData13,-9999), ISNULL(D.nData14,-9999), ISNULL(D.nData15,-9999), ISNULL(D.nData16,-9999), ISNULL(D.nData17,-9999), ISNULL(D.nData20,0), ISNULL(D.nData21,0), ISNULL(D.nData25,0), I.szName, ISNULL(I.nBasicData1,0), ISNULL(I.nBasicData2,0), ISNULL(I.nBasicData3,0), ISNULL(I.nBasicData4,0), ISNULL(I.nBasicData5,0)";
 
 bool ItemDB::GetFullItemData(DWORD dwItemID, FullItemRow& out) {
     bool found = false;

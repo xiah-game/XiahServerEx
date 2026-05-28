@@ -1,6 +1,7 @@
 #include "ServerCore.h"
 #include "DBHelper.h"
 #include "DB/ItemDB.h"
+#include "DB/CharacterDB.h"
 #include "DB/GameDataDB.h"
 #include "GameObjects/DropManager.h"
 #include "GameObjects/MugongManager.h"
@@ -249,6 +250,13 @@ void LoadWorldObjects() {
 BYTE FindFreeSackPos(DWORD charID, BYTE sackID, BYTE bCX, BYTE bCY) {
     if (bCX < 1) bCX = 1;
     if (bCY < 1) bCY = 1;
+    
+    // 如果是非 VIP 玩家，绝对不允许物品自动生成、分配或拾取落入第三页背包中
+    if (sackID == 3) {
+        if (CharacterDB::GetInstance().GetVipLevel(charID) == 0) {
+            return 255; 
+        }
+    }
     
     int startPos = (sackID == 1) ? 20 : (sackID == 2) ? 60 : 100;
     int endPos = startPos + 35;
