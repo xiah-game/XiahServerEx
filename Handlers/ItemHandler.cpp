@@ -2,8 +2,10 @@
 #include "../DB/CharacterDB.h"
 #include "../DB/ItemDB.h"
 #include "../GameObjects/MugongManager.h"
+#include "../GameObjects/TitleManager.h"
 #include "../GameObjects/DropManager.h"
 #include <set>
+#include <algorithm>
 #include "../Network/SessionMgr.h"
 #include "../GameObjects/MapInstance.h"
 
@@ -233,7 +235,7 @@ void OnItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
                         pushDWord(0); pushByte(0); break;
                 }
             }
-            pushWord((WORD)dat20); // wRebuithValue
+            pushWord((WORD)dat25); // wRebuithValue - 觉醒值(nData25)
             LOG("[ItemHandler] Item pos=" + std::to_string(pos) + " type=" + std::to_string(type) + " refid=" + std::to_string(refid) + " name=" + itemName + " size=" + std::to_string(bi.size()));
             {   // Hex dump for debugging
                 std::string hex;
@@ -535,6 +537,18 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
 
     LOG("[ItemHandler] OnUseItemReq called! charID: " + std::to_string(charID) + " dwItemID: " + std::to_string(dwItemID));
 
+    // 称号系统：UI 实例 ID 50 (向聊天框发送当前激活称号信息)
+    if (dwItemID == 50) {
+        TitleManager::HandleQueryTitle(clientSocket, charID);
+        return;
+    }
+
+    // 称号系统：UI 实例 ID 51 (顺序切换当前显示的称号)
+    if (dwItemID == 51) {
+        TitleManager::HandleSwitchTitle(clientSocket, charID);
+        return;
+    }
+
     DWORD pMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
     if (g_MapInstances.count(pMapID)) {
         std::lock_guard<std::mutex> lock(g_MapInstances[pMapID]->GetMutex());
@@ -574,6 +588,8 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
 
     sItemTemplate& tpl = g_ItemTemplates[wRefID];
     LOG("[ItemHandler] Using item wRefID: " + std::to_string(wRefID) + " bType: " + std::to_string(tpl.bType));
+
+
 
     // Consumable types: 12 (Potion), 21 (Skill Book), 16 (Teleport), etc.
     if (tpl.bType == 21 || tpl.bType == 12 || tpl.bType == 16 || tpl.bType == 17 || tpl.bType == 19 || tpl.bType == 22 || tpl.bType == 23 || tpl.bType == 33 || tpl.bType == 32) {
@@ -1054,3 +1070,401 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
         }
     }
 }
+
+void OnPetBongInReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
+    if (totalSize < 6 || charID == 0) return;
+
+    DWORD dwPetObjectID = *(DWORD*)(payload);
+    BYTE bSackID = payload[4];
+    BYTE bSackPos = payload[5];
+
+    LOG("[PetBongIn] Request from charID=" + std::to_string(charID) + " for PetObjectID=" + std::to_string(dwPetObjectID) + " Sack=" + std::to_string(bSackID) + ":" + std::to_string(bSackPos));
+
+    if (dwPetObjectID < 800000000) {
+        LOG("[PetBongIn] Invalid PetObjectID: " + std::to_string(dwPetObjectID));
+        return;
+    }
+    DWORD dwPetID = dwPetObjectID - 800000000;
+
+    auto sendAck = [&](BYTE result) {
+        std::vector<BYTE> ackBuf(9);
+        PACKET_HEADER* head = (PACKET_HEADER*)ackBuf.data();
+        head->id = 0x3548; // CS_NC_PETBONGIN_ACK
+        head->payloadSize = 5;
+        ackBuf[4] = result;
+        memcpy(ackBuf.data() + 5, &dwPetObjectID, 4);
+        EncryptPacket(ackBuf.data(), 0x42);
+        SafeSend(clientSocket, (const char*)ackBuf.data(), (int)ackBuf.size(), 0);
+    };
+
+    // 1. 行囊防空安全校验 (查询 PETITEM 是否仍有物品)
+    bool hasItem = false;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT TOP 1 1 FROM PETITEM WHERE dwPetID = " + std::to_string(dwPetID),
+        [&](SQLHSTMT) { hasItem = true; });
+
+    if (hasItem) {
+        LOG("[PetBongIn] Seal blocked: Pet has items in inventory! dwPetID=" + std::to_string(dwPetID));
+        sendAck(3); // ERR_PETBONGIN_HASITEM
+        return;
+    }
+
+    // 2. 验证宠物归属
+    bool petExists = false;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT TOP 1 1 FROM CHAR_PET WHERE dwID = " + std::to_string(dwPetID) + " AND dwCharID = " + std::to_string(charID),
+        [&](SQLHSTMT) { petExists = true; });
+
+    if (!petExists) {
+        LOG("[PetBongIn] Seal blocked: Pet not found or not owned by charID=" + std::to_string(charID));
+        sendAck(1); // ERR_PETBONGIN_NOTFINDPET
+        return;
+    }
+
+    // 3. 校验并获取行囊中的龙魂镜
+    int realPos = bSackID == 0 ? bSackPos : (bSackID == 1 ? 20 + bSackPos : (bSackID == 2 ? 60 + bSackPos : 100 + bSackPos));
+    DWORD dwItemID = 0;
+    WORD wRefID = 0;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT S.dwItemID, I.wRefID FROM SACKITEM S INNER JOIN ITEM I ON S.dwItemID = I.dwItemID WHERE S.dwCharID = " + std::to_string(charID) + " AND S.bSackPos = " + std::to_string(realPos),
+        [&](SQLHSTMT hStmt) {
+            SQLLEN c1, c2;
+            SQLGetData(hStmt, 1, SQL_C_ULONG, &dwItemID, 0, &c1);
+            SQLGetData(hStmt, 2, SQL_C_USHORT, &wRefID, 0, &c2);
+        });
+
+    if (dwItemID == 0 || g_ItemTemplates.count(wRefID) == 0 || g_ItemTemplates[wRefID].bType != 9) {
+        LOG("[PetBongIn] Seal blocked: No valid bongin mirror at target sack slot! realPos=" + std::to_string(realPos));
+        sendAck(5); // ERR_PETBONGIN_INVALIDITEM
+        return;
+    }
+
+    // 4. 数据解绑挂起并绑定封印
+    // A. 更改宠物所有者为 0 (代表挂起)
+    DBHelper::GetInstance().ExecuteUpdate("UPDATE CHAR_PET SET dwCharID = 0 WHERE dwID = " + std::to_string(dwPetID));
+
+    // B. 更新镜子数据 ITEMDATA.nData1 = dwPetID, nData15 = 1 (m_bModifyCnt 封印数)
+    bool dataExists = false;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT 1 FROM ITEMDATA WHERE dwItemID = " + std::to_string(dwItemID),
+        [&](SQLHSTMT) { dataExists = true; });
+
+    if (dataExists) {
+        DBHelper::GetInstance().ExecuteUpdate(
+            "UPDATE ITEMDATA SET nData1 = " + std::to_string(dwPetID) + ", nData15 = 1 WHERE dwItemID = " + std::to_string(dwItemID));
+    } else {
+        std::string qInsert = "INSERT INTO ITEMDATA (dwItemID, nData1, nData2, nData3, nData4, nData5, nData6, nData7, nData8, nData9, nData10, nData11, nData12, nData13, nData14, nData15, nData16, nData17, nData18, nData19, nData20) VALUES ("
+            + std::to_string(dwItemID) + ", " + std::to_string(dwPetID) + ", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0)";
+        DBHelper::GetInstance().ExecuteUpdate(qInsert);
+    }
+
+    LOG("[PetBongIn] Pet sealed successfully! dwPetID=" + std::to_string(dwPetID) + " bound to ItemID=" + std::to_string(dwItemID));
+
+    // 5. 广播成功响应，并强制拉起包裹刷新
+    sendAck(0); // ERR_PETBONGIN_SUCCESS
+
+    BYTE reqPayload[1] = { bSackID };
+    OnItemListReq(clientSocket, charID, reqPayload, 1);
+}
+
+void OnPetBongOutReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
+    if (totalSize < 2 || charID == 0) return;
+
+    BYTE bSackID = payload[0];
+    BYTE bSackPos = payload[1];
+
+    LOG("[PetBongOut] Request from charID=" + std::to_string(charID) + " Sack=" + std::to_string(bSackID) + ":" + std::to_string(bSackPos));
+
+    auto sendFailAck = [&](BYTE result) {
+        std::vector<BYTE> ackBuf(5);
+        PACKET_HEADER* head = (PACKET_HEADER*)ackBuf.data();
+        head->id = 0x354A; // CS_NC_PETBONGOUT_ACK
+        head->payloadSize = 1;
+        ackBuf[4] = result;
+        EncryptPacket(ackBuf.data(), 0x42);
+        SafeSend(clientSocket, (const char*)ackBuf.data(), (int)ackBuf.size(), 0);
+    };
+
+    // 1. 获取包裹中龙魂镜并校验
+    int realPos = bSackID == 0 ? bSackPos : (bSackID == 1 ? 20 + bSackPos : (bSackID == 2 ? 60 + bSackPos : 100 + bSackPos));
+    DWORD dwItemID = 0;
+    WORD wRefID = 0;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT S.dwItemID, I.wRefID FROM SACKITEM S INNER JOIN ITEM I ON S.dwItemID = I.dwItemID WHERE S.dwCharID = " + std::to_string(charID) + " AND S.bSackPos = " + std::to_string(realPos),
+        [&](SQLHSTMT hStmt) {
+            SQLLEN c1, c2;
+            SQLGetData(hStmt, 1, SQL_C_ULONG, &dwItemID, 0, &c1);
+            SQLGetData(hStmt, 2, SQL_C_USHORT, &wRefID, 0, &c2);
+        });
+
+    if (dwItemID == 0 || g_ItemTemplates.count(wRefID) == 0 || g_ItemTemplates[wRefID].bType != 9) {
+        LOG("[PetBongOut] Release blocked: No valid bongin mirror at target slot! realPos=" + std::to_string(realPos));
+        sendFailAck(2); // ERR_PETBONGIN_INVALIDITEM (复用失败码)
+        return;
+    }
+
+    // 2. 读取镜子所绑定的 dwPetID
+    DWORD dwPetID = 0;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT nData1 FROM ITEMDATA WHERE dwItemID = " + std::to_string(dwItemID),
+        [&](SQLHSTMT hStmt) {
+            SQLLEN c;
+            SQLGetData(hStmt, 1, SQL_C_ULONG, &dwPetID, 0, &c);
+        });
+
+    if (dwPetID == 0) {
+        LOG("[PetBongOut] Release blocked: Mirror is empty! ItemID=" + std::to_string(dwItemID));
+        sendFailAck(2); // 镜像为空无法释放
+        return;
+    }
+
+    // 3. 从 CHAR_PET 中查询宠物全部 30 多项属性
+    struct DbPetRow {
+        DWORD dwID = 0;
+        DWORD dwMapID = 0;
+        BYTE bNpcType = 0;
+        char szName[32] = {0};
+        WORD wLevel = 0;
+        WORD wPosX = 0;
+        WORD wPosY = 0;
+        BYTE bHeight = 0;
+        DWORD dwHpMax = 0;
+        DWORD dwHpCur = 0;
+        WORD wAtkPwr = 0;
+        WORD wDefPwr = 0;
+        WORD wAtkRating = 0;
+        WORD wAvoidRatio = 0;
+        BYTE bSpeed = 0;
+        WORD wMeleeAtkRange = 0;
+        WORD wShotAtkRange = 0;
+        BYTE bAtkType = 0;
+        DWORD dwRefNpcID = 0;
+        BYTE bCurJob = 0;
+        long long biExp = 0;
+        BYTE bRevolutionStep = 0;
+        BYTE bWildRate = 0;
+    } pet;
+
+    bool found = false;
+    std::string qPet = "SELECT dwID, dwMapID, bNpcType, szName, wLevel, wPosX, wPosY, bHeight, dwHpMax, dwHpCur, wAtkPwr, wDefPwr, wAtkRating, wAvoidRatio, bSpeed, wMeleeAtkRange, wShotAtkRange, bAtkType, dwRefNpcID, bCurJob, biExp, bRevolutionStep, bWildRate FROM CHAR_PET WHERE dwID = " + std::to_string(dwPetID);
+    DBHelper::GetInstance().ExecuteQuery(qPet, [&](SQLHSTMT hStmt) {
+        found = true;
+        SQLLEN c[23];
+        int idx = 1;
+        SQLGetData(hStmt, idx++, SQL_C_ULONG, &pet.dwID, 0, &c[0]);
+        SQLGetData(hStmt, idx++, SQL_C_ULONG, &pet.dwMapID, 0, &c[1]);
+        SQLGetData(hStmt, idx++, SQL_C_UTINYINT, &pet.bNpcType, 0, &c[2]);
+        SQLGetData(hStmt, idx++, SQL_C_CHAR, pet.szName, sizeof(pet.szName), &c[3]);
+        SQLGetData(hStmt, idx++, SQL_C_USHORT, &pet.wLevel, 0, &c[4]);
+        SQLGetData(hStmt, idx++, SQL_C_USHORT, &pet.wPosX, 0, &c[5]);
+        SQLGetData(hStmt, idx++, SQL_C_USHORT, &pet.wPosY, 0, &c[6]);
+        SQLGetData(hStmt, idx++, SQL_C_UTINYINT, &pet.bHeight, 0, &c[7]);
+        SQLGetData(hStmt, idx++, SQL_C_ULONG, &pet.dwHpMax, 0, &c[8]);
+        SQLGetData(hStmt, idx++, SQL_C_ULONG, &pet.dwHpCur, 0, &c[9]);
+        SQLGetData(hStmt, idx++, SQL_C_USHORT, &pet.wAtkPwr, 0, &c[10]);
+        SQLGetData(hStmt, idx++, SQL_C_USHORT, &pet.wDefPwr, 0, &c[11]);
+        SQLGetData(hStmt, idx++, SQL_C_USHORT, &pet.wAtkRating, 0, &c[12]);
+        SQLGetData(hStmt, idx++, SQL_C_USHORT, &pet.wAvoidRatio, 0, &c[13]);
+        SQLGetData(hStmt, idx++, SQL_C_UTINYINT, &pet.bSpeed, 0, &c[14]);
+        SQLGetData(hStmt, idx++, SQL_C_USHORT, &pet.wMeleeAtkRange, 0, &c[15]);
+        SQLGetData(hStmt, idx++, SQL_C_USHORT, &pet.wShotAtkRange, 0, &c[16]);
+        SQLGetData(hStmt, idx++, SQL_C_UTINYINT, &pet.bAtkType, 0, &c[17]);
+        SQLGetData(hStmt, idx++, SQL_C_ULONG, &pet.dwRefNpcID, 0, &c[18]);
+        SQLGetData(hStmt, idx++, SQL_C_UTINYINT, &pet.bCurJob, 0, &c[19]);
+        SQLGetData(hStmt, idx++, SQL_C_SBIGINT, &pet.biExp, 0, &c[20]);
+        SQLGetData(hStmt, idx++, SQL_C_UTINYINT, &pet.bRevolutionStep, 0, &c[21]);
+        SQLGetData(hStmt, idx++, SQL_C_UTINYINT, &pet.bWildRate, 0, &c[22]);
+    });
+
+    if (!found) {
+        LOG("[PetBongOut] Release blocked: Bound pet data not found in CHAR_PET! dwPetID=" + std::to_string(dwPetID));
+        sendFailAck(1); // ERR_PETBONGIN_NOTFINDPET
+        return;
+    }
+
+    // 4. 数据更新与解绑
+    // A. 宠物归属改回玩家 charID
+    DBHelper::GetInstance().ExecuteUpdate("UPDATE CHAR_PET SET dwCharID = " + std::to_string(charID) + " WHERE dwID = " + std::to_string(dwPetID));
+
+    // B. 清空镜子中的宠物绑定
+    DBHelper::GetInstance().ExecuteUpdate("UPDATE ITEMDATA SET nData1 = 0, nData15 = 0 WHERE dwItemID = " + std::to_string(dwItemID));
+
+    LOG("[PetBongOut] Pet released successfully! dwPetID=" + std::to_string(dwPetID) + " freed from ItemID=" + std::to_string(dwItemID));
+
+    // 5. 拼装大包并回复客户端
+    std::vector<BYTE> ackBuf;
+    ackBuf.resize(4, 0); // 预留包头
+    ackBuf.push_back(0); // bResult = 0
+
+    auto pushDWord = [&](DWORD d) { ackBuf.push_back(d&0xFF); ackBuf.push_back((d>>8)&0xFF); ackBuf.push_back((d>>16)&0xFF); ackBuf.push_back(d>>24); };
+    auto pushWord = [&](WORD w) { ackBuf.push_back(w&0xFF); ackBuf.push_back(w>>8); };
+    auto pushByte = [&](BYTE b) { ackBuf.push_back(b); };
+    auto pushInt64 = [&](long long int d) { pushDWord((DWORD)(d & 0xFFFFFFFF)); pushDWord((DWORD)(d >> 32)); };
+
+    pushDWord(pet.dwID);
+    pushDWord(charID); // dwOwnID
+    pushDWord(pet.dwMapID);
+    pushByte(pet.bNpcType);
+
+    std::string nameStr(pet.szName);
+    pushWord((WORD)nameStr.length());
+    for (char ch : nameStr) pushByte((BYTE)ch);
+
+    pushWord(pet.wLevel);
+    pushWord(pet.wPosX);
+    pushWord(pet.wPosY);
+    pushByte(pet.bHeight);
+    pushWord(pet.wPosX); // wDesPosX
+    pushWord(pet.wPosY); // wDesPosY
+    pushByte(pet.bHeight); // bDesHeight
+    pushWord(0); // wDirection
+    pushDWord(pet.dwHpMax);
+    pushDWord(pet.dwHpCur);
+    pushWord(pet.wAtkPwr);
+    pushWord(pet.wDefPwr);
+    pushWord(pet.wAtkRating);
+    pushWord(pet.wAvoidRatio);
+    pushByte(pet.bSpeed);
+    pushWord(pet.wMeleeAtkRange);
+    pushWord(pet.wShotAtkRange);
+    pushByte(pet.bAtkType);
+    pushDWord(pet.dwRefNpcID);
+    pushByte(pet.bCurJob);
+    pushInt64(pet.biExp);
+    pushInt64(0); // i64LevelExp (临时填0，由客户端自行算)
+    pushInt64(0); // i64NextLevelUpExp (临时填0)
+    pushByte(pet.bRevolutionStep);
+    pushByte(pet.bWildRate);
+    for (int i = 0; i < 6; i++) pushWord(0); // wVisualID[6]
+
+    PACKET_HEADER* head = (PACKET_HEADER*)ackBuf.data();
+    head->id = 0x354A; // CS_NC_PETBONGOUT_ACK
+    head->payloadSize = (WORD)(ackBuf.size() - sizeof(PACKET_HEADER));
+    EncryptPacket(ackBuf.data(), 0x42);
+    SafeSend(clientSocket, (const char*)ackBuf.data(), (int)ackBuf.size(), 0);
+
+    // 刷新包裹
+    BYTE reqPayload[1] = { bSackID };
+    OnItemListReq(clientSocket, charID, reqPayload, 1);
+}
+
+void SendPetListAck(SOCKET clientSocket, DWORD charID) {
+    if (charID == 0) return;
+
+    struct DbPetRow {
+        DWORD dwID = 0;
+        DWORD dwMapID = 0;
+        BYTE bNpcType = 0;
+        char szName[32] = {0};
+        WORD wLevel = 0;
+        WORD wPosX = 0;
+        WORD wPosY = 0;
+        BYTE bHeight = 0;
+        DWORD dwHpMax = 0;
+        DWORD dwHpCur = 0;
+        WORD wAtkPwr = 0;
+        WORD wDefPwr = 0;
+        WORD wAtkRating = 0;
+        WORD wAvoidRatio = 0;
+        BYTE bSpeed = 0;
+        WORD wMeleeAtkRange = 0;
+        WORD wShotAtkRange = 0;
+        BYTE bAtkType = 0;
+        DWORD dwRefNpcID = 0;
+        BYTE bCurJob = 0;
+        long long biExp = 0;
+        BYTE bRevolutionStep = 0;
+        BYTE bWildRate = 0;
+    };
+
+    std::vector<DbPetRow> pets;
+    std::string qPet = "SELECT dwID, dwMapID, bNpcType, szName, wLevel, wPosX, wPosY, bHeight, dwHpMax, dwHpCur, wAtkPwr, wDefPwr, wAtkRating, wAvoidRatio, bSpeed, wMeleeAtkRange, wShotAtkRange, bAtkType, dwRefNpcID, bCurJob, biExp, bRevolutionStep, bWildRate FROM CHAR_PET WHERE dwCharID = " + std::to_string(charID);
+    DBHelper::GetInstance().ExecuteQuery(qPet, [&](SQLHSTMT hStmt) {
+        DbPetRow pet;
+        SQLLEN c[23];
+        int idx = 1;
+        SQLGetData(hStmt, idx++, SQL_C_ULONG, &pet.dwID, 0, &c[0]);
+        SQLGetData(hStmt, idx++, SQL_C_ULONG, &pet.dwMapID, 0, &c[1]);
+        SQLGetData(hStmt, idx++, SQL_C_UTINYINT, &pet.bNpcType, 0, &c[2]);
+        SQLGetData(hStmt, idx++, SQL_C_CHAR, pet.szName, sizeof(pet.szName), &c[3]);
+        SQLGetData(hStmt, idx++, SQL_C_USHORT, &pet.wLevel, 0, &c[4]);
+        SQLGetData(hStmt, idx++, SQL_C_USHORT, &pet.wPosX, 0, &c[5]);
+        SQLGetData(hStmt, idx++, SQL_C_USHORT, &pet.wPosY, 0, &c[6]);
+        SQLGetData(hStmt, idx++, SQL_C_UTINYINT, &pet.bHeight, 0, &c[7]);
+        SQLGetData(hStmt, idx++, SQL_C_ULONG, &pet.dwHpMax, 0, &c[8]);
+        SQLGetData(hStmt, idx++, SQL_C_ULONG, &pet.dwHpCur, 0, &c[9]);
+        SQLGetData(hStmt, idx++, SQL_C_USHORT, &pet.wAtkPwr, 0, &c[10]);
+        SQLGetData(hStmt, idx++, SQL_C_USHORT, &pet.wDefPwr, 0, &c[11]);
+        SQLGetData(hStmt, idx++, SQL_C_USHORT, &pet.wAtkRating, 0, &c[12]);
+        SQLGetData(hStmt, idx++, SQL_C_USHORT, &pet.wAvoidRatio, 0, &c[13]);
+        SQLGetData(hStmt, idx++, SQL_C_UTINYINT, &pet.bSpeed, 0, &c[14]);
+        SQLGetData(hStmt, idx++, SQL_C_USHORT, &pet.wMeleeAtkRange, 0, &c[15]);
+        SQLGetData(hStmt, idx++, SQL_C_USHORT, &pet.wShotAtkRange, 0, &c[16]);
+        SQLGetData(hStmt, idx++, SQL_C_UTINYINT, &pet.bAtkType, 0, &c[17]);
+        SQLGetData(hStmt, idx++, SQL_C_ULONG, &pet.dwRefNpcID, 0, &c[18]);
+        SQLGetData(hStmt, idx++, SQL_C_UTINYINT, &pet.bCurJob, 0, &c[19]);
+        SQLGetData(hStmt, idx++, SQL_C_SBIGINT, &pet.biExp, 0, &c[20]);
+        SQLGetData(hStmt, idx++, SQL_C_UTINYINT, &pet.bRevolutionStep, 0, &c[21]);
+        SQLGetData(hStmt, idx++, SQL_C_UTINYINT, &pet.bWildRate, 0, &c[22]);
+        pets.push_back(pet);
+    });
+
+    LOG("[PetList] Syncing " + std::to_string(pets.size()) + " pets for charID=" + std::to_string(charID));
+
+    std::vector<BYTE> ackBuf;
+    ackBuf.resize(4, 0); // 预留包头
+
+    auto pushDWord = [&](DWORD d) { ackBuf.push_back(d&0xFF); ackBuf.push_back((d>>8)&0xFF); ackBuf.push_back((d>>16)&0xFF); ackBuf.push_back(d>>24); };
+    auto pushWord = [&](WORD w) { ackBuf.push_back(w&0xFF); ackBuf.push_back(w>>8); };
+    auto pushByte = [&](BYTE b) { ackBuf.push_back(b); };
+    auto pushInt64 = [&](long long int d) { pushDWord((DWORD)(d & 0xFFFFFFFF)); pushDWord((DWORD)(d >> 32)); };
+
+    pushDWord(charID);
+    pushByte((BYTE)pets.size());
+
+    for (const auto& pet : pets) {
+        pushDWord(pet.dwID);
+        pushDWord(charID); // dwOwnID
+        pushDWord(pet.dwMapID);
+        pushByte(pet.bNpcType);
+
+        std::string nameStr(pet.szName);
+        pushWord((WORD)nameStr.length());
+        for (char ch : nameStr) pushByte((BYTE)ch);
+
+        pushWord(pet.wLevel);
+        pushWord(pet.wPosX);
+        pushWord(pet.wPosY);
+        pushByte(pet.bHeight);
+        pushWord(pet.wPosX); // wDesPosX
+        pushWord(pet.wPosY); // wDesPosY
+        pushByte(pet.bHeight); // bDesHeight
+        pushWord(0); // wDirection
+        pushDWord(pet.dwHpMax);
+        pushDWord(pet.dwHpCur);
+        pushWord(pet.wAtkPwr);
+        pushWord(pet.wDefPwr);
+        pushWord(pet.wAtkRating);
+        pushWord(pet.wAvoidRatio);
+        pushByte(pet.bSpeed);
+        pushWord(pet.wMeleeAtkRange);
+        pushWord(pet.wShotAtkRange);
+        pushByte(pet.bAtkType);
+        pushDWord(pet.dwRefNpcID);
+        pushByte(pet.bCurJob);
+        pushInt64(pet.biExp);
+        pushInt64(0); // i64LevelExp
+        pushInt64(0); // i64NextLevelUpExp
+        pushByte(pet.bRevolutionStep);
+        pushByte(pet.bWildRate);
+        for (int i = 0; i < 6; i++) pushWord(0); // wVisualID[6]
+    }
+
+    PACKET_HEADER* head = (PACKET_HEADER*)ackBuf.data();
+    head->id = 0x3B20; // CS_IF_PETLIST_ACK
+    head->payloadSize = (WORD)(ackBuf.size() - sizeof(PACKET_HEADER));
+    EncryptPacket(ackBuf.data(), 0x42);
+    SafeSend(clientSocket, (const char*)ackBuf.data(), (int)ackBuf.size(), 0);
+}
+
+

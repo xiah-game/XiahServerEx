@@ -186,12 +186,29 @@ void OnChatReq(SOCKET clientSocket, DWORD dwCharID, BYTE* pPayload, WORD wSize) 
             targetName = szNickName;
         }
 
+        // Target not found: send ACK with dwListenerObjectID=0 to trigger client-side error display
         if (dwTargetCharID == 0) {
             LOG("[CHAT] Whisper target not found: " + szNickName);
+            std::vector<BYTE> failAck = BuildChatAck(
+                dwSenderObjectID, CT_WHISPER, content, senderName, 0, szNickName);
+            EncryptPacket(failAck.data(), 0x42);
+            SafeSend(clientSocket, (const char*)failAck.data(), (int)failAck.size(), 0);
             break;
         }
 
         DWORD dwTargetObjectID = dwTargetCharID + 400000000;
+
+        // Check target online status
+        SOCKET targetSocket = SessionMgr::GetInstance().GetSocketByCharID(dwTargetCharID);
+        if (targetSocket == INVALID_SOCKET) {
+            // Target exists but offline: send ACK with dwListenerObjectID=0
+            LOG("[CHAT] Whisper target offline: " + targetName);
+            std::vector<BYTE> failAck = BuildChatAck(
+                dwSenderObjectID, CT_WHISPER, content, senderName, 0, targetName);
+            EncryptPacket(failAck.data(), 0x42);
+            SafeSend(clientSocket, (const char*)failAck.data(), (int)failAck.size(), 0);
+            break;
+        }
 
         // Build ACK with whisper fields
         std::vector<BYTE> ackBuf = BuildChatAck(
@@ -199,12 +216,9 @@ void OnChatReq(SOCKET clientSocket, DWORD dwCharID, BYTE* pPayload, WORD wSize) 
             dwTargetObjectID, targetName);
 
         // Send to the target
-        SOCKET targetSocket = SessionMgr::GetInstance().GetSocketByCharID(dwTargetCharID);
-        if (targetSocket != INVALID_SOCKET) {
-            std::vector<BYTE> targetCopy = ackBuf;
-            EncryptPacket(targetCopy.data(), 0x42);
-            SafeSend(targetSocket, (const char*)targetCopy.data(), (int)targetCopy.size(), 0);
-        }
+        std::vector<BYTE> targetCopy = ackBuf;
+        EncryptPacket(targetCopy.data(), 0x42);
+        SafeSend(targetSocket, (const char*)targetCopy.data(), (int)targetCopy.size(), 0);
 
         // Also send back to the sender (so they see their own whisper)
         std::vector<BYTE> senderAck = ackBuf;

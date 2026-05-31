@@ -148,6 +148,10 @@ void InitPacketHandlers() {
     RegisterHandler(0x430D, [](SOCKET s, BYTE* p, WORD size) { OnMoveReq(s, SessionMgr::GetInstance().GetCharID(s), p, size, 0x430D); });
     RegisterHandler(0x430F, [](SOCKET s, BYTE* p, WORD size) { OnMoveReq(s, SessionMgr::GetInstance().GetCharID(s), p, size, 0x430F); });
 
+    // 宠物封印与解封（BONGIN）
+    RegisterHandler(0x3547, [](SOCKET s, BYTE* p, WORD size) { OnPetBongInReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
+    RegisterHandler(0x3549, [](SOCKET s, BYTE* p, WORD size) { OnPetBongOutReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
+
     // Combat Handlers
     RegisterHandler(0x4003, [](SOCKET s, BYTE* p, WORD size) { OnPreAttackReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
     RegisterHandler(0x4013, [](SOCKET s, BYTE* p, WORD size) { OnMugongPreAttackReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });

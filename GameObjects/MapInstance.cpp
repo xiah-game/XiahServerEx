@@ -212,7 +212,10 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                 PACKET_HEADER* leaveHead = (PACKET_HEADER*)leaveBuf.data(); leaveHead->id = 0x3506; leaveHead->payloadSize = leaveBuf.size() - sizeof(PACKET_HEADER);
                 EncryptPacket(leaveBuf.data(), 0x42);
                 BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, leaveBuf); // Changed to AOI
+                // 尸体清除：坐标清零前必须同步 Grid，否则怪物在空间索引中的位置会与实际坐标永久脱节
+                int corpseOldX = obj.wPosX, corpseOldY = obj.wPosY;
                 obj.wPosX = 0;
+                UpdateMonsterGrid(obj.dwObjectID, corpseOldX, corpseOldY, obj.wPosX, corpseOldY);
             }
             
             DWORD regenTimeMs = tpl.wRegen * 1000;
@@ -232,12 +235,15 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                     offsetX = (rand() % (obj.wSpawnRange * 2 + 1)) - obj.wSpawnRange;
                     offsetY = (rand() % (obj.wSpawnRange * 2 + 1)) - obj.wSpawnRange;
                 }
+                // 复活：记住旧 Grid 坐标（尸体阶段 wPosX 已被设为 0），设新坐标后同步 Grid
+                int respawnOldX = obj.wPosX, respawnOldY = obj.wPosY;
                 obj.wPosX = obj.wSpawnX + offsetX;
                 if (obj.wPosX < 0) obj.wPosX = 0;
                 obj.wPosY = obj.wSpawnY + offsetY;
                 if (obj.wPosY < 0) obj.wPosY = 0;
                 obj.fPosX = (float)obj.wPosX;
                 obj.fPosY = (float)obj.wPosY;
+                UpdateMonsterGrid(obj.dwObjectID, respawnOldX, respawnOldY, obj.wPosX, obj.wPosY);
                 
                 // Broadcast NPCINFO
                 {

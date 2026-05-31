@@ -121,6 +121,7 @@ public:
     bool GetItemBasicInfo(DWORD dwItemID, ItemBasicInfo& out);
 
     // Upsert ITEMDATA (rebuild stats) in ITEMDATA
+    // d20 = 发光等级（nData20），取 max(强化等级, 追加等级) 同步客户端武器发光特效
     void UpsertRebuildData(DWORD dwItemID, int d4, int d5, int d9, int d14, int d15, int d17);
 
     // Get cumulative rebuild bonus (Wujing or Sujing)

@@ -51,6 +51,7 @@ set(SOURCES
     DB/GameDataDB.cpp
     GameObjects/MugongManager.cpp
     GameObjects/PlayerManager.cpp
+    GameObjects/TitleManager.cpp
     GameObjects/MapInstance.cpp
 )
 

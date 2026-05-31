@@ -353,8 +353,22 @@ void DropManager::GenerateDrops(DWORD killerID, const MonsterData& obj) {
     if (vipLevel >= 1 && vipLevel <= 5) {
         multiplier += vipLevel * 0.2; // VIP 1-5 分别提升 20%~100% 爆率
     }
+
+    // 称号系统：累加激活且生效的称号掉宝率加成百分比(wDropPerc)
+    int titleDropBonus = 0;
+    std::string qTitleDrop = "SELECT COALESCE(SUM(t.wDropPerc), 0) "
+                             "FROM CHAR_TITLE ct "
+                             "INNER JOIN TITLE_TEMPLATE t ON ct.dwTitleID = t.dwTitleID "
+                             "WHERE ct.dwCharID = " + std::to_string(killerID) + " AND ct.bActive = 1";
+    DBHelper::GetInstance().ExecuteQuery(qTitleDrop, [&](SQLHSTMT hStmt) {
+        SQLGetData(hStmt, 1, SQL_C_LONG, &titleDropBonus, 0, NULL);
+    });
     
-    // 计算并应用 VIP 爆率提升
+    if (titleDropBonus > 0) {
+        multiplier += (titleDropBonus / 100.0);
+    }
+    
+    // 计算并应用 VIP 与称号爆率提升
     int finalRootItem = obj.wRootItem;
     if (multiplier > 1.0 && finalRootItem > 0) {
         finalRootItem = (int)(finalRootItem / multiplier);
@@ -677,7 +691,7 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
                     case 34: pushDWord(bi, 0); pushByte(bi, 0); break;
                 }
             }
-            pushWord(bi, (WORD)dat20); // wRebuithValue
+            pushWord(bi, (WORD)dat25); // wRebuithValue - 觉醒值(nData25)
         } else {
             // Extreme fallback: serialize manually using memory drop stats if DB query fails
             pushDWord(bi, newDbItemID); pushWord(bi, drop.wRefID);

@@ -564,7 +564,7 @@ void TradeManager::SendTradeSackItemAck(SOCKET targetSocket, WORD packetID, BYTE
             pushDWord(payload, 0); // Null item pointer
         } else {
             int vis=row.wVisualID, type=row.bType, kind=row.bKind, lvl=row.wLevel, cost=row.dwCost;
-            int dat18=row.nData18, dat19=row.nData19, dat20=row.nData20;
+            int dat18=row.nData18, dat19=row.nData19, dat20=row.nData20, dat21=row.nData21, dat25=row.nData25;
             int amount=row.wAmount;
             int d[17]; for (int i=0;i<17;i++) d[i]=row.d[i];
             
@@ -617,7 +617,7 @@ void TradeManager::SendTradeSackItemAck(SOCKET targetSocket, WORD packetID, BYTE
                 if (type == 9) { pushDWord(payload, 0); pushWord(payload, 0); pushWord(payload, 0); pushWord(payload, 0); pushWord(payload, 0); }
                 else if (type == 8) { for(int i=0;i<8;i++) pushByte(payload, 0); }
                 else { pushByte(payload, 0); }
-                if (type >= 1 && type <= 4) { pushByte(payload, 0); pushByte(payload, 0); pushByte(payload, 0); pushWord(payload, dat20); }
+                if (type >= 1 && type <= 4) { pushByte(payload, dat19); pushByte(payload, dat20); pushByte(payload, dat21); pushWord(payload, dat25); }
             } else {
                 switch (type) {
                     case 11: case 12: case 13: case 14: case 17: pushByte(payload, 0); pushWord(payload, d[1]); pushWord(payload, d[2]); break;
@@ -637,7 +637,7 @@ void TradeManager::SendTradeSackItemAck(SOCKET targetSocket, WORD packetID, BYTE
                     case 34: pushDWord(payload, 0); pushByte(payload, 0); break;
                 }
             }
-            pushWord(payload, (WORD)dat20); // wRebuithValue
+            pushWord(payload, (WORD)dat25); // wRebuithValue - 觉醒值(nData25)
         }
     }
     
@@ -653,7 +653,7 @@ static void SendAddOnSackAck(SOCKET s, BYTE bSackID, BYTE bSackPos, DWORD dwItem
     if (!ItemDB::GetInstance().GetFullItemData(dwItemID, row)) return;
     
     int vis=row.wVisualID, type=row.bType, kind=row.bKind, lvl=row.wLevel, cost=row.dwCost;
-    int dat18=row.nData18, dat19=row.nData19, dat20=row.nData20;
+    int dat18=row.nData18, dat19=row.nData19, dat20=row.nData20, dat21=row.nData21, dat25=row.nData25;
     int refid=row.wRefID, amount=row.wAmount;
     int d[17]; for (int i=0;i<17;i++) d[i]=row.d[i];
     
@@ -710,7 +710,7 @@ static void SendAddOnSackAck(SOCKET s, BYTE bSackID, BYTE bSackPos, DWORD dwItem
         if (type == 9) { pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); }
         else if (type == 8) { for(int i=0;i<8;i++) pushByte(bi, 0); }
         else { pushByte(bi, 0); }
-        if (type >= 1 && type <= 4) { pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushWord(bi, dat20); }
+        if (type >= 1 && type <= 4) { pushByte(bi, dat19); pushByte(bi, dat20); pushByte(bi, dat21); pushWord(bi, dat25); }
     } else {
         switch (type) {
             case 11: case 12: case 13: case 14: case 17: pushByte(bi, 0); pushWord(bi, d[1]); pushWord(bi, d[2]); break;
@@ -730,7 +730,7 @@ static void SendAddOnSackAck(SOCKET s, BYTE bSackID, BYTE bSackPos, DWORD dwItem
             case 34: pushDWord(bi, 0); pushByte(bi, 0); break;
         }
     }
-    pushWord(bi, (WORD)dat20); // wRebuithValue
+    pushWord(bi, (WORD)dat25); // wRebuithValue - 觉醒值(nData25)
     
     PACKET_HEADER* head = (PACKET_HEADER*)bi.data();
     head->id = 0x420A; // ADDONSACK_ACK

@@ -243,7 +243,8 @@ void ItemDB::UpsertRebuildData(DWORD dwItemID, int d4, int d5, int d9, int d14, 
         " WHERE dwItemID = " + std::to_string(dwItemID) + " "
         "ELSE INSERT INTO ITEMDATA (dwItemID, nData4, nData5, nData9, nData14, nData15, nData17) VALUES (" +
         std::to_string(dwItemID) + ", " + std::to_string(d4) + ", " + std::to_string(d5) +
-        ", " + std::to_string(d9) + ", " + std::to_string(d14) + ", " + std::to_string(d15) + ", " + std::to_string(d17) + ")");
+        ", " + std::to_string(d9) + ", " + std::to_string(d14) + ", " + std::to_string(d15) +
+        ", " + std::to_string(d17) + ")");
 }
 
 WORD ItemDB::GetItemAmount(DWORD dwItemID) {

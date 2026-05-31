@@ -413,6 +413,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\xiahold\XiahServerEx\DB\GameDataDB.cpp" />
     <ClCompile Include="D:\xiahold\XiahServerEx\GameObjects\MugongManager.cpp" />
     <ClCompile Include="D:\xiahold\XiahServerEx\GameObjects\PlayerManager.cpp" />
+    <ClCompile Include="D:\xiahold\XiahServerEx\GameObjects\TitleManager.cpp" />
     <ClCompile Include="D:\xiahold\XiahServerEx\GameObjects\MapInstance.cpp" />
   </ItemGroup>
   <ItemGroup />

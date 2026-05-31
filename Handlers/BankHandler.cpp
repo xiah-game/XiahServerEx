@@ -105,7 +105,7 @@ static void SendBankOrMallList(SOCKET clientSocket, DWORD charID, WORD opCodeACK
                 } else {
                     pushByte(bi, 0); 
                 }
-                if (type >= 1 && type <= 4) { pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushWord(bi, dat20); } 
+                if (type >= 1 && type <= 4) { pushByte(bi, dat19); pushByte(bi, dat20); pushByte(bi, dat21); pushWord(bi, dat25); } 
             } else {
                 switch (type) {
                     case 11: case 12: case 13: case 14: case 17:
@@ -302,7 +302,7 @@ void OnDrawInBankReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tota
                 if (type == 9) { pushDWord(iBuf, 0); pushWord(iBuf, 0); pushWord(iBuf, 0); pushWord(iBuf, 0); pushWord(iBuf, 0); }
                 else if (type == 8) { for(int i=0;i<8;i++) pushByte(iBuf, 0); }
                 else { pushByte(iBuf, 0); }
-                if (type >= 1 && type <= 4) { pushByte(iBuf, 0); pushByte(iBuf, 0); pushByte(iBuf, 0); pushWord(iBuf, dat20); }
+                if (type >= 1 && type <= 4) { pushByte(iBuf, dat19); pushByte(iBuf, dat20); pushByte(iBuf, dat21); pushWord(iBuf, dat25); }
             } else {
                 switch (type) {
                     case 11: case 12: case 13: case 14: case 17: pushByte(iBuf, 0); pushWord(iBuf, d2); pushWord(iBuf, d3); break;
@@ -491,7 +491,7 @@ static void ProcessDrawOut(SOCKET clientSocket, DWORD charID, BYTE* payload, WOR
                 if (type == 9) { pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); }
                 else if (type == 8) { for(int i=0;i<8;i++) pushByte(bi, 0); }
                 else { pushByte(bi, 0); }
-                if (type >= 1 && type <= 4) { pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushWord(bi, dat20); }
+                if (type >= 1 && type <= 4) { pushByte(bi, dat19); pushByte(bi, dat20); pushByte(bi, dat21); pushWord(bi, dat25); }
             } else {
                 switch (type) {
                     case 11: case 12: case 13: case 14: case 17: pushByte(bi, 0); pushWord(bi, d2); pushWord(bi, d3); break;
@@ -512,7 +512,7 @@ static void ProcessDrawOut(SOCKET clientSocket, DWORD charID, BYTE* payload, WOR
                 }
             }
             // ADDONSACK reads wRebuithValue AFTER GetItemData
-            pushWord(bi, (WORD)dat20);
+            pushWord(bi, (WORD)dat25); // wRebuithValue - 觉醒值(nData25)
             
             PACKET_HEADER* addHead = (PACKET_HEADER*)bi.data();
             addHead->id = 0x420A;

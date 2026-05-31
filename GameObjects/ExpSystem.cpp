@@ -39,6 +39,16 @@ bool GrantExpToPlayer(DWORD dwCharID, DWORD dwIncrExp) {
     DBHelper::GetInstance().ExecuteQuery(qExpBuff, [&](SQLHSTMT hStmt) {
         SQLGetData(hStmt, 1, SQL_C_LONG, &totalBonusPercent, 0, NULL);
     });
+
+    // 称号系统：累加激活且生效的称号经验加成百分比(wExpPerc)
+    int titleExpBonus = 0;
+    std::string qTitleExp = "SELECT COALESCE(SUM(t.wExpPerc), 0) "
+                            "FROM CHAR_TITLE ct "
+                            "INNER JOIN TITLE_TEMPLATE t ON ct.dwTitleID = t.dwTitleID "
+                            "WHERE ct.dwCharID = " + std::to_string(dwCharID) + " AND ct.bActive = 1";
+    DBHelper::GetInstance().ExecuteQuery(qTitleExp, [&](SQLHSTMT hStmt) {
+        SQLGetData(hStmt, 1, SQL_C_LONG, &titleExpBonus, 0, NULL);
+    });
     
     double mult = 1.0;
     int vipLevel = CharacterDB::GetInstance().GetVipLevel(dwCharID);
@@ -50,6 +60,9 @@ bool GrantExpToPlayer(DWORD dwCharID, DWORD dwIncrExp) {
         if (cardBonus > 0.0) {
             mult += cardBonus;
         }
+    }
+    if (titleExpBonus > 0) {
+        mult += (titleExpBonus / 100.0);
     }
     
     // 动态拉取并结算云虎符在数据库 nData18 字段配置的额外经验百分比 (当前库配置 20 代表 +20% 额外经验)

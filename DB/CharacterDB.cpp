@@ -1,6 +1,7 @@
 #include "CharacterDB.h"
 #include "../DBHelper.h"
 #include "../ServerCore.h"
+#include "../GameObjects/TitleManager.h"
 
 bool CharacterDB::GetCharData(DWORD dwCharID, CharPower& out) {
     std::string q = "SELECT wLevel, wStr, wSus, wDex, wVit, wIpMax, wIpCur, dwHpMax, dwHpCur, "
@@ -432,6 +433,11 @@ bool CharacterDB::GetCharSelectList(const std::string& accountName, std::vector<
                 if (c3 == SQL_NULL_DATA) rar = 0;
                 if (pos >= 0 && pos < 9) { ch.items[pos].bStx = stx; ch.items[pos].bRar = rar; }
             });
+
+        // 称号系统：优雅调用独立的 TitleManager 模块获取当前激活称号的 IconID
+        ch.items[8].wVis = (WORD)TitleManager::GetActiveTitleIconID(ch.dwCharID);
+        ch.items[8].bRar = 0;
+        ch.items[8].bStx = 0;
     }
     return true;
 }

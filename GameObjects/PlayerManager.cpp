@@ -1,4 +1,5 @@
 #include "PlayerManager.h"
+#include "TitleManager.h"
 #include "MugongManager.h"
 #include "../DBHelper.h"
 #include "../DB/CharacterDB.h"
@@ -8,10 +9,16 @@
 #include "../GameObjects/MapInstance.h"
 #include "../Handlers/MugongHandler.h"
 
+// 称号系统：服务端单点偏置升级工具，将4亿CharID转换为客户端8亿ObjectID
+inline DWORD ToClientPCID(DWORD dwCharID) {
+    return (dwCharID < 800000000) ? (dwCharID + 400000000) : dwCharID;
+}
+
 extern std::map<DWORD, CMapInstance*> g_MapInstances;
 
 void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
-    DWORD dwObjectID = (dwCharID < 800000000) ? (dwCharID + 400000000) : dwCharID;
+    DWORD dwObjectID = ToClientPCID(dwCharID);
+    LOG("[RecalcStats] Triggered! dwCharID: " + std::to_string(dwCharID) + " calculated dwObjectID: " + std::to_string(dwObjectID) + " sendPacket: " + std::to_string(sendPacket));
 
     // 1. Fetch base attributes from DB
     int baseStr = 10, baseDex = 10, baseVit = 10, baseInt = 10, baseLevel = 1;
@@ -20,6 +27,28 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
         baseStr = cpPM.wStr; baseDex = cpPM.wDex; baseVit = cpPM.wVit;
         baseInt = cpPM.wSus; baseLevel = cpPM.wLevel;
     }
+
+    // 称号系统：优雅调用独立的 TitleManager 模块获取称号加成属性
+    int titleStr = 0, titleDex = 0, titleVit = 0, titleSus = 0;
+    int titleAtk = 0, titleDef = 0, titleHp = 0, titleMp = 0;
+    int titleHit = 0, titleDodge = 0, titleCrit = 0;
+    int titleRestoreHp = 0, titleRestoreMp = 0;
+    int titleStrPerc = 0, titleDexPerc = 0, titleVitPerc = 0, titleSusPerc = 0;
+    int titleAtkPerc = 0, titleDefPerc = 0, titleHpPerc = 0, titleMpPerc = 0;
+    int titleExpPerc = 0, titleDropPerc = 0;
+    
+    TitleManager::GetTitleStats(dwCharID,
+                                titleStr, titleDex, titleVit, titleSus,
+                                titleAtk, titleDef, titleHp, titleMp,
+                                titleHit, titleDodge, titleCrit, titleRestoreHp, titleRestoreMp,
+                                titleStrPerc, titleDexPerc, titleVitPerc, titleSusPerc,
+                                titleAtkPerc, titleDefPerc, titleHpPerc, titleMpPerc,
+                                titleExpPerc, titleDropPerc);
+
+    baseStr = (baseStr + titleStr) * (100 + titleStrPerc) / 100;
+    baseDex = (baseDex + titleDex) * (100 + titleDexPerc) / 100;
+    baseVit = (baseVit + titleVit) * (100 + titleVitPerc) / 100;
+    baseInt = (baseInt + titleSus) * (100 + titleSusPerc) / 100; // wSus 瀵瑰簲 baseInt
 
 
     // 2. Fetch equipment stats from DB
@@ -48,10 +77,10 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
         LOG("[RecalcStats] EquipRow ref=" + std::to_string(ref) + " d7(spd)=" + std::to_string(d7) + " d9(hp)=" + std::to_string(d9) + " d10(ip)=" + std::to_string(d10) + " d11(restHp)=" + std::to_string(d11) + " d12(restIp)=" + std::to_string(d12) + " d13(crit)=" + std::to_string(d13));
     }
 
-    // 动态拉取夺命符在数据库 nData22 配置的暴击值 (若为 0 且检测到装备则兼容性降级为默认的 +20 暴击加成)
-    int critBonus = ItemDB::GetInstance().GetEquippedItemDataValue(dwCharID, 9, 22); // 9 = 夺命符
+    // 鍔ㄦ佹媺鍙栧ず鍛界﹀湪鏁版嵁搴 nData22 閰嶇疆鐨勬毚鍑诲 (鑻ヤ负 0 涓旀娴嬪埌瑁呭囧垯鍏煎规ч檷绾т负榛樿ょ殑 +20 鏆村嚮鍔墻)
+    int critBonus = ItemDB::GetInstance().GetEquippedItemDataValue(dwCharID, 9, 22); // 9 = 澶哄懡绗
     if (critBonus <= 0) {
-        // 如果数据库中未配置或配置为 0，我们通过检查其使用时间 (nData2) 间接证明玩家确实装备了夺命符，从而启动降级保护
+        // 濡傛灉鏁版嵁搴撲腑鏈閰嶇疆鎴栭厤缃涓 0锛屾垜浠閫氳繃妫鏌ュ叾浣跨敤鏃堕棿 (nData2) 闂存帴璇佹槑鐜╁剁‘瀹炶呭囦簡澶哄懡绗    
         if (ItemDB::GetInstance().GetEquippedItemDataValue(dwCharID, 9, 2) > 0) { 
             critBonus = 20;
         }
@@ -60,7 +89,7 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
         equipCrit += critBonus;
     }
 
-    LOG("[RecalcStats] charID=" + std::to_string(dwCharID) + " TOTALS: equipAtk=" + std::to_string(equipAtk) + " equipDef=" + std::to_string(equipDef) + " equipSpd=" + std::to_string(equipSpd) + " equipCrit=" + std::to_string(equipCrit) + " equipHp=" + std::to_string(equipHp) + " equipIp=" + std::to_string(equipIp) + " restoreHp=" + std::to_string(equipRestoreHp) + " restoreIp=" + std::to_string(equipRestoreIp));
+    // LOG("[RecalcStats] charID=" + std::to_string(dwCharID) + " TOTALS: equipAtk=" + std::to_string(equipAtk) + " equipDef=" + std::to_string(equipDef) + " equipSpd=" + std::to_string(equipSpd) + " equipCrit=" + std::to_string(equipCrit) + " equipHp=" + std::to_string(equipHp) + " equipIp=" + std::to_string(equipIp) + " restoreHp=" + std::to_string(equipRestoreHp) + " restoreIp=" + std::to_string(equipRestoreIp));
 
     // 3. Combine them in memory
     SOCKET s = SessionMgr::GetInstance().GetSocketByCharID(dwCharID);
@@ -69,7 +98,10 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
         CMapInstance* mapInst = g_MapInstances[pMapID];
         std::lock_guard<std::mutex> lock(mapInst->GetMutex());
         sServerObject* pObj = mapInst->GetPlayer(dwObjectID);
-        if (pObj) {
+        if (!pObj) {
+            // LOG("[RecalcStats] ERROR: Player object NOT found in map for dwObjectID: " + std::to_string(dwObjectID) + " MapID: " + std::to_string(pMapID));
+        } else {
+            // LOG("[RecalcStats] SUCCESS: Player object found for dwObjectID: " + std::to_string(dwObjectID));
             pObj->wStr = baseStr;
             pObj->wDex = baseDex;
             pObj->wVit = baseVit;
@@ -77,6 +109,9 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
 
             // Load visual equipment and fame from DB into memory
             CharacterDB::GetInstance().LoadVisualEquipAndFame(dwCharID, pObj);
+
+            // 称号系统：优雅调用 TitleManager 获取主角当前的称号 IconID 并写入第 9 个虚槽位
+            pObj->wVisualID[8] = (WORD)TitleManager::GetActiveTitleIconID(dwCharID);
 
             // Broadcast equipment changes to other players in the same map
             for (BYTE pos = 0; pos < 9; pos++) {
@@ -86,7 +121,7 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
                 auto pushWord = [&](WORD w) { ackBuf.push_back(w & 0xFF); ackBuf.push_back((w>>8)&0xFF); };
                 auto pushByte = [&](BYTE b) { ackBuf.push_back(b); };
                 
-                pushDWord(dwCharID);   // dwCharID
+                pushDWord(ToClientPCID(dwCharID));   // dwCharID (升维偏置转换发包)
                 pushDWord(0);          // dwItemID
                 pushByte(pos);         // bPos
                 pushWord(pObj->wVisualID[pos]);  // wVisualID
@@ -94,10 +129,13 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
                 pushByte(pObj->bStxType[pos]);   // bStxType
                 
                 PACKET_HEADER* ah = (PACKET_HEADER*)ackBuf.data();
-                ah->id = 0x3F0C; // CS_CD_CHGEQUIPMENT_ACK
+                ah->id = 0x3F0C; // 瀵归綈鐪熷疄 CS_CD_CHGEQUIPMENT_ACK (瀹㈡埛绔 OFFSET_CS_CD + 11 = 0x3F0C)
                 ah->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);
                 EncryptPacket(ackBuf.data(), 0x42);
                 
+                if (pos == 8) {
+                    // LOG("[RecalcStats] Broadcasting Pos 8 (Title): wVisualID[8]=" + std::to_string(pObj->wVisualID[pos]) + " to Map: " + std::to_string(pMapID));
+                }
                 // Broadcast to all sockets on the map
                 SessionMgr::GetInstance().ForEachSocketInMap(pMapID, [&](SOCKET sSocket, DWORD sCharID) {
                     SafeSend(sSocket, (const char*)ackBuf.data(), ackBuf.size(), 0);
@@ -111,32 +149,32 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
             pObj->wCritical = equipCrit;
             pObj->wEquipHp = equipHp;
             pObj->wEquipIp = equipIp;
-            pObj->wEquipRestoreHp = equipRestoreHp;
-            pObj->wEquipRestoreIp = equipRestoreIp;
+            pObj->wEquipRestoreHp = equipRestoreHp + titleRestoreHp;
+            pObj->wEquipRestoreIp = equipRestoreIp + titleRestoreMp;
             
             int maxBuffSpd = 0;
-            if (pObj->activeBuffs.count(124) > 0) { // 草上飞
+            if (pObj->activeBuffs.count(124) > 0) { // 鑽変笂椋
                 BYTE lvl = pObj->activeBuffs[124].bLevel;
                 int currentSpd = 4 + (lvl > 0 ? lvl : 1);
                 if (currentSpd > maxBuffSpd) maxBuffSpd = currentSpd;
             }
-            if (pObj->activeBuffs.count(94) > 0) { // 疾风步
+            if (pObj->activeBuffs.count(94) > 0) { // 鐤鹃庢
                 BYTE lvl = pObj->activeBuffs[94].bLevel;
                 int currentSpd = 5 + (lvl > 0 ? lvl : 1);
                 if (currentSpd > maxBuffSpd) maxBuffSpd = currentSpd;
             }
-            if (pObj->activeBuffs.count(64) > 0) { // 凌波微步
+            if (pObj->activeBuffs.count(64) > 0) { // 鍑屾尝寰姝
                 BYTE lvl = pObj->activeBuffs[64].bLevel;
                 int currentSpd = 4 + (lvl > 0 ? lvl : 1);
                 if (currentSpd > maxBuffSpd) maxBuffSpd = currentSpd;
             }
-            if (pObj->activeBuffs.count(34) > 0) { // 斗转星移
+            if (pObj->activeBuffs.count(34) > 0) { // 鏂楄浆鏄熺Щ
                 BYTE lvl = pObj->activeBuffs[34].bLevel;
                 int currentSpd = 3 + (lvl > 0 ? lvl : 1);
                 if (currentSpd > maxBuffSpd) maxBuffSpd = currentSpd;
             }
 
-            // 初始基础行走速度调低至 4 格，防游戏后期速度发飘瞬移拉扯，为装备成长留出平衡空间
+            // 鍒濆嬪熀纭琛岃蛋閫熷害璋冧綆鑷 4 鏍硷紝闃叉父鎴忓悗鏈熼熷害鍙戦樼灛绉绘媺鎵锛屼负瑁呭囨垚闀跨暀鍑哄钩琛＄┖闂
             pObj->wWalkSpeed = 4 + equipSpd + maxBuffSpd;
             // Attack speed: computed on-the-fly in PreAttackReq, not stored on PlayerData
 
@@ -152,21 +190,21 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
         
             // ========== Additive Percentage Stat Calculation ==========
             // Phase 1: Accumulate ALL flat bonuses
-            DWORD flatAtk  = baseStr + equipAtk;
-            DWORD flatDef  = (baseInt * 2) + equipDef;  // baseInt = wSus
-            DWORD flatHit  = baseDex + equipMag;
-            DWORD flatDodge = baseDex + equipSpd;
-            DWORD flatHpMax = 0;
-            DWORD flatIpMax = 0;
-            DWORD flatCrit  = equipCrit;
+            DWORD flatAtk  = baseStr + equipAtk + titleAtk;
+            DWORD flatDef  = (baseInt * 2) + equipDef + titleDef;  // baseInt = wSus
+            DWORD flatHit  = baseDex + equipMag + titleHit;
+            DWORD flatDodge = baseDex + equipSpd + titleDodge;
+            DWORD flatHpMax = titleHp;
+            DWORD flatIpMax = titleMp;
+            DWORD flatCrit  = equipCrit + titleCrit;
 
             // Phase 2: Accumulate ALL percentage bonuses (using signed integers to support debuff reductions)
-            int percAtk  = 0;
-            int percDef  = 0;
+            int percAtk  = titleAtkPerc;
+            int percDef  = titleDefPerc;
             int percHit  = 0;
             int percCrit = 0;
 
-            // 4.5. Passive Inner Skill (崘懎濮) flat + perc (dwMugongID 1-29)
+            // 4.5. Passive Inner Skill (宕樻噹婵) flat + perc (dwMugongID 1-29)
             for (auto& mg : pObj->learnedMugongs) {
                 DWORD mugID = mg.first;
                 BYTE mugLvl = mg.second;
@@ -216,7 +254,7 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
                 }
             }
 
-            // Phase 3: Apply percentages once 垾?totalFlat * (100 + totalPerc) / 100
+            // Phase 3: Apply percentages once 鍨?totalFlat * (100 + totalPerc) / 100
             int finalAtkPerc = 100 + percAtk; if (finalAtkPerc < 1) finalAtkPerc = 1;
             int finalDefPerc = 100 + percDef; if (finalDefPerc < 1) finalDefPerc = 1;
             int finalHitPerc = 100 + percHit; if (finalHitPerc < 1) finalHitPerc = 1;
@@ -231,6 +269,10 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
             // Update HP/IP max with all bonuses
             pObj->dwHpMax += flatHpMax;
             pObj->wIpMax  += (DWORD)flatIpMax;
+
+            // 绉板彿绯荤粺锛氱敓鍛戒笌鍐呭姏鏈澶т笂闄愮櫨鍒嗘瘮鍙犵畻
+            pObj->dwHpMax = pObj->dwHpMax * (100 + titleHpPerc) / 100;
+            pObj->wIpMax  = pObj->wIpMax * (100 + titleMpPerc) / 100;
 
             // 6. Save final stats to the object
             pObj->dwTotalAtk = totalAtk;
@@ -251,9 +293,9 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
             SendCharStatusInfoAck(s, dwCharID, 0x4414); // CS_IT_CHARSTATUSINFO_ACK
             // Client's Init_WindowOutSide/InSide clears mugong data upon receiving 0x4414,
             // so we must immediately re-send the mugong lists to repopulate the UI.
-            BYTE typeGeneral = 0; // General/Outgong (灂垐杞)
+            BYTE typeGeneral = 0; // General/Outgong (鐏傚瀽鏉)
             OnMugongListReq(s, dwCharID, &typeGeneral, 1);
-            BYTE typePassive = 1; // Passive/Ingong (洰悡杞)  also triggers Active list
+            BYTE typePassive = 1; // Passive/Ingong (娲版偂鏉)  also triggers Active list
             OnMugongListReq(s, dwCharID, &typePassive, 1);
 
             // Send 0x3B0D (HP/IP bar update) to ensure bars are refreshed with in-memory values
@@ -285,7 +327,7 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
 
 void PlayerManager::SavePlayer(DWORD dwCharID) {
     if (dwCharID == 0) return;
-    DWORD dwObjectID = (dwCharID < 800000000) ? (dwCharID + 400000000) : dwCharID;
+    DWORD dwObjectID = ToClientPCID(dwCharID);
 
     SOCKET s = SessionMgr::GetInstance().GetSocketByCharID(dwCharID);
     if (!s) return;
@@ -321,7 +363,7 @@ void BroadcastPacketToMap(DWORD mapID, const std::vector<BYTE>& packet) {
 void SendCharStatusInfoAck(SOCKET clientSocket, DWORD dwCharID, WORD opCode) {
     if (!clientSocket || dwCharID == 0) return;
 
-    DWORD dwObjectID = (dwCharID < 800000000) ? (dwCharID + 400000000) : dwCharID;
+    DWORD dwObjectID = ToClientPCID(dwCharID);
     
     PlayerData playerObj;
     playerObj.wWepAtk = 0; playerObj.wWepDef = 0; playerObj.wWepMag = 0; playerObj.wWalkSpeed = 24;

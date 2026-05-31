@@ -9,6 +9,26 @@
 #include "../Network/PacketRouter.h"
 #include "../ServerCore.h"
 
+// 每件装备允许的最大改造总次数（成功+失败均计入）
+static const int MAX_REBUILD_ATTEMPTS = 201;
+
+// 装备强化白名单：仅允许特定 bType/bKind 组合进行强化
+// bType=1(武器,排除bKind=8矿工锤)、2(衣服)、3(帽子)、4(鞋子)、6(戒指)、7(项链)
+// bType=5(披风无数据)、8(宝石)、9(盾牌/法宝) 均不可强化
+static bool IsRebuildableItem(BYTE bType, BYTE bKind) {
+    switch (bType) {
+        case 1: return bKind != 8; // 武器（排除矿工锤 bKind=8）
+        case 2: // 衣服
+        case 3: // 帽子
+        case 4: // 鞋子
+        case 6: // 戒指
+        case 7: // 项链
+            return true;
+        default:
+            return false;
+    }
+}
+
 static void pushDWord(std::vector<BYTE>& buf, DWORD d) { buf.push_back(d&0xFF); buf.push_back((d>>8)&0xFF); buf.push_back((d>>16)&0xFF); buf.push_back(d>>24); }
 static void pushWord(std::vector<BYTE>& buf, WORD w) { buf.push_back(w&0xFF); buf.push_back(w>>8); }
 static void pushByte(std::vector<BYTE>& buf, BYTE b) { buf.push_back(b); }
@@ -86,7 +106,7 @@ void SendItemRefresh(SOCKET clientSocket, DWORD dwItemID, BYTE bSackID, BYTE bSa
             if (type == 9) { pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); }
             else if (type == 8) { for(int i=0;i<8;i++) pushByte(bi, 0); }
             else { pushByte(bi, 0); }
-            if (type >= 1 && type <= 4) { pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushWord(bi, dat20); }
+            if (type >= 1 && type <= 4) { pushByte(bi, dat19); pushByte(bi, dat20); pushByte(bi, dat21); pushWord(bi, dat25); }
         } else {
             // Include MugongManager manually if type 21 drops, but rebuild doesn't apply to skills so we just write zeros for simplicity
             switch (type) {
@@ -108,8 +128,8 @@ void SendItemRefresh(SOCKET clientSocket, DWORD dwItemID, BYTE bSackID, BYTE bSa
             }
         }
         
-        // wRebuithValue - client reads this WORD after GetItemData()
-        pushWord(bi, (WORD)dat20);
+        // wRebuithValue - 觉醒值，数据源为 nData25（DB 高版本对齐）
+        pushWord(bi, (WORD)dat25);
         
         // Force UI redraw by removing and re-adding
         std::vector<BYTE> rmBuf(7);
@@ -132,11 +152,30 @@ void OnRebuildItemTermReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
     if (totalSize < 6) return;
     DWORD dwItemID = *(DWORD*)(payload + 0);
     bool found = ItemDB::GetInstance().IsSackItemOwned(charID, dwItemID);
+
+    BYTE result = 1; // 默认：物品未找到
+    if (found) {
+        // 查模板获取 bType/bKind，校验是否可强化
+        WORD refID = ItemDB::GetInstance().GetItemRefID(dwItemID);
+        if (refID > 0 && g_ItemTemplates.count(refID)) {
+            BYTE bType = g_ItemTemplates[refID].bType;
+            BYTE bKind = g_ItemTemplates[refID].bKind;
+            if (IsRebuildableItem(bType, bKind)) {
+                result = 0; // 校验通过
+            } else {
+                result = 3; // ERR_REBUILDITEMTREM_NOTREBUILDITEM：不可改造的物品
+                LOG("[Rebuild] 拒绝强化：bType=" + std::to_string(bType) + " bKind=" + std::to_string(bKind) + " refID=" + std::to_string(refID));
+            }
+        } else {
+            result = 2; // ERR_REBUILDITEMTREM_NOTBASICITEM：无模板数据
+        }
+    }
+
     std::vector<BYTE> ackBuf(5);
     PACKET_HEADER* head = (PACKET_HEADER*)ackBuf.data();
     head->id = 0x4242; // CS_IM_REBUILDITEMTERM_ACK
     head->payloadSize = 1;
-    ackBuf[4] = found ? 0 : 1;
+    ackBuf[4] = result;
     EncryptPacket(ackBuf.data(), 0x42);
     SafeSend(clientSocket, (const char*)ackBuf.data(), ackBuf.size(), 0);
 }
@@ -188,6 +227,20 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
             baseData3 = g_ItemTemplates[refid].nData3;
             baseData4 = g_ItemTemplates[refid].nData4;
             baseData5 = g_ItemTemplates[refid].nData5;
+        }
+        // 白名单校验：拒绝不可强化的物品类型
+        BYTE itemKind = fir.bKind;
+        if (itemKind == 0 && g_ItemTemplates.count(fir.wRefID)) {
+            itemKind = g_ItemTemplates[fir.wRefID].bKind;
+        }
+        if (!IsRebuildableItem((BYTE)itemType, itemKind)) {
+            std::vector<BYTE> ackBuf(5);
+            PACKET_HEADER* head = (PACKET_HEADER*)ackBuf.data();
+            head->id = 0x4244; head->payloadSize = 1; ackBuf[4] = 7; // ERR_REBUILDITEM_CANNOTTREBUILD
+            EncryptPacket(ackBuf.data(), 0x42);
+            SafeSend(clientSocket, (const char*)ackBuf.data(), ackBuf.size(), 0);
+            LOG("[Rebuild] 拒绝强化执行：bType=" + std::to_string(itemType) + " bKind=" + std::to_string(itemKind));
+            return;
         }
         itemValid = true;
     }
@@ -244,27 +297,21 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
         EncryptPacket(moneyBuf.data(), 0x42); SafeSend(clientSocket, (const char*)moneyBuf.data(), moneyBuf.size(), 0);
     }
     
-    for (int i=0; i<3; i++) {
-        if (dwResourceID[i] != 0) {
-            std::string resIdStr = std::to_string(dwResourceID[i]);
-            int amount = (int)ItemDB::GetInstance().GetItemAmount(dwResourceID[i]);
-            bool amountDecreased = false;
-            if (amount > 1) {
-                amountDecreased = true;
-                ItemDB::GetInstance().DecrementItemAmount(dwResourceID[i]);
-                std::vector<BYTE> ackBuf(4); ackBuf.push_back(bResourceSackID[i]); ackBuf.push_back(bResourcePos[i]);
-                pushDWord(ackBuf, dwResourceID[i]); pushWord(ackBuf, amount - 1);
-                PACKET_HEADER* ah = (PACKET_HEADER*)ackBuf.data(); ah->id = 0x4216; ah->payloadSize = ackBuf.size() - 4;
-                EncryptPacket(ackBuf.data(), 0x42); SafeSend(clientSocket, (char*)ackBuf.data(), ackBuf.size(), 0);
-            }
-            if (!amountDecreased) {
-                ItemDB::GetInstance().DeleteItemCascade(dwResourceID[i]);
-                std::vector<BYTE> ackBuf(4); ackBuf.push_back(bResourceSackID[i]); ackBuf.push_back(bResourcePos[i]);
-                pushDWord(ackBuf, dwResourceID[i]); ackBuf.push_back(0);
-                PACKET_HEADER* ah = (PACKET_HEADER*)ackBuf.data(); ah->id = 0x4208; ah->payloadSize = ackBuf.size() - 4;
-                EncryptPacket(ackBuf.data(), 0x42); SafeSend(clientSocket, (char*)ackBuf.data(), ackBuf.size(), 0);
-            }
-        }
+    // [已删除] 此处曾有遗留的材料消耗代码（Phase 1/Phase 2 重构前残留），
+    // 与下方 Phase 1 的材料处理逻辑完全重复，导致双重扣材料 BUG。
+
+    // 校验改造次数上限：每件装备最多允许 MAX_REBUILD_ATTEMPTS 次改造尝试
+    if (currentAttempts >= MAX_REBUILD_ATTEMPTS) {
+        std::vector<BYTE> limitBuf; limitBuf.resize(4);
+        limitBuf.push_back(6); // ERR_REBUILDITEM_FULL：客户端已有"无法再进行改造"的提示
+        limitBuf.push_back(255); pushDWord(limitBuf, 0);
+        pushString(limitBuf, itemName); limitBuf.push_back(currentRebuild);
+        PACKET_HEADER* lHead = (PACKET_HEADER*)limitBuf.data();
+        lHead->id = 0x4244; lHead->payloadSize = (WORD)(limitBuf.size() - 4);
+        EncryptPacket(limitBuf.data(), 0x42);
+        SafeSend(clientSocket, (const char*)limitBuf.data(), limitBuf.size(), 0);
+        LOG("[Rebuild] 改造次数已达上限: itemID=" + std::to_string(dwItemID) + " attempts=" + std::to_string(currentAttempts));
+        return;
     }
 
     int targetLevel = (crystalKind == 1) ? (currentRebuild + 1) : (currentAppend + 1);
@@ -420,6 +467,31 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
         SafeSend(clientSocket, (const char*)itemBreakPacket.data(), itemBreakPacket.size(), 0);
     } else {
         SendItemRefresh(clientSocket, dwItemID, bSackID, bSackPos);
+    }
+
+    // 2d. 通过聊天系统消息向玩家显示累计改造次数
+    {
+        std::string attemptMsg;
+        if (isSuccess) {
+            attemptMsg = "\xB8\xC4\xD4\xEC\xB3\xC9\xB9\xA6\xA3\xA1\xC0\xDB\xBC\xC6\xB8\xC4\xD4\xEC\xB4\xCE\xCA\xFD\xA3\xBA";
+        } else if (didBreak) {
+            attemptMsg = "\xB8\xC4\xD4\xEC\xCA\xA7\xB0\xDC\xA3\xAC\xD7\xB0\xB1\xB8\xD2\xD1\xCB\xF0\xBB\xD9\xA3\xA1\xC0\xDB\xBC\xC6\xB8\xC4\xD4\xEC\xB4\xCE\xCA\xFD\xA3\xBA";
+        } else {
+            attemptMsg = "\xB8\xC4\xD4\xEC\xCA\xA7\xB0\xDC\xA1\xA3\xC0\xDB\xBC\xC6\xB8\xC4\xD4\xEC\xB4\xCE\xCA\xFD\xA3\xBA";
+        }
+        attemptMsg += std::to_string(currentAttempts) + "/" + std::to_string(MAX_REBUILD_ATTEMPTS);
+        // 构造 CS_CH_CHAT_ACK (0x3E02) 系统提示包
+        std::vector<BYTE> chatBuf;
+        chatBuf.resize(4, 0);
+        pushDWord(chatBuf, 0);       // dwSenderObjectID = 0（系统消息）
+        pushByte(chatBuf, 8);        // type = CT_TIMEMESSAGE
+        pushString(chatBuf, attemptMsg);
+        WORD chatID = 0x3E02;
+        WORD chatPay = (WORD)(chatBuf.size() - 4);
+        memcpy(&chatBuf[0], &chatID, 2);
+        memcpy(&chatBuf[2], &chatPay, 2);
+        EncryptPacket(chatBuf.data(), 0x42);
+        SafeSend(clientSocket, (const char*)chatBuf.data(), (int)chatBuf.size(), 0);
     }
 }
 
