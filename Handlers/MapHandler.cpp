@@ -141,6 +141,22 @@ void OnMapEnterReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
 
       wCurX = px; wCurY = py; bCurH = ph; }
 
+    // 坐标边界安全校验：防止 DB 中存储的坐标超出目标地图 wWidth/wHeight 范围
+    // 根因：LINKMAPLIST 的 wStartPosX/Y 配置错误会导致角色落入地图外空白区域，客户端访问越界地形数据崩溃
+    {
+        GameDataDB::MapInfo mapBounds;
+        if (GameDataDB::GetInstance().GetMapInfo(dwMapID, mapBounds)) {
+            if (wCurX >= mapBounds.wWidth || wCurY >= mapBounds.wHeight) {
+                LOG("[MapHandler] WARNING: Player pos (" + std::to_string(wCurX) + "," + std::to_string(wCurY) + ") OUT OF BOUNDS for MapID " + std::to_string(dwMapID) + " (size " + std::to_string(mapBounds.wWidth) + "x" + std::to_string(mapBounds.wHeight) + "). Resetting to spawn point!");
+                int spX = 0, spY = 0;
+                CharacterDB::GetInstance().GetSpawnPosition(dwMapID, spX, spY);
+                if (spX > 0 && spY > 0) { wCurX = (WORD)spX; wCurY = (WORD)spY; }
+                else { wCurX = mapBounds.wWidth / 2; wCurY = mapBounds.wHeight / 2; }
+                CharacterDB::GetInstance().SavePosition(dwActualCharID, wCurX, wCurY, dwMapID);
+            }
+        }
+    }
+
 
 
     // Create or get the existing object
@@ -1522,6 +1538,20 @@ void OnMapMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
     }
 
     
+
+    // 坐标边界安全校验：传送目标坐标不得超出目标地图的 wWidth/wHeight
+    {
+        GameDataDB::MapInfo destBounds;
+        if (GameDataDB::GetInstance().GetMapInfo(destMapID, destBounds)) {
+            if (startX >= destBounds.wWidth || startY >= destBounds.wHeight) {
+                LOG("[MapHandler] WARNING: Portal dest (" + std::to_string(startX) + "," + std::to_string(startY) + ") OUT OF BOUNDS for MapID " + std::to_string(destMapID) + " (size " + std::to_string(destBounds.wWidth) + "x" + std::to_string(destBounds.wHeight) + "). Resetting to spawn!");
+                int spX = 0, spY = 0;
+                CharacterDB::GetInstance().GetSpawnPosition(destMapID, spX, spY);
+                if (spX > 0 && spY > 0) { startX = (WORD)spX; startY = (WORD)spY; }
+                else { startX = destBounds.wWidth / 2; startY = destBounds.wHeight / 2; }
+            }
+        }
+    }
 
     LOG("[MapHandler] OnMapMoveReq: Moving to map " + std::to_string(destMapID) + " at (" + std::to_string(startX) + "," + std::to_string(startY) + ")");
 

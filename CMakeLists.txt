@@ -38,6 +38,7 @@ set(SOURCES
     Handlers/ChatHandler.cpp
     Handlers/PartyHandler.cpp
     Handlers/RebuildItemHandler.cpp
+    Handlers/ItemSerializer.cpp
     Handlers/BankHandler.cpp
     Handlers/StatHandler.cpp
     Handlers/TradeHandler.cpp

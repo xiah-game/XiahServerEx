@@ -105,6 +105,12 @@ void InitPacketHandlers() {
         OnUseItemReq(s, charID, p, size);
     });
 
+    // 遁身符 "记录当前位置" (CS_IM_REMARKITEM_REQ)
+    RegisterHandler(0x4249, [](SOCKET s, BYTE* p, WORD size) {
+        DWORD charID = SessionMgr::GetInstance().GetCharID(s);
+        if (charID) OnRemarkItemReq(s, charID, p, size);
+    });
+
     RegisterHandler(0x4201, [](SOCKET s, BYTE* p, WORD size) {
         DWORD charID = SessionMgr::GetInstance().GetCharID(s);
         DropManager::GetInstance()->HandlePickup(s, charID, p, size);

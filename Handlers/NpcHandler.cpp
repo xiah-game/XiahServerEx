@@ -539,10 +539,10 @@ MonsterData* pObj = NULL;
             pushWord((WORD)tpl.nBasicData3); // m_wIncrIp (IP recovery)
             pushByte(0); // m_bMinLevel
             pushByte(0); // m_bMaxLevel
-        } else if (tpl.bType == 25) { // ITEMTYPE_REBUILDRES
-            pushByte(0); // m_bIsDividedRes
-            pushWord(0); // m_wSuccessRatio
-            pushWord(0); // m_wFactorValue
+        } else if (tpl.bType == 25) { // ITEMTYPE_REBUILDRES（改造材料）
+            pushByte((BYTE)tpl.bKind); // m_bIsDividedRes
+            pushWord((WORD)tpl.nBasicData2); // m_wSuccessRatio
+            pushWord((WORD)tpl.nBasicData3); // m_wFactorValue
         } else if (tpl.bType == 27) { // ITEMTYPE_LOTTO
             pushByte(0); // m_bPrizeRank
             pushDWord(0); // m_dwRound

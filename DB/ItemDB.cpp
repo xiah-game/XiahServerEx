@@ -258,6 +258,28 @@ WORD ItemDB::GetItemAmount(DWORD dwItemID) {
     return amount;
 }
 
+int ItemDB::GetItemNBasicData(DWORD dwItemID, int fieldIndex) {
+    if (fieldIndex < 1 || fieldIndex > 5) return 0;
+    int result = 0;
+    std::string q = "SELECT nBasicData" + std::to_string(fieldIndex) + " FROM ITEM WHERE dwItemID = " + std::to_string(dwItemID);
+    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+        SQLLEN c;
+        SQLGetData(hStmt, 1, SQL_C_SLONG, &result, 0, &c);
+    });
+    return result;
+}
+
+int ItemDB::DecrementNBasicData3(DWORD dwItemID) {
+    // 原子递减并返回新值，防止并发双扣
+    DBHelper::GetInstance().ExecuteUpdate(
+        "UPDATE ITEM SET nBasicData3 = nBasicData3 - 1 WHERE dwItemID = " + std::to_string(dwItemID) + " AND nBasicData3 > 0");
+    int newVal = 0;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT nBasicData3 FROM ITEM WHERE dwItemID = " + std::to_string(dwItemID),
+        [&](SQLHSTMT hStmt) { SQLLEN c; SQLGetData(hStmt, 1, SQL_C_SLONG, &newVal, 0, &c); });
+    return newVal;
+}
+
 DWORD ItemDB::InsertItem(WORD wRefID, BYTE bType, BYTE bKind, WORD wVisualID, const std::string& szName,
                           DWORD dwCost, WORD wLevel, BYTE bCharType, DWORD wAmount) {
     DWORD newId = 0;

@@ -168,6 +168,8 @@ struct MonsterData : EntityBase {
     // Movement tracking
     WORD  wLastSentDestX = 0, wLastSentDestY = 0;
     WORD  wLastSentPosX = 0, wLastSentPosY = 0;
+    DWORD dwLastMoveSendTime = 0; // 移动包发送时间门控：防止过频发包导致客户端"小碎步"动画抽搐
+    WORD  wLastSentDirection = 0; // 上次发包时的方向角度：用于方向变化 >25° 判定
     // Display
     BYTE  bGroupOrder = 0;
     BYTE  bWalkSpeedByte = 8;

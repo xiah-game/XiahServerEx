@@ -782,9 +782,11 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
     // Without it, the client gets stuck and all subsequent skills fail to render effects.
     // For skills with no target (dwDefenseID==0, including self-buffs), set defender to self
     // with OBJTYPE_PC(1) to prevent client NULL dereference in OnCS_BT_MUGONGATTACK_ACK.
+    bool bNoRealTarget = false;
     if (dwDefenseID == 0) {
         dwDefenseID = dwAttackID;
         bDefenseType = 1; // OBJTYPE_PC
+        bNoRealTarget = true;
     }
     std::vector<BYTE> ackBuf(4 + 38);
     BYTE* p = ackBuf.data() + 4;
@@ -951,6 +953,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                     // é¨èèèé·è¤èé
                     WORD wAoeCenterX = pAttacker ? pAttacker->wPosX : wAttackPosX;
                     WORD wAoeCenterY = pAttacker ? pAttacker->wPosY : wAttackPosY;
+                    float splashRange = (pMugongData && pMugongData->wAttackRange > 0) ? (float)pMugongData->wAttackRange : 20.0f;
                     
                     LOG("[MugongHandler] [AOE-Monster] Skill ID: " + std::to_string(dwMugongID) + " Attacker OID: " + std::to_string(dwAttackID) + " Pos: (" + std::to_string(wAoeCenterX) + "," + std::to_string(wAoeCenterY) + ")");
 
@@ -966,7 +969,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                         float dist = sqrtf(dx * dx + dy * dy);
                         
                         LOG("[MugongHandler] [AOE-Monster] -> Mon OID: " + std::to_string(pMon->dwObjectID) + " Pos: (" + std::to_string(pMon->wPosX) + "," + std::to_string(pMon->wPosY) + ") Dist: " + std::to_string(dist));
-                        if (dist <= 10.0f) {
+                        if (dist <= splashRange) {
                             splashMonsters.push_back(pMon);
                             if (splashMonsters.size() >= 5) break; // ¤°5
                         }
@@ -1087,7 +1090,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                         float dist = sqrtf(dx * dx + dy * dy);
                         
                         LOG("[MugongHandler] [AOE-Monster] -> Player OID: " + std::to_string(pPl->dwObjectID) + " Name: " + pPl->szName + " Pos: (" + std::to_string(pPl->wPosX) + "," + std::to_string(pPl->wPosY) + ") Dist: " + std::to_string(dist));
-                        if (dist <= 10.0f) {
+                        if (dist <= splashRange) {
                             splashPlayers.push_back(pPl);
                             if (splashPlayers.size() >= 5) break; // ¤°5
                         }
@@ -1206,7 +1209,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
             }
         }
     }
-    else if (!isBuff && dwMugongID != 64 && bDefenseType == 1) {
+    else if (!isBuff && dwMugongID != 64 && bDefenseType == 1 && !bNoRealTarget) {
         // PvP (Player vs Player) ¤¤
         if (g_MapInstances.count(playerMapID)) {
             CMapInstance* mapInst = g_MapInstances[playerMapID];
@@ -1214,6 +1217,9 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
             sServerObject* pTarget = mapInst->GetPlayer(dwDefenseID);
             if (pTarget) {
                 PlayerData* pAttacker = mapInst->GetPlayer(dwAttackID);
+
+                // 防止群攻自杀：若目标是自己，跳过主目标伤害，仅执行 AOE 溅射
+                if (dwDefenseID == dwAttackID) goto pvp_aoe_only;
                 
                 // §±èè
                 DWORD hpSacrificed = 0;
@@ -1320,12 +1326,14 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                     LOG("[MugongHandler] PvP Debuff Applied skill " + std::to_string(dwMugongID) + " to target player " + std::to_string(dwDefenseID));
                 }
 
+                pvp_aoe_only:
                 // AOE / Splash Damage Logic (Class 6 skills) - PVP Target AOE (° Debuff )
                 sMugongTemplate* sTpl = MugongManager::GetInstance()->GetTemplate(dwMugongID);
                 if (IsAoeSkill(dwMugongID, sTpl)) {
                     // é¨èèèé·è¤PC/èé
                     WORD wAoeCenterX = pAttacker ? pAttacker->wPosX : wAttackPosX;
                     WORD wAoeCenterY = pAttacker ? pAttacker->wPosY : wAttackPosY;
+                    float splashRange = (pMugongData && pMugongData->wAttackRange > 0) ? (float)pMugongData->wAttackRange : 20.0f;
                     
                     LOG("[MugongHandler] [AOE-PvP] Skill ID: " + std::to_string(dwMugongID) + " Attacker OID: " + std::to_string(dwAttackID) + " Pos: (" + std::to_string(wAoeCenterX) + "," + std::to_string(wAoeCenterY) + ")");
 
@@ -1341,7 +1349,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                         float dist = sqrtf(dx * dx + dy * dy);
                         
                         LOG("[MugongHandler] [AOE-PvP] -> Mon OID: " + std::to_string(pMon->dwObjectID) + " Pos: (" + std::to_string(pMon->wPosX) + "," + std::to_string(pMon->wPosY) + ") Dist: " + std::to_string(dist));
-                        if (dist <= 10.0f) {
+                        if (dist <= splashRange) {
                             splashMonsters.push_back(pMon);
                             if (splashMonsters.size() >= 5) break;
                         }
@@ -1461,7 +1469,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                         float dist = sqrtf(dx * dx + dy * dy);
                         
                         LOG("[MugongHandler] [AOE-PvP] -> Player OID: " + std::to_string(pPl->dwObjectID) + " Name: " + pPl->szName + " Pos: (" + std::to_string(pPl->wPosX) + "," + std::to_string(pPl->wPosY) + ") Dist: " + std::to_string(dist));
-                        if (dist <= 10.0f) {
+                        if (dist <= splashRange) {
                             splashPlayers.push_back(pPl);
                             if (splashPlayers.size() >= 5) break;
                         }

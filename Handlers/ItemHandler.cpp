@@ -1,7 +1,9 @@
 #include "ItemHandler.h"
 #include "../DB/CharacterDB.h"
+#include "../DB/GameDataDB.h"
 #include "../DB/ItemDB.h"
 #include "../GameObjects/MugongManager.h"
+#include "ItemSerializer.h"
 #include "../GameObjects/TitleManager.h"
 #include "../GameObjects/DropManager.h"
 #include <set>
@@ -16,6 +18,8 @@ extern std::map<DWORD, CMapInstance*> g_MapInstances;
 
 // 外部声明，用于打开随身仓库
 void OnItemListInBankReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);
+// 外部声明，用于 Remove+Add 模式刷新客户端物品数据（定义在 RebuildItemHandler.cpp）
+void SendItemRefresh(SOCKET clientSocket, DWORD dwItemID, BYTE bSackID, BYTE bSackPos);
 
 void SendCharPremiumList(SOCKET clientSocket, DWORD charID) {
     if (charID == 0) return;
@@ -127,123 +131,18 @@ void OnItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
         ItemDB::GetInstance().GetFullSackItems(charID, posCond, rows);
         
         for (auto& row : rows) {
-            int pos = row.bSackPos, itemid = row.dwItemID, vis = row.wVisualID, type = row.bType, kind = row.bKind;
-            int lvl = row.wLevel, cost = row.dwCost, dat18 = row.nData18, dat19 = row.nData19;
-            int refid = row.wRefID, amount = row.wAmount;
-            int dat20 = row.nData20, dat21 = row.nData21, dat25 = row.nData25;
-            int d[17]; for (int i=0;i<17;i++) d[i]=row.d[i];
-            
-            int nd1 = 0, nd2 = 0, nd3 = 0, nd4 = 0, nd5 = 0;
-            BYTE charType = 1;
-            if (g_ItemTemplates.count(refid)) {
-                if (type == 0) type = g_ItemTemplates[refid].bType;
-                if (kind == 0) kind = g_ItemTemplates[refid].bKind;
-                if (vis == 0) vis = g_ItemTemplates[refid].wVisualID;
-                if (lvl == 0) lvl = g_ItemTemplates[refid].wLevel;
-                if (cost == 0) cost = g_ItemTemplates[refid].dwCost;
-                if (amount == 0) amount = g_ItemTemplates[refid].wAmount;
-                charType = g_ItemTemplates[refid].bCharType;
-
-                nd1 = row.nBasicData1 != 0 ? row.nBasicData1 : g_ItemTemplates[refid].nBasicData1;
-                nd2 = row.nBasicData2 != 0 ? row.nBasicData2 : g_ItemTemplates[refid].nBasicData2;
-                nd3 = row.nBasicData3 != 0 ? row.nBasicData3 : g_ItemTemplates[refid].nBasicData3;
-                nd4 = row.nBasicData4 != 0 ? row.nBasicData4 : g_ItemTemplates[refid].nBasicData4;
-                nd5 = row.nBasicData5 != 0 ? row.nBasicData5 : g_ItemTemplates[refid].nBasicData5;
-                if (d[0] == -9999) d[0] = g_ItemTemplates[refid].nData1;
-                if (d[1] == -9999) d[1] = g_ItemTemplates[refid].nData2;
-                if (d[2] == -9999) d[2] = g_ItemTemplates[refid].nData3;
-                if (d[3] == -9999) d[3] = g_ItemTemplates[refid].nData4;
-                if (d[4] == -9999) d[4] = g_ItemTemplates[refid].nData5;
-                if (d[5] == -9999) d[5] = g_ItemTemplates[refid].nData6;
-                if (d[6] == -9999) d[6] = g_ItemTemplates[refid].nData7;
-                if (d[7] == -9999) d[7] = g_ItemTemplates[refid].nData8;
-                if (d[8] == -9999) d[8] = g_ItemTemplates[refid].nData9;
-                if (d[9] == -9999) d[9] = g_ItemTemplates[refid].nData10;
-            }
-            for (int i=0;i<17;i++) { if (d[i]==-9999) d[i]=0; }
+            int pos = row.bSackPos;
+            int type = row.bType, refid = row.wRefID;
+            if (type == 0 && g_ItemTemplates.count(refid)) type = g_ItemTemplates[refid].bType;
             
             std::string itemName(row.szName);
             if (itemName.empty() && g_ItemTemplates.count(refid)) itemName = g_ItemTemplates[refid].szName;
-
-            std::vector<BYTE> bi; 
-            auto pushDWord = [&](DWORD dw) { bi.push_back(dw & 0xFF); bi.push_back((dw>>8)&0xFF); bi.push_back((dw>>16)&0xFF); bi.push_back((dw>>24)&0xFF); };
-            auto pushWord = [&](WORD w) { bi.push_back(w & 0xFF); bi.push_back((w>>8)&0xFF); };
-            auto pushByte = [&](BYTE b) { bi.push_back(b); };
-            pushByte(sackId == 0 ? pos : (pos - 20 - (sackId - 1) * 40));
-            pushDWord(itemid); pushWord(refid);
-            pushByte(type); pushByte(kind); pushWord(vis);
             
-            pushWord(itemName.length());
-            for (char ch : itemName) pushByte(ch);
-            
-            pushDWord(cost); pushWord(lvl); pushByte(charType); // bNeedCharType
-            pushWord(amount);
-            
-            if (type >= 1 && type <= 9) { // Weapon/Cloth..Bongin
-                pushWord(nd1); pushWord(nd2); pushWord(nd3); pushWord(nd4); pushWord(nd5); // BasicData 1-5
-                pushByte(d[0]); // DecrDurRate
-                pushWord(d[1]); pushWord(d[2]); // CurDur, MaxDur
-                pushDWord(d[3]); pushDWord(d[4]); pushDWord(d[5]); pushWord(d[6]); pushWord(d[7]); // Attacks (AtkPwr, DefPwr, AtkRating upgraded to DWORD)
-                pushDWord(d[8]); pushDWord(d[9]); pushWord(d[10]); pushWord(d[11]); pushWord(d[12]); // HP/IP (IncrHp, IncrIp upgraded to DWORD)
-                pushByte(dat18); pushByte(dat19); // bRarity, bStxType
-                pushByte(d[13]); pushByte(d[14]); pushByte(d[15]); pushByte(d[16]); // Limit/Modify/Repair/Discount
-                
-                if (type == 9) { // BONGIN
-                    pushDWord(0); pushWord(0); pushWord(0); pushWord(0); pushWord(0);
-                } else if (type == 8) { // SOCKET
-                    pushByte(0); pushByte(0); pushByte(0); pushByte(0); pushByte(0); pushByte(0); pushByte(0); pushByte(0);
-                } else {
-                    pushByte(0); // bPuzzleType
-                }
-                if (type >= 1 && type <= 4) { pushByte(dat19); pushByte(dat20); pushByte(dat21); pushWord(dat25); } // Sockets
-            } else {
-                switch (type) {
-                    case 11: case 12: case 13: case 14: case 17:
-                        pushByte(0); pushWord(d[1]); pushWord(d[2]); break;
-                    case 15:
-                        pushByte(d[0]); pushWord(d[1]); pushWord(d[2]); pushByte(0); pushByte(0); break;
-                    case 16:
-                        pushWord(0); pushByte(0); pushWord(0); pushByte(0); pushWord(0); break;
-                    case 18:
-                        pushByte(0); pushDWord(0); pushWord(d[1]); pushWord(d[2]); pushByte(0); break;
-                    case 19:
-                        pushWord(0); pushWord(0); break;
-                    case 20:
-                        pushByte(0); pushDWord(0); break;
-                    case 21: {
-                        DWORD mid = nd2;
-                        sMugongTemplate* mg = MugongManager::GetInstance()->GetTemplate(mid);
-                        BYTE typeVal = mg ? mg->bType : 0;
-                        BYTE kindVal = mg ? mg->bKind : 0;
-                        pushWord(lvl); pushDWord(mid); pushByte(typeVal); pushByte(kindVal); pushByte(1); break;
-                    }
-                    case 22:
-                        pushDWord(nd2); pushByte((BYTE)nd3); pushWord((WORD)nd4); pushWord((WORD)nd5); break;
-                    case 23:
-                        pushDWord(0); pushDWord(0); pushDWord(0); pushByte(0); pushByte(0); break;
-                    case 25:
-                        pushByte(0); pushWord(0); pushWord(0); break;
-                    case 27:
-                        pushByte(0); pushDWord(0); pushByte(0); pushByte(0); pushByte(0); pushByte(0); pushDWord(0); break;
-                    case 29:
-                        pushWord(0); pushWord(0); break;
-                    case 32:
-                        pushWord(0); pushWord(d[1]); pushWord(d[2]); pushDWord(0); break;
-                    case 31:
-                        pushByte(0); pushWord(0); pushWord(0); break;
-                    case 34:
-                        pushDWord(0); pushByte(0); break;
-                }
-            }
-            pushWord((WORD)dat25); // wRebuithValue - 觉醒值(nData25)
+            std::vector<BYTE> bi;
+            bi.push_back(sackId == 0 ? pos : (pos - 20 - (sackId - 1) * 40));
+            SerializeItemData(row, bi);
+            WORD rebVal = (WORD)row.nData25; bi.push_back(rebVal & 0xFF); bi.push_back(rebVal >> 8); // wRebuithValue
             LOG("[ItemHandler] Item pos=" + std::to_string(pos) + " type=" + std::to_string(type) + " refid=" + std::to_string(refid) + " name=" + itemName + " size=" + std::to_string(bi.size()));
-            {   // Hex dump for debugging
-                std::string hex;
-                for (size_t h = 0; h < bi.size(); h++) {
-                    char tmp[8]; sprintf(tmp, "%02X ", bi[h]); hex += tmp;
-                }
-                LOG("[ItemHandler] HEX: " + hex);
-            }
             items.push_back(bi);
         }
     }
@@ -426,11 +325,31 @@ void OnItemMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
                         pStr = cpEq.wStr; pDex = cpEq.wDex; pVit = cpEq.wVit; pSus = cpEq.wSus;
                     }
 
-                    if (pLevel < pTpl->nBasicData1 || 
-                        (pTpl->bCharType != 0 && pCharType != pTpl->bCharType) ||
-                        pDex < pTpl->nBasicData2 || pStr < pTpl->nBasicData3 ||
-                        pSus < pTpl->nBasicData4 || pVit < pTpl->nBasicData5) {
-                        LOG("[ItemHandler] Requirements not met for dwItemID=" + std::to_string(dwSrcObjID));
+                    // 从 ITEM 表读取物品实例的实际需求值（改造后可能与模板不同）
+                    int reqLv = pTpl->nBasicData1, reqDex = pTpl->nBasicData2;
+                    int reqStr = pTpl->nBasicData3, reqSus = pTpl->nBasicData4, reqVit = pTpl->nBasicData5;
+                    BYTE reqCharType = pTpl->bCharType;
+                    ItemDB::FullItemRow itemRow;
+                    if (ItemDB::GetInstance().GetFullItemData(dwSrcObjID, itemRow)) {
+                        // ITEM 表有实例数据时，优先使用实例的需求值
+                        reqLv = itemRow.nBasicData1;
+                        reqDex = itemRow.nBasicData2;
+                        reqStr = itemRow.nBasicData3;
+                        reqSus = itemRow.nBasicData4;
+                        reqVit = itemRow.nBasicData5;
+                    }
+
+                    if (pLevel < reqLv || 
+                        (reqCharType != 0 && pCharType != reqCharType) ||
+                        pDex < reqDex || pStr < reqStr ||
+                        pSus < reqSus || pVit < reqVit) {
+                        LOG("[ItemHandler] Requirements not met for dwItemID=" + std::to_string(dwSrcObjID) +
+                            " Lv:" + std::to_string(pLevel) + "/" + std::to_string(reqLv) +
+                            " Str:" + std::to_string(pStr) + "/" + std::to_string(reqStr) +
+                            " Dex:" + std::to_string(pDex) + "/" + std::to_string(reqDex) +
+                            " Vit:" + std::to_string(pVit) + "/" + std::to_string(reqVit) +
+                            " Sus:" + std::to_string(pSus) + "/" + std::to_string(reqSus) +
+                            " CharType:" + std::to_string(pCharType) + "/" + std::to_string(reqCharType));
                         return;
                     }
                 }
@@ -589,7 +508,16 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
     sItemTemplate& tpl = g_ItemTemplates[wRefID];
     LOG("[ItemHandler] Using item wRefID: " + std::to_string(wRefID) + " bType: " + std::to_string(tpl.bType));
 
-
+    // 号角物品（bType=32, nBasicData2 ∈ {2,3,4,8}）不应由 UseItem 处理：
+    // 客户端本地弹出消息输入框后走 ChatReq 路径，由 ChatHandler 扣耐久。
+    // 如果服务端仍收到 UseItem 请求，说明物品序列化异常，静默拒绝即可。
+    if (tpl.bType == 32) {
+        int funcID = tpl.nBasicData2;
+        if (funcID == 2 || funcID == 3 || funcID == 4 || funcID == 8) {
+            LOG("[ItemHandler] 号角物品不由 UseItem 处理，忽略: funcID=" + std::to_string(funcID));
+            return;
+        }
+    }
 
     // Consumable types: 12 (Potion), 21 (Skill Book), 16 (Teleport), etc.
     if (tpl.bType == 21 || tpl.bType == 12 || tpl.bType == 16 || tpl.bType == 17 || tpl.bType == 19 || tpl.bType == 22 || tpl.bType == 23 || tpl.bType == 33 || tpl.bType == 32) {
@@ -979,8 +907,19 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
             LOG("[ItemHandler] Teleporting using map location: destMap=" + std::to_string(destMap) + " pos=(" + std::to_string(startX) + "," + std::to_string(startY) + ")");
         }
 
-
-
+        // 坐标边界安全校验：遁身符目标坐标不得超出目标地图的 wWidth/wHeight
+        {
+            GameDataDB::MapInfo destBounds;
+            if (GameDataDB::GetInstance().GetMapInfo(destMap, destBounds)) {
+                if (startX >= destBounds.wWidth || startY >= destBounds.wHeight) {
+                    LOG("[ItemHandler] WARNING: Scroll dest (" + std::to_string(startX) + "," + std::to_string(startY) + ") OUT OF BOUNDS for MapID " + std::to_string(destMap) + " (size " + std::to_string(destBounds.wWidth) + "x" + std::to_string(destBounds.wHeight) + "). Resetting to spawn!");
+                    int spX2 = 0, spY2 = 0;
+                    CharacterDB::GetInstance().GetSpawnPosition(destMap, spX2, spY2);
+                    if (spX2 > 0 && spY2 > 0) { startX = (WORD)spX2; startY = (WORD)spY2; }
+                    else { startX = destBounds.wWidth / 2; startY = destBounds.wHeight / 2; }
+                }
+            }
+        }
 
         CharacterDB::GetInstance().SavePosition(charID, startX, startY, destMap);
 
@@ -1467,4 +1406,123 @@ void SendPetListAck(SOCKET clientSocket, DWORD charID) {
     SafeSend(clientSocket, (const char*)ackBuf.data(), (int)ackBuf.size(), 0);
 }
 
+
+// ==========================================
+// 遁身符 "记录当前位置" 处理器
+// CS_IM_REMARKITEM_REQ (0x4249) → CS_IM_REMARKITEM_ACK (0x424A)
+// 客户端 Payload: bAction(1) + dwItemID(4) + bSackID(1) + bSackPos(1) = 7 bytes
+// ACK Payload:    bResult(1)
+//   0 = SUCCESS, 1 = NOTFOUND, 2 = INVALIDITEM, 3 = INVALIDPOSITION, 4 = FAIL
+// ==========================================
+void OnRemarkItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
+    // 快捷发送 ACK 的闭包
+    auto sendAck = [&](BYTE bResult) {
+        std::vector<BYTE> ackBuf(4);
+        ackBuf.push_back(bResult);
+        PACKET_HEADER* head = (PACKET_HEADER*)ackBuf.data();
+        head->id = 0x424A; // CS_IM_REMARKITEM_ACK
+        head->payloadSize = 1;
+        EncryptPacket(ackBuf.data(), 0x42);
+        SafeSend(clientSocket, (const char*)ackBuf.data(), (int)ackBuf.size(), 0);
+    };
+
+    if (totalSize < 7) {
+        LOG("[ItemHandler] OnRemarkItemReq: payload 过短: " + std::to_string(totalSize));
+        sendAck(4); // FAIL
+        return;
+    }
+
+    BYTE bAction = payload[0];
+    DWORD dwItemID = *(DWORD*)(payload + 1);
+    BYTE bSackID = payload[5];
+    BYTE bSackPos = payload[6];
+
+    LOG("[ItemHandler] OnRemarkItemReq: charID=" + std::to_string(charID)
+        + " action=" + std::to_string(bAction)
+        + " dwItemID=" + std::to_string(dwItemID));
+
+    // 仅处理 ACT_REMARKITEM_PORTAL (bAction == 1)
+    if (bAction != 1) {
+        LOG("[ItemHandler] OnRemarkItemReq: 未知 action: " + std::to_string(bAction));
+        sendAck(4); // FAIL
+        return;
+    }
+
+    // 1. 查找物品实例，获取 wRefID
+    WORD wRefID = 0;
+    {
+        ItemDB::ItemBasicInfo ib;
+        if (!ItemDB::GetInstance().GetItemBasicInfo(dwItemID, ib)) {
+            LOG("[ItemHandler] OnRemarkItemReq: 物品不存在 dwItemID=" + std::to_string(dwItemID));
+            sendAck(1); // NOTFOUND
+            return;
+        }
+        wRefID = ib.wRefID;
+    }
+
+    // 2. 校验物品类型：必须是 bType=22(PORTAL) 且 bKind=1（遁身符专属子类）
+    if (g_ItemTemplates.find(wRefID) == g_ItemTemplates.end()) {
+        LOG("[ItemHandler] OnRemarkItemReq: 模板不存在 wRefID=" + std::to_string(wRefID));
+        sendAck(1); // NOTFOUND
+        return;
+    }
+    sItemTemplate& tpl = g_ItemTemplates[wRefID];
+    if (tpl.bType != 22 || tpl.bKind != 1) {
+        LOG("[ItemHandler] OnRemarkItemReq: 物品类型不符 bType=" + std::to_string(tpl.bType)
+            + " bKind=" + std::to_string(tpl.bKind));
+        sendAck(2); // INVALIDITEM
+        return;
+    }
+
+    // 3. 获取玩家当前位置
+    DWORD curMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+    WORD curPosX = 0, curPosY = 0;
+
+    if (g_MapInstances.count(curMapID)) {
+        std::lock_guard<std::mutex> lock(g_MapInstances[curMapID]->GetMutex());
+        PlayerData* pObj = g_MapInstances[curMapID]->GetPlayer(charID + 400000000);
+        if (pObj) {
+            curPosX = pObj->wPosX;
+            curPosY = pObj->wPosY;
+        }
+    }
+
+    if (curPosX == 0 && curPosY == 0) {
+        LOG("[ItemHandler] OnRemarkItemReq: 无法获取玩家坐标");
+        sendAck(4); // FAIL
+        return;
+    }
+
+    // 4. 禁止在特殊地图记录坐标（副本/Boss房等）
+    //    mapID: 9=天皇殿, 10/12/13/14/15 = 特殊副本区域
+    if (curMapID == 9 || curMapID == 10 || curMapID == 12 ||
+        curMapID == 13 || curMapID == 14 || curMapID == 15) {
+        LOG("[ItemHandler] OnRemarkItemReq: 当前地图禁止记录 mapID=" + std::to_string(curMapID));
+        sendAck(3); // INVALIDPOSITION
+        return;
+    }
+
+    // 5. 将当前位置写入 ITEM 表的 nBasicData2(地图ID)、nBasicData4(X)、nBasicData5(Y)
+    std::string updateSQL =
+        "UPDATE ITEM SET nBasicData2 = " + std::to_string(curMapID) +
+        ", nBasicData4 = " + std::to_string(curPosX) +
+        ", nBasicData5 = " + std::to_string(curPosY) +
+        " WHERE dwItemID = " + std::to_string(dwItemID);
+
+    bool dbOk = DBHelper::GetInstance().ExecuteUpdate(updateSQL);
+    if (!dbOk) {
+        LOG("[ItemHandler] OnRemarkItemReq: DB更新失败 dwItemID=" + std::to_string(dwItemID));
+        sendAck(4); // FAIL
+        return;
+    }
+
+    LOG("[ItemHandler] OnRemarkItemReq: 坐标记录成功! dwItemID=" + std::to_string(dwItemID)
+        + " mapID=" + std::to_string(curMapID)
+        + " pos=(" + std::to_string(curPosX) + "," + std::to_string(curPosY) + ")");
+
+    // 6. 刷新客户端物品数据：Remove+Add 模式强制客户端重载物品的 m_dwPotalMapID/m_wPosX/m_wPosY
+    SendItemRefresh(clientSocket, dwItemID, bSackID, bSackPos);
+
+    sendAck(0); // SUCCESS
+}
 

@@ -8,6 +8,7 @@
 #include "../Network/SystemMessage.h"
 #include "../Network/PacketRouter.h"
 #include "../ServerCore.h"
+#include "../GameObjects/PlayerManager.h"
 
 // 每件装备允许的最大改造总次数（成功+失败均计入）
 static const int MAX_REBUILD_ATTEMPTS = 201;
@@ -119,10 +120,10 @@ void SendItemRefresh(SOCKET clientSocket, DWORD dwItemID, BYTE bSackID, BYTE bSa
                 case 21: pushWord(bi, lvl); pushDWord(bi, nd2); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 1); break;
                 case 22: pushDWord(bi, nd2); pushByte(bi, (BYTE)nd3); pushWord(bi, (WORD)nd4); pushWord(bi, (WORD)nd5); break;
                 case 23: pushDWord(bi, 0); pushDWord(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); break;
-                case 25: pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
+                case 25: pushByte(bi, (BYTE)kind); pushWord(bi, (WORD)nd2); pushWord(bi, (WORD)nd3); break;
                 case 27: pushByte(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushDWord(bi, 0); break;
                 case 29: pushWord(bi, 0); pushWord(bi, 0); break;
-                case 32: pushWord(bi, 0); pushWord(bi, d2); pushWord(bi, d3); pushDWord(bi, 0); break;
+                case 32: pushWord(bi, (WORD)nd2); pushWord(bi, (WORD)nd3); pushWord(bi, (WORD)nd3); pushDWord(bi, 0); break;
                 case 31: pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
                 case 34: pushDWord(bi, 0); pushByte(bi, 0); break;
             }
@@ -200,7 +201,7 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
     bool itemValid = false;
     std::string itemName = "", baseItemName = "";
     int currentRebuild = 0, currentAppend = 0, currentAttempts = 0, itemType = 0, reqLevel = 1;
-    int baseData1 = 0, baseData2 = 0, baseData3 = 0, baseData4 = 0, baseData5 = 0;
+    int baseData1 = 0, baseData2 = 0, baseData3 = 0, baseData4 = 0, baseData5 = 0, baseData9 = 0;
     
     // Verify ownership and load item data
     if (!ItemDB::GetInstance().IsSackItemOwned(charID, dwItemID)) {
@@ -227,6 +228,7 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
             baseData3 = g_ItemTemplates[refid].nData3;
             baseData4 = g_ItemTemplates[refid].nData4;
             baseData5 = g_ItemTemplates[refid].nData5;
+            baseData9 = g_ItemTemplates[refid].nData9;
         }
         // 白名单校验：拒绝不可强化的物品类型
         BYTE itemKind = fir.bKind;
@@ -417,10 +419,13 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
 
         int finalData4 = baseData4;
         int finalData5 = baseData5;
-        int finalData9 = 0;
+        int finalData9 = baseData9; // 修正：使用模板基础值而非0，防止改造覆盖装备原始HP加成
         
-        if (itemType == 1) { finalData4 += totalWujingBonus; } 
+        // 武器：乌晶加攻击力(d4)，素晶也加攻击力(d4)
+        if (itemType == 1) { finalData4 += totalWujingBonus + totalSujingBonus; } 
+        // 防具（衣服/帽子/鞋子）：乌晶加防御力(d5)，素晶加HP(d9)
         else if (itemType >= 2 && itemType <= 4) { finalData5 += totalWujingBonus; finalData9 += totalSujingBonus; } 
+        // 首饰（戒指/项链）：乌晶加防御力(d5)，素晶加攻击力(d4)
         else { finalData5 += totalWujingBonus; finalData4 += totalSujingBonus; }
 
         ItemDB::GetInstance().UpsertRebuildData(dwItemID, finalData4, finalData5, finalData9, currentRebuild, currentAppend, currentAttempts);
@@ -467,6 +472,10 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
         SafeSend(clientSocket, (const char*)itemBreakPacket.data(), itemBreakPacket.size(), 0);
     } else {
         SendItemRefresh(clientSocket, dwItemID, bSackID, bSackPos);
+        // 改造成功后，如果装备已穿戴（bSackPos < 20），需重算角色属性面板
+        if (isSuccess && bSackPos < 20) {
+            PlayerManager::GetInstance().RecalculateStats(charID, true);
+        }
     }
 
     // 2d. 通过聊天系统消息向玩家显示累计改造次数

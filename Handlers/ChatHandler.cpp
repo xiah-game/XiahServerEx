@@ -4,7 +4,13 @@
 #include "../Network/SessionMgr.h"
 #include "../GameObjects/MapInstance.h"
 #include "../DB/CharacterDB.h"
+#include "../DB/ItemDB.h"
+#include "../DBHelper.h"
+#include "ItemSerializer.h"
 #include <cstring>
+
+// 外部声明：RebuildItemHandler.cpp 中已实现的物品刷新函数
+void SendItemRefresh(SOCKET clientSocket, DWORD dwItemID, BYTE bSackID, BYTE bSackPos);
 
 // =========================================================
 // sString Helper Functions
@@ -79,6 +85,68 @@ static std::vector<BYTE> BuildChatAck(
 }
 
 // =========================================================
+// 构建号角聊天 ACK 包（比普通聊天多 8 字节坐标数据）
+// 客户端接收格式: sender(4) + type(1) + content(sString)
+//   + senderName(sString) + dwMapID(4) + wPosX(2) + wPosY(2)
+// =========================================================
+static std::vector<BYTE> BuildSayItemAck(
+    DWORD dwSenderObjectID,
+    BYTE bType,
+    const std::string& content,
+    const std::string& senderName,
+    DWORD dwMapID,
+    WORD wPosX,
+    WORD wPosY)
+{
+    std::vector<BYTE> buf;
+    buf.resize(4, 0);
+
+    // sender (DWORD)
+    DWORD val = dwSenderObjectID;
+    buf.push_back(val & 0xFF); buf.push_back((val >> 8) & 0xFF);
+    buf.push_back((val >> 16) & 0xFF); buf.push_back((val >> 24) & 0xFF);
+
+    // type (BYTE)
+    buf.push_back(bType);
+
+    // content + senderName (sString)
+    WriteSString(buf, content);
+    WriteSString(buf, senderName);
+
+    // 号角专属尾部：dwMapID(4) + wPosX(2) + wPosY(2)
+    buf.push_back(dwMapID & 0xFF); buf.push_back((dwMapID >> 8) & 0xFF);
+    buf.push_back((dwMapID >> 16) & 0xFF); buf.push_back((dwMapID >> 24) & 0xFF);
+    buf.push_back(wPosX & 0xFF); buf.push_back((wPosX >> 8) & 0xFF);
+    buf.push_back(wPosY & 0xFF); buf.push_back((wPosY >> 8) & 0xFF);
+
+    // Fill header
+    WORD packetID = CS_CH_CHAT_ACK_ID;
+    WORD payloadSize = (WORD)(buf.size() - 4);
+    memcpy(&buf[0], &packetID, 2);
+    memcpy(&buf[2], &payloadSize, 2);
+
+    return buf;
+}
+
+// =========================================================
+// 号角聊天类型 → 所需的 nBasicData2 功能编号映射
+// =========================================================
+static int GetRequiredFunctionID(BYTE chatType) {
+    switch (chatType) {
+        case CT_SAYITEM_CELL:    return 2;  // 百里传音
+        case CT_SAYITEM_MAP:     return 3;  // 千里传音
+        case CT_SAYITEM_CHANNEL: return 4;  // 万里传音
+        case CT_SAYITEM_GOLD:    return 8;  // 黄金号角
+        default: return 0;
+    }
+}
+
+static bool IsSayItemType(BYTE bType) {
+    return bType == CT_SAYITEM_CELL || bType == CT_SAYITEM_MAP ||
+           bType == CT_SAYITEM_CHANNEL || bType == CT_SAYITEM_GOLD;
+}
+
+// =========================================================
 // Get player name from sServerObject
 // =========================================================
 static std::string GetPlayerName(DWORD dwCharID) {
@@ -131,14 +199,23 @@ void OnChatReq(SOCKET clientSocket, DWORD dwCharID, BYTE* pPayload, WORD wSize) 
     // Read content (sString)
     std::string content = ReadSString(ptr, remaining);
 
-    // Read nickname (sString) - used for whisper-by-name
-    std::string szNickName = ReadSString(ptr, remaining);
+    // 号角聊天的尾部字段与普通聊天不同：
+    // 普通聊天: szNickName(sString)
+    // 号角聊天: bSackID(BYTE) + bSackPos(BYTE)
+    std::string szNickName;
+    BYTE hornSackID = 0, hornSackPos = 0;
+    if (IsSayItemType(bType)) {
+        if (remaining >= 2) {
+            hornSackID = *ptr; ptr++; remaining--;
+            hornSackPos = *ptr; ptr++; remaining--;
+        }
+    } else {
+        szNickName = ReadSString(ptr, remaining);
+    }
 
     // Sender info
     DWORD dwSenderObjectID = dwCharID + 400000000;
     std::string senderName = GetPlayerName(dwCharID);
-    
-
 
     LOG("[CHAT] Type=" + std::to_string(bType) +
         " Sender=" + senderName +
@@ -253,6 +330,131 @@ void OnChatReq(SOCKET clientSocket, DWORD dwCharID, BYTE* pPayload, WORD wSize) 
                 SafeSend(memberSocket, (const char*)sendBuf.data(), (int)sendBuf.size(), 0);
             }
         }
+        break;
+    }
+
+    // =====================================================
+    // CT_SAYITEM_CELL/MAP/CHANNEL/GOLD — 号角物品聊天
+    // =====================================================
+    case CT_SAYITEM_CELL:
+    case CT_SAYITEM_MAP:
+    case CT_SAYITEM_CHANNEL:
+    case CT_SAYITEM_GOLD:
+    {
+        // 1. 客户端发来的 sackPos 是页内相对偏移，需换算为 DB 中的绝对位置
+        //    sackID=1 → 基址 20, sackID=2 → 基址 60, sackID=3 → 基址 100
+        BYTE absolutePos = hornSackPos;
+        if (hornSackID == 1) absolutePos = 20 + hornSackPos;
+        else if (hornSackID == 2) absolutePos = 60 + hornSackPos;
+        else if (hornSackID == 3) absolutePos = 100 + hornSackPos;
+
+        DWORD dwHornItemID = ItemDB::GetInstance().GetItemAtSackPos(dwCharID, absolutePos);
+        if (dwHornItemID == 0) {
+            LOG("[CHAT-HORN] 物品未找到: charID=" + std::to_string(dwCharID) + " sackPos=" + std::to_string(hornSackPos));
+            break;
+        }
+
+        // 2. 校验物品类型：bType=32 且功能编号匹配
+        WORD hornRefID = ItemDB::GetInstance().GetItemRefID(dwHornItemID);
+        if (hornRefID == 0 || !g_ItemTemplates.count(hornRefID)) {
+            LOG("[CHAT-HORN] 物品模板不存在: refID=" + std::to_string(hornRefID));
+            break;
+        }
+        sItemTemplate& hornTpl = g_ItemTemplates[hornRefID];
+        if (hornTpl.bType != 32) {
+            LOG("[CHAT-HORN] 物品类型错误: bType=" + std::to_string(hornTpl.bType) + " 期望32");
+            break;
+        }
+        int requiredFunc = GetRequiredFunctionID(bType);
+        // ITEM 实例的 nBasicData2 可能为 0（未从模板拷贝），fallback 到模板值
+        int actualFunc = ItemDB::GetInstance().GetItemNBasicData(dwHornItemID, 2);
+        if (actualFunc == 0) actualFunc = hornTpl.nBasicData2;
+        if (actualFunc != requiredFunc) {
+            LOG("[CHAT-HORN] 功能编号不匹配: actual=" + std::to_string(actualFunc) + " required=" + std::to_string(requiredFunc));
+            break;
+        }
+
+        // 3. 检查并扣减耐久 (ITEM.nBasicData3)
+        // 如果 ITEM 实例的 nBasicData3=0 但模板有值，先从模板初始化
+        int curDur = ItemDB::GetInstance().GetItemNBasicData(dwHornItemID, 3);
+        if (curDur == 0 && hornTpl.nBasicData3 > 0) {
+            // 首次使用：从模板初始化耐久到 ITEM 实例
+            DBHelper::GetInstance().ExecuteUpdate(
+                "UPDATE ITEM SET nBasicData3 = " + std::to_string(hornTpl.nBasicData3) +
+                " WHERE dwItemID = " + std::to_string(dwHornItemID));
+            curDur = hornTpl.nBasicData3;
+            LOG("[CHAT-HORN] 首次使用，从模板初始化耐久: " + std::to_string(curDur));
+        }
+        if (curDur <= 0) {
+            LOG("[CHAT-HORN] 耐久已耗尽: itemID=" + std::to_string(dwHornItemID));
+            break;
+        }
+        int newDur = ItemDB::GetInstance().DecrementNBasicData3(dwHornItemID);
+        LOG("[CHAT-HORN] 耐久扣减: itemID=" + std::to_string(dwHornItemID) + " " + std::to_string(curDur) + "->" + std::to_string(newDur));
+
+        // 4. 获取发送者位置信息
+        DWORD senderMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+        WORD senderPosX = 0, senderPosY = 0;
+        if (g_MapInstances.count(senderMapID)) {
+            CMapInstance* mapInst = g_MapInstances[senderMapID];
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            sServerObject* pObj = mapInst->GetPlayer(dwSenderObjectID);
+            if (pObj) {
+                senderPosX = pObj->wPosX;
+                senderPosY = pObj->wPosY;
+            }
+        }
+
+        // 5. 构建含坐标的号角 ACK 包
+        // sender 字段客户端当作"频道号"显示（如 "1频道"），使用服务端配置的频道 ID
+        DWORD channelID = g_Config.cachedChannels.empty() ? 1 : (DWORD)g_Config.cachedChannels[0].id;
+        std::vector<BYTE> ackBuf = BuildSayItemAck(
+            channelID, bType, content, senderName,
+            senderMapID, senderPosX, senderPosY);
+
+        // 6. 按范围广播
+        if (bType == CT_SAYITEM_CELL) {
+            // 小范围：仅发送者所在地图 AoI 广播
+            if (g_MapInstances.count(senderMapID)) {
+                CMapInstance* mapInst = g_MapInstances[senderMapID];
+                std::vector<BYTE> sendBuf = ackBuf;
+                EncryptPacket(sendBuf.data(), 0x42);
+                std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+                mapInst->BroadcastPacket(sendBuf);
+            }
+        } else if (bType == CT_SAYITEM_MAP) {
+            // 全地图：发送者所在地图所有玩家
+            EncryptPacket(ackBuf.data(), 0x42);
+            SessionMgr::GetInstance().ForEachSocketInMap(senderMapID, [&](SOCKET s, DWORD) {
+                SafeSend(s, (const char*)ackBuf.data(), (int)ackBuf.size(), 0);
+            });
+        } else {
+            // 全频道：CT_SAYITEM_CHANNEL 和 CT_SAYITEM_GOLD 广播到所有在线玩家
+            EncryptPacket(ackBuf.data(), 0x42);
+            SessionMgr::GetInstance().ForEachSocket([&](SOCKET s) {
+                SafeSend(s, (const char*)ackBuf.data(), (int)ackBuf.size(), 0);
+            });
+        }
+
+        // 7. 耐久刷新 / 销毁
+        if (newDur > 0) {
+            // 复用已验证的 SendItemRefresh（remove+add 模式）刷新客户端物品 tooltip
+            SendItemRefresh(clientSocket, dwHornItemID, hornSackID, hornSackPos);
+        } else {
+            // 8. 耐久归零 → 销毁物品并通知客户端
+            ItemDB::GetInstance().DeleteItemCascade(dwHornItemID);
+            std::vector<BYTE> rmBuf(7);
+            PACKET_HEADER* rmHead = (PACKET_HEADER*)rmBuf.data();
+            rmHead->id = 0x4208;
+            rmHead->payloadSize = 3;
+            rmBuf[4] = hornSackID;
+            rmBuf[5] = hornSackPos;
+            rmBuf[6] = 2;
+            EncryptPacket(rmBuf.data(), 0x42);
+            SafeSend(clientSocket, (const char*)rmBuf.data(), (int)rmBuf.size(), 0);
+            LOG("[CHAT-HORN] 号角耐久归零已销毁: itemID=" + std::to_string(dwHornItemID));
+        }
+
         break;
     }
 

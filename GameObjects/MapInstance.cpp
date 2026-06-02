@@ -651,26 +651,42 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                 obj.wPosX = nx; obj.wPosY = ny;
                 UpdateMonsterGrid(obj.dwObjectID, ox, oy, nx, ny);
                 
-                // Chase destination = player position (monster walks towards player)
-                obj.wDestX = bestPlayer->wPosX;
-                obj.wDestY = bestPlayer->wPosY;
+                // 投射目的地：不使用玩家坐标（太近导致客户端提前到达停步），
+                // 而是沿追击方向投射 40 像素远的虚拟终点，让客户端持续行走
+                WORD projDestX = (WORD)(obj.wPosX + dirX * 40.0f);
+                WORD projDestY = (WORD)(obj.wPosY + dirY * 40.0f);
+                obj.wDestX = projDestX;
+                obj.wDestY = projDestY;
 
-                // Only send move packet when destination changes significantly (player moved) or monster moved far enough (motion heartbeat)
-                if (abs(obj.wDestX - obj.wLastSentDestX) > 3 || abs(obj.wDestY - obj.wLastSentDestY) > 3 ||
-                    abs(obj.wPosX - obj.wLastSentPosX) > 1 || abs(obj.wPosY - obj.wLastSentPosY) > 1) {
+                // 追击发包策略（配合客户端动画防重入，彻底消除小碎步）：
+                //   条件1: 首次开始移动（之前是停步状态）→ 立即发包触发 Walk 动画
+                //   条件2: 方向变化超过 25° → 立即发包更新追击方向
+                //   条件3: 距上次发包 ≥800ms → 定时校正（位置+方向同步）
+                bool isFirstMove = (obj.wLastSentDestX == 0 && obj.wLastSentDestY == 0);
+
+                // 方向变化判定：计算当前方向与上次发包方向的角度差（处理 0°/360° 跨界）
+                int angleDiff = abs((int)wDirection - (int)obj.wLastSentDirection);
+                if (angleDiff > 180) angleDiff = 360 - angleDiff;
+                bool directionChanged = (angleDiff > 25);
+
+                bool timePassed = (tick - obj.dwLastMoveSendTime >= 800);
+
+                if (isFirstMove || directionChanged || timePassed) {
                     obj.wLastSentDestX = obj.wDestX;
                     obj.wLastSentDestY = obj.wDestY;
                     obj.wLastSentPosX = obj.wPosX;
                     obj.wLastSentPosY = obj.wPosY;
+                    obj.dwLastMoveSendTime = tick;
+                    obj.wLastSentDirection = wDirection;
 
                     std::vector<BYTE> ackBuf; ackBuf.resize(4); ackBuf.push_back(0); 
                     DWORD oid = obj.dwObjectID; ackBuf.push_back(oid&0xFF); ackBuf.push_back((oid>>8)&0xFF); ackBuf.push_back((oid>>16)&0xFF); ackBuf.push_back(oid>>24);
                     ackBuf.push_back(obj.bObjectType); 
-                    ackBuf.push_back(oldX & 0xFF); ackBuf.push_back(oldX >> 8);
-                    ackBuf.push_back(oldY & 0xFF); ackBuf.push_back(oldY >> 8);
+                    ackBuf.push_back(obj.wPosX & 0xFF); ackBuf.push_back(obj.wPosX >> 8);
+                    ackBuf.push_back(obj.wPosY & 0xFF); ackBuf.push_back(obj.wPosY >> 8);
                     ackBuf.push_back(obj.bHeight);
-                    ackBuf.push_back(obj.wDestX & 0xFF); ackBuf.push_back(obj.wDestX >> 8);
-                    ackBuf.push_back(obj.wDestY & 0xFF); ackBuf.push_back(obj.wDestY >> 8);
+                    ackBuf.push_back(projDestX & 0xFF); ackBuf.push_back(projDestX >> 8);
+                    ackBuf.push_back(projDestY & 0xFF); ackBuf.push_back(projDestY >> 8);
                     ackBuf.push_back(obj.bHeight); 
                     ackBuf.push_back(wDirection & 0xFF); ackBuf.push_back(wDirection >> 8); 
                     ackBuf.push_back(20); 
@@ -678,7 +694,7 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                     
                     PACKET_HEADER* ackHead = (PACKET_HEADER*)ackBuf.data(); ackHead->id = 0x3508; ackHead->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);
                     EncryptPacket(ackBuf.data(), 0x42); 
-                    BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, ackBuf); // Changed to AOI
+                    BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, ackBuf);
                 }
             } else {
                 // Slide Collision Option B
@@ -709,24 +725,34 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                 }
 
                 if (slid) {
-                    obj.wDestX = bestPlayer->wPosX;
-                    obj.wDestY = bestPlayer->wPosY;
+                    WORD projDestX = (WORD)(obj.wPosX + dirX * 40.0f);
+                    WORD projDestY = (WORD)(obj.wPosY + dirY * 40.0f);
+                    obj.wDestX = projDestX;
+                    obj.wDestY = projDestY;
 
-                    if (abs(obj.wDestX - obj.wLastSentDestX) > 3 || abs(obj.wDestY - obj.wLastSentDestY) > 3 ||
-                        abs(obj.wPosX - obj.wLastSentPosX) > 1 || abs(obj.wPosY - obj.wLastSentPosY) > 1) {
+                    // 滑行追击发包：与正常追击使用一致的方向变化+时间门控
+                    int angleDiff2 = abs((int)wDirection - (int)obj.wLastSentDirection);
+                    if (angleDiff2 > 180) angleDiff2 = 360 - angleDiff2;
+                    bool dirChanged = (angleDiff2 > 25);
+                    bool tPassed = (tick - obj.dwLastMoveSendTime >= 800);
+                    bool firstMove = (obj.wLastSentDestX == 0 && obj.wLastSentDestY == 0);
+
+                    if (firstMove || dirChanged || tPassed) {
                         obj.wLastSentDestX = obj.wDestX;
                         obj.wLastSentDestY = obj.wDestY;
                         obj.wLastSentPosX = obj.wPosX;
                         obj.wLastSentPosY = obj.wPosY;
+                        obj.dwLastMoveSendTime = tick;
+                        obj.wLastSentDirection = wDirection;
 
                         std::vector<BYTE> ackBuf; ackBuf.resize(4); ackBuf.push_back(0); 
                         DWORD oid = obj.dwObjectID; ackBuf.push_back(oid&0xFF); ackBuf.push_back((oid>>8)&0xFF); ackBuf.push_back((oid>>16)&0xFF); ackBuf.push_back(oid>>24);
                         ackBuf.push_back(obj.bObjectType); 
-                        ackBuf.push_back(oldX & 0xFF); ackBuf.push_back(oldX >> 8);
-                        ackBuf.push_back(oldY & 0xFF); ackBuf.push_back(oldY >> 8);
+                        ackBuf.push_back(obj.wPosX & 0xFF); ackBuf.push_back(obj.wPosX >> 8);
+                        ackBuf.push_back(obj.wPosY & 0xFF); ackBuf.push_back(obj.wPosY >> 8);
                         ackBuf.push_back(obj.bHeight);
-                        ackBuf.push_back(obj.wDestX & 0xFF); ackBuf.push_back(obj.wDestX >> 8);
-                        ackBuf.push_back(obj.wDestY & 0xFF); ackBuf.push_back(obj.wDestY >> 8);
+                        ackBuf.push_back(projDestX & 0xFF); ackBuf.push_back(projDestX >> 8);
+                        ackBuf.push_back(projDestY & 0xFF); ackBuf.push_back(projDestY >> 8);
                         ackBuf.push_back(obj.bHeight); 
                         ackBuf.push_back(wDirection & 0xFF); ackBuf.push_back(wDirection >> 8); 
                         ackBuf.push_back(20); 
@@ -734,7 +760,7 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                         
                         PACKET_HEADER* ackHead = (PACKET_HEADER*)ackBuf.data(); ackHead->id = 0x3508; ackHead->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);
                         EncryptPacket(ackBuf.data(), 0x42); 
-                        BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, ackBuf); // Changed to AOI
+                        BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, ackBuf);
                     }
                 } else {
                     // Fully blocked: clamp float coords back to grid cell
@@ -844,18 +870,22 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                     obj.wPosX = nx; obj.wPosY = ny;
                     UpdateMonsterGrid(obj.dwObjectID, ox, oy, nx, ny);
                     
-                    if (obj.wDestX != obj.wLastSentDestX || obj.wDestY != obj.wLastSentDestY ||
-                        abs(obj.wPosX - obj.wLastSentPosX) > 1 || abs(obj.wPosY - obj.wLastSentPosY) > 1) {
+                    // 漫游发包：目的地固定，只在首次设定或目的地变化时发一次起步包
+                    // 客户端自行按速度插值走到终点，中间不需要额外包
+                    bool wanderNeedSend = (obj.wDestX != obj.wLastSentDestX || obj.wDestY != obj.wLastSentDestY);
+                    if (wanderNeedSend) {
                         obj.wLastSentDestX = obj.wDestX;
                         obj.wLastSentDestY = obj.wDestY;
                         obj.wLastSentPosX = obj.wPosX;
                         obj.wLastSentPosY = obj.wPosY;
+                        obj.dwLastMoveSendTime = tick;
+                        obj.wLastSentDirection = wDirection;
 
                         std::vector<BYTE> ackBuf; ackBuf.resize(4); ackBuf.push_back(0); 
                         DWORD oid = obj.dwObjectID; ackBuf.push_back(oid&0xFF); ackBuf.push_back((oid>>8)&0xFF); ackBuf.push_back((oid>>16)&0xFF); ackBuf.push_back(oid>>24);
                         ackBuf.push_back(obj.bObjectType); 
-                        ackBuf.push_back(oldX & 0xFF); ackBuf.push_back(oldX >> 8);
-                        ackBuf.push_back(oldY & 0xFF); ackBuf.push_back(oldY >> 8);
+                        ackBuf.push_back(obj.wPosX & 0xFF); ackBuf.push_back(obj.wPosX >> 8);
+                        ackBuf.push_back(obj.wPosY & 0xFF); ackBuf.push_back(obj.wPosY >> 8);
                         ackBuf.push_back(obj.bHeight);
                         ackBuf.push_back(obj.wDestX & 0xFF); ackBuf.push_back(obj.wDestX >> 8);
                         ackBuf.push_back(obj.wDestY & 0xFF); ackBuf.push_back(obj.wDestY >> 8);
@@ -866,7 +896,7 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                         
                         PACKET_HEADER* ackHead = (PACKET_HEADER*)ackBuf.data(); ackHead->id = 0x3508; ackHead->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);
                         EncryptPacket(ackBuf.data(), 0x42); 
-                        BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, ackBuf); // Changed to AOI
+                        BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, ackBuf);
                     }
                 } else {
                     obj.wDestX = 0;

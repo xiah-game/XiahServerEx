@@ -142,7 +142,7 @@ static void SerializeItemData(const ItemDB::FullItemRow& row, std::vector<BYTE>&
             case 23:
                 pushDWord(bi, 0); pushDWord(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); break;
             case 25:
-                pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
+                pushByte(bi, (BYTE)kind); pushWord(bi, (WORD)nd2); pushWord(bi, (WORD)nd3); break;
             case 27:
                 pushByte(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushDWord(bi, 0); break;
             case 29:

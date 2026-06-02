@@ -16,4 +16,5 @@ void SendCharPremiumList(SOCKET clientSocket, DWORD charID);
 void OnPetBongInReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);
 void OnPetBongOutReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);
 void SendPetListAck(SOCKET clientSocket, DWORD charID);
+void OnRemarkItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize); // 0x4249 遁身符记录坐标
 

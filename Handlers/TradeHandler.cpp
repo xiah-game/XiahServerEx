@@ -629,7 +629,7 @@ void TradeManager::SendTradeSackItemAck(SOCKET targetSocket, WORD packetID, BYTE
                     case 21: { DWORD mid=nd2; sMugongTemplate* mg=MugongManager::GetInstance()->GetTemplate(mid); pushWord(payload, lvl); pushDWord(payload, mid); pushByte(payload, mg?mg->bType:0); pushByte(payload, mg?mg->bKind:0); pushByte(payload, 1); break; }
                     case 22: pushDWord(payload, nd2); pushByte(payload, (BYTE)nd3); pushWord(payload, (WORD)nd4); pushWord(payload, (WORD)nd5); break;
                     case 23: pushDWord(payload, 0); pushDWord(payload, 0); pushDWord(payload, 0); pushByte(payload, 0); pushByte(payload, 0); break;
-                    case 25: pushByte(payload, 0); pushWord(payload, 0); pushWord(payload, 0); break;
+                    case 25: pushByte(payload, (BYTE)kind); pushWord(payload, (WORD)nd2); pushWord(payload, (WORD)nd3); break;
                     case 27: pushByte(payload, 0); pushDWord(payload, 0); pushByte(payload, 0); pushByte(payload, 0); pushByte(payload, 0); pushByte(payload, 0); pushDWord(payload, 0); break;
                     case 29: pushWord(payload, 0); pushWord(payload, 0); break;
                     case 32: pushWord(payload, 0); pushWord(payload, d[1]); pushWord(payload, d[2]); pushDWord(payload, 0); break;
@@ -722,7 +722,7 @@ static void SendAddOnSackAck(SOCKET s, BYTE bSackID, BYTE bSackPos, DWORD dwItem
             case 21: { DWORD mid=nd2; sMugongTemplate* mg=MugongManager::GetInstance()->GetTemplate(mid); pushWord(bi, lvl); pushDWord(bi, mid); pushByte(bi, mg?mg->bType:0); pushByte(bi, mg?mg->bKind:0); pushByte(bi, 1); break; }
             case 22: pushDWord(bi, nd2); pushByte(bi, (BYTE)nd3); pushWord(bi, (WORD)nd4); pushWord(bi, (WORD)nd5); break;
             case 23: pushDWord(bi, 0); pushDWord(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); break;
-            case 25: pushByte(bi, 0); pushWord(bi, 0); pushWord(bi, 0); break;
+            case 25: pushByte(bi, (BYTE)kind); pushWord(bi, (WORD)nd2); pushWord(bi, (WORD)nd3); break;
             case 27: pushByte(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushDWord(bi, 0); break;
             case 29: pushWord(bi, 0); pushWord(bi, 0); break;
             case 32: pushWord(bi, 0); pushWord(bi, d[1]); pushWord(bi, d[2]); pushDWord(bi, 0); break;

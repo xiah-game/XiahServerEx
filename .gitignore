@@ -29,6 +29,13 @@ __pycache__/
 *.class
 *.py
 
+# Binaries
+*.exe
+*.dll
+
+# SQL Files
+*.sql
+
 # Logs and Archives
 *.log
 *.tmp
