@@ -137,10 +137,12 @@ void OnFunctionalNpcInfoListReq(SOCKET clientSocket, DWORD charID, BYTE* payload
 }
 
 void OnFunctionalNpcItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
+  try {
     if (totalSize < 9) return;
     DWORD reqMapID = *(DWORD*)(payload);
     DWORD reqObjectID = *(DWORD*)(payload + 4);
     BYTE bSackCnt = *(BYTE*)(payload + 8);
+    LOG("[NpcHandler] ItemListReq: objID=" + std::to_string(reqObjectID) + " mapID=" + std::to_string(reqMapID) + " sackCnt=" + std::to_string(bSackCnt));
 
     std::vector<BYTE> ackBuf; ackBuf.reserve(1024);
     ackBuf.push_back(0); // bResult
@@ -283,9 +285,15 @@ void OnFunctionalNpcItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload
     EncryptPacket(fullAck.data(), 0x42); 
     SafeSend(clientSocket, (const char*)fullAck.data(), fullAck.size(), 0);
     std::cout << "[NpcHandler] Sent NPC Item List for NPC " << reqObjectID << " Items: " << numItems << std::endl;
+  } catch (std::exception& e) {
+    LOG("[NpcHandler] EXCEPTION in ItemListReq: " + std::string(e.what()));
+  } catch (...) {
+    LOG("[NpcHandler] EXCEPTION in ItemListReq: unknown");
+  }
 }
 
 void OnBuyItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
+  try {
     if (totalSize < 16) return;
     DWORD dwShopID = *(DWORD*)(payload);
     DWORD dwItemID = *(DWORD*)(payload + 4); 
@@ -540,7 +548,7 @@ MonsterData* pObj = NULL;
             pushByte(0); // m_bMinLevel
             pushByte(0); // m_bMaxLevel
         } else if (tpl.bType == 25) { // ITEMTYPE_REBUILDRES（改造材料）
-            pushByte((BYTE)tpl.bKind); // m_bIsDividedRes
+            pushByte(0); // m_bIsDividedRes（必须为0，bKind=1会被客户端拒绝放入改造槽）
             pushWord((WORD)tpl.nBasicData2); // m_wSuccessRatio
             pushWord((WORD)tpl.nBasicData3); // m_wFactorValue
         } else if (tpl.bType == 27) { // ITEMTYPE_LOTTO
@@ -607,6 +615,12 @@ MonsterData* pObj = NULL;
         EncryptPacket(errBuf.data(), 0x42);
         SafeSend(clientSocket, (const char*)errBuf.data(), errBuf.size(), 0);
     }
+
+  } catch (std::exception& e) {
+    LOG("[NpcHandler] EXCEPTION in BuyItemReq: " + std::string(e.what()));
+  } catch (...) {
+    LOG("[NpcHandler] EXCEPTION in BuyItemReq: unknown");
+  }
 }
 
 void OnSellItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
@@ -616,73 +630,58 @@ void OnSellItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
     BYTE bSackID = *(BYTE*)(payload + 8);
     BYTE bSackPos = *(BYTE*)(payload + 9);
 
-    DWORD amountToSell = 1;
-    if (totalSize >= 14) {
-        amountToSell = *(DWORD*)(payload + 10);
-    }
-
-    WORD wRefID = 0;
-    DWORD dbAmount = 0;
-    DWORD dbCost = 0;
+    WORD wRefID = 0; WORD dbAmount = 0; DWORD dbCost = 0;
     ItemDB::ItemBasicInfo ibi;
     if (ItemDB::GetInstance().GetItemBasicInfo(dwItemID, ibi)) {
         wRefID = ibi.wRefID; dbAmount = ibi.wAmount; dbCost = ibi.dwCost;
     }
-
     if (wRefID == 0) return;
+
+    DWORD amountToSell = dbAmount;
+    if (totalSize >= 14) {
+        amountToSell = *(DWORD*)(payload + 10);
+    }
     if (amountToSell > dbAmount) amountToSell = dbAmount;
-    
+    if (amountToSell == 0) amountToSell = dbAmount;
+
     DWORD sellPrice = 0;
     if (g_ItemTemplates.count(wRefID)) {
         sellPrice = g_ItemTemplates[wRefID].dwCost * amountToSell;
     }
 
     CharacterDB::GetInstance().AddMoney(charID, sellPrice);
-
     INT64 currentMoney = (INT64)CharacterDB::GetInstance().GetMoney(charID);
 
     std::vector<BYTE> mBuf(13);
     PACKET_HEADER* mHead = (PACKET_HEADER*)mBuf.data();
-    mHead->id = 0x3B13;
-    mHead->payloadSize = 9;
+    mHead->id = 0x3B13; mHead->payloadSize = 9;
     *((INT64*)(mBuf.data() + 4)) = (INT64)currentMoney;
     mBuf[12] = 0;
     EncryptPacket(mBuf.data(), 0x42);
     SafeSend(clientSocket, (const char*)mBuf.data(), mBuf.size(), 0);
 
     if (dbAmount <= amountToSell) {
-        // Delete order follows spSellItemAtNpc: SACKITEM -> ITEMDATA -> ITEM
-        // ITEMDATA has FK_ITEMDATA_ITEM referencing ITEM.dwItemID, must be deleted first
         BYTE absolutePos = bSackPos;
         if (bSackID == 1) absolutePos = 20 + bSackPos;
         else if (bSackID == 2) absolutePos = 60 + bSackPos;
         else if (bSackID == 3) absolutePos = 100 + bSackPos;
-        std::string delSack = "DELETE FROM SACKITEM WHERE dwCharID = " + std::to_string(charID) + " AND bSackPos = " + std::to_string(absolutePos) + " AND dwItemID = " + std::to_string(dwItemID);
-        std::string delItemData = "DELETE FROM ITEMDATA WHERE dwItemID = " + std::to_string(dwItemID);
-        std::string delItem = "DELETE FROM ITEM WHERE dwItemID = " + std::to_string(dwItemID);
         ItemDB::GetInstance().RemoveFromSack(charID, dwItemID);
         ItemDB::GetInstance().DeleteItemData(dwItemID);
         ItemDB::GetInstance().DeleteItem(dwItemID);
 
         std::vector<BYTE> rBuf(7);
         PACKET_HEADER* rHead = (PACKET_HEADER*)rBuf.data();
-        rHead->id = 0x4208;
-        rHead->payloadSize = 3;
-        rBuf[4] = bSackID;
-        rBuf[5] = bSackPos;
-        rBuf[6] = 0;
+        rHead->id = 0x4208; rHead->payloadSize = 3;
+        rBuf[4] = bSackID; rBuf[5] = bSackPos; rBuf[6] = 0;
         EncryptPacket(rBuf.data(), 0x42);
         SafeSend(clientSocket, (const char*)rBuf.data(), rBuf.size(), 0);
     } else {
         ItemDB::GetInstance().DecrementItemAmountBy(dwItemID, (WORD)amountToSell);
-        // Do not send 0x4208, client handles amount deduction internally or needs an amount update packet
     }
 
     std::vector<BYTE> sBuf(5);
     PACKET_HEADER* sHead = (PACKET_HEADER*)sBuf.data();
-    sHead->id = 0x3D59;
-    sHead->payloadSize = 1;
-    sBuf[4] = 0;
+    sHead->id = 0x3D59; sHead->payloadSize = 1; sBuf[4] = 0;
     EncryptPacket(sBuf.data(), 0x42);
     SafeSend(clientSocket, (const char*)sBuf.data(), sBuf.size(), 0);
 }

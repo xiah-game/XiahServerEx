@@ -260,19 +260,19 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
             int finalHitPerc = 100 + percHit; if (finalHitPerc < 1) finalHitPerc = 1;
             int finalCritPerc = 100 + percCrit; if (finalCritPerc < 1) finalCritPerc = 1;
 
-            DWORD totalAtk   = flatAtk * finalAtkPerc / 100;
-            DWORD totalDef   = flatDef * finalDefPerc / 100;
-            DWORD totalHit   = flatHit * finalHitPerc / 100;
+            DWORD totalAtk   = (DWORD)((unsigned long long)flatAtk * finalAtkPerc / 100);
+            DWORD totalDef   = (DWORD)((unsigned long long)flatDef * finalDefPerc / 100);
+            DWORD totalHit   = (DWORD)((unsigned long long)flatHit * finalHitPerc / 100);
             DWORD totalDodge = flatDodge;
-            DWORD totalCrit  = flatCrit * finalCritPerc / 100;
+            DWORD totalCrit  = (DWORD)((unsigned long long)flatCrit * finalCritPerc / 100);
 
             // Update HP/IP max with all bonuses
             pObj->dwHpMax += flatHpMax;
             pObj->wIpMax  += (DWORD)flatIpMax;
 
             // 绉板彿绯荤粺锛氱敓鍛戒笌鍐呭姏鏈澶т笂闄愮櫨鍒嗘瘮鍙犵畻
-            pObj->dwHpMax = pObj->dwHpMax * (100 + titleHpPerc) / 100;
-            pObj->wIpMax  = pObj->wIpMax * (100 + titleMpPerc) / 100;
+            pObj->dwHpMax = (DWORD)((unsigned long long)pObj->dwHpMax * (100 + titleHpPerc) / 100);
+            pObj->wIpMax  = (DWORD)((unsigned long long)pObj->wIpMax * (100 + titleMpPerc) / 100);
 
             // 6. Save final stats to the object
             pObj->dwTotalAtk = totalAtk;

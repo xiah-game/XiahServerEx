@@ -234,18 +234,37 @@ DWORD ItemDB::InsertItemFromTemplate(DWORD dwCharID, WORD wRefID, BYTE bSackPos)
     return dwNewItemID;
 }
 
-void ItemDB::UpsertRebuildData(DWORD dwItemID, int d4, int d5, int d9, int d14, int d15, int d17) {
+// 改造系统 v2：通用属性覆盖写入，支持任意 nData 字段组合
+void ItemDB::UpsertRebuildData(DWORD dwItemID, const std::map<int, int>& fields) {
+    if (fields.empty()) return;
+    // 构建 UPDATE SET 子句和 INSERT 列名/值列表
+    std::string setClauses, colNames = "dwItemID", colValues = std::to_string(dwItemID);
+    for (auto& kv : fields) {
+        std::string col = "nData" + std::to_string(kv.first);
+        std::string val = std::to_string(kv.second);
+        if (!setClauses.empty()) setClauses += ", ";
+        setClauses += col + " = " + val;
+        colNames += ", " + col;
+        colValues += ", " + val;
+    }
     DBHelper::GetInstance().ExecuteUpdate(
         "IF EXISTS (SELECT 1 FROM ITEMDATA WHERE dwItemID = " + std::to_string(dwItemID) + ") "
-        "UPDATE ITEMDATA SET nData4 = " + std::to_string(d4) + ", nData5 = " + std::to_string(d5) +
-        ", nData9 = " + std::to_string(d9) + ", nData14 = " + std::to_string(d14) +
-        ", nData15 = " + std::to_string(d15) + ", nData17 = " + std::to_string(d17) +
-        " WHERE dwItemID = " + std::to_string(dwItemID) + " "
-        "ELSE INSERT INTO ITEMDATA (dwItemID, nData4, nData5, nData9, nData14, nData15, nData17) VALUES (" +
-        std::to_string(dwItemID) + ", " + std::to_string(d4) + ", " + std::to_string(d5) +
-        ", " + std::to_string(d9) + ", " + std::to_string(d14) + ", " + std::to_string(d15) +
-        ", " + std::to_string(d17) + ")");
+        "UPDATE ITEMDATA SET " + setClauses + " WHERE dwItemID = " + std::to_string(dwItemID) + " "
+        "ELSE INSERT INTO ITEMDATA (" + colNames + ") VALUES (" + colValues + ")");
 }
+
+// 旧版兼容：固定 6 个字段的写入
+void ItemDB::UpsertRebuildData(DWORD dwItemID, int d4, int d5, int d9, int d14, int d15, int d17) {
+    UpsertRebuildData(dwItemID, {{4, d4}, {5, d5}, {9, d9}, {14, d14}, {15, d15}, {17, d17}});
+}
+
+// 血晶降级：更新 ITEM 表的 nBasicData1（穿戴等级需求）
+void ItemDB::UpdateItemNBasicData1(DWORD dwItemID, int newValue) {
+    DBHelper::GetInstance().ExecuteUpdate(
+        "UPDATE ITEM SET nBasicData1 = " + std::to_string(newValue) +
+        " WHERE dwItemID = " + std::to_string(dwItemID));
+}
+
 
 WORD ItemDB::GetItemAmount(DWORD dwItemID) {
     WORD amount = 0;

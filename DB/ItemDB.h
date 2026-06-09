@@ -120,11 +120,17 @@ public:
     struct ItemBasicInfo { WORD wRefID = 0; DWORD wAmount = 0; DWORD dwCost = 0; };
     bool GetItemBasicInfo(DWORD dwItemID, ItemBasicInfo& out);
 
-    // Upsert ITEMDATA (rebuild stats) in ITEMDATA
+    // 改造系统 v2：通用属性覆盖写入（fields: nData字段号 → 值）
+    void UpsertRebuildData(DWORD dwItemID, const std::map<int, int>& fields);
+
+    // 旧版兼容（已有调用点可能使用此签名）
     void UpsertRebuildData(DWORD dwItemID, int d4, int d5, int d9, int d14, int d15, int d17);
 
     // Get cumulative rebuild bonus (Wujing or Sujing)
     int GetRebuildBonusSum(const std::string& attrColumn, int reqLevel, int maxRebuildLevel);
+
+    // 血晶降级：更新 ITEM.nBasicData1（穿戴等级需求）
+    void UpdateItemNBasicData1(DWORD dwItemID, int newValue);
 
     // Get all used bank positions for account
     std::vector<BYTE> GetBankUsedPositions(const std::string& account);

@@ -132,7 +132,7 @@ static void SendBankOrMallList(SOCKET clientSocket, DWORD charID, WORD opCodeACK
                     case 23:
                         pushDWord(bi, 0); pushDWord(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); break;
                     case 25:
-                        pushByte(bi, (BYTE)kind); pushWord(bi, (WORD)nd2); pushWord(bi, (WORD)nd3); break;
+                        pushByte(bi, 0); pushWord(bi, (WORD)nd2); pushWord(bi, (WORD)nd3); break;
                     case 27:
                         pushByte(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushDWord(bi, 0); break;
                     case 29:
@@ -314,7 +314,7 @@ void OnDrawInBankReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tota
                     case 21: { DWORD mid=nd2; sMugongTemplate* mg=MugongManager::GetInstance()->GetTemplate(mid); pushWord(iBuf, lvl); pushDWord(iBuf, mid); pushByte(iBuf, mg?mg->bType:0); pushByte(iBuf, mg?mg->bKind:0); pushByte(iBuf, 1); break; }
                     case 22: pushDWord(iBuf, nd2); pushByte(iBuf, (BYTE)nd3); pushWord(iBuf, (WORD)nd4); pushWord(iBuf, (WORD)nd5); break;
                     case 23: pushDWord(iBuf, 0); pushDWord(iBuf, 0); pushDWord(iBuf, 0); pushByte(iBuf, 0); pushByte(iBuf, 0); break;
-                    case 25: pushByte(iBuf, (BYTE)kind); pushWord(iBuf, (WORD)nd2); pushWord(iBuf, (WORD)nd3); break;
+                    case 25: pushByte(iBuf, 0); pushWord(iBuf, (WORD)nd2); pushWord(iBuf, (WORD)nd3); break;
                     case 27: pushByte(iBuf, 0); pushDWord(iBuf, 0); pushByte(iBuf, 0); pushByte(iBuf, 0); pushByte(iBuf, 0); pushByte(iBuf, 0); pushDWord(iBuf, 0); break;
                     case 29: pushWord(iBuf, 0); pushWord(iBuf, 0); break;
                     case 32: pushWord(iBuf, 0); pushWord(iBuf, d2); pushWord(iBuf, d3); pushDWord(iBuf, 0); break;
@@ -503,7 +503,7 @@ static void ProcessDrawOut(SOCKET clientSocket, DWORD charID, BYTE* payload, WOR
                     case 21: { DWORD mid=nd2; sMugongTemplate* mg=MugongManager::GetInstance()->GetTemplate(mid); pushWord(bi, lvl); pushDWord(bi, mid); pushByte(bi, mg?mg->bType:0); pushByte(bi, mg?mg->bKind:0); pushByte(bi, 1); break; }
                     case 22: pushDWord(bi, nd2); pushByte(bi, (BYTE)nd3); pushWord(bi, (WORD)nd4); pushWord(bi, (WORD)nd5); break;
                     case 23: pushDWord(bi, 0); pushDWord(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); break;
-                    case 25: pushByte(bi, (BYTE)kind); pushWord(bi, (WORD)nd2); pushWord(bi, (WORD)nd3); break;
+                    case 25: pushByte(bi, 0); pushWord(bi, (WORD)nd2); pushWord(bi, (WORD)nd3); break;
                     case 27: pushByte(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushDWord(bi, 0); break;
                     case 29: pushWord(bi, 0); pushWord(bi, 0); break;
                     case 32: pushWord(bi, 0); pushWord(bi, d2); pushWord(bi, d3); pushDWord(bi, 0); break;

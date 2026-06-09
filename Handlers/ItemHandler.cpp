@@ -793,6 +793,8 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
                         pushDWord((DWORD)tplOpen.nBasicData2); pushByte(0); pushWord(0); pushWord(0); break;
                     case 23:
                         pushDWord(0); pushDWord((DWORD)tplOpen.nBasicData2); pushDWord((DWORD)tplOpen.nBasicData3); pushByte(0); pushByte(0); break;
+                    case 25:
+                        pushByte(0); pushWord((WORD)tplOpen.nBasicData2); pushWord((WORD)tplOpen.nBasicData3); break;
                     case 32:
                         pushWord((WORD)tplOpen.nData1); pushWord((WORD)tplOpen.nBasicData1); pushWord((WORD)tplOpen.nBasicData1); pushDWord(tplOpen.nData3); break;
                 }

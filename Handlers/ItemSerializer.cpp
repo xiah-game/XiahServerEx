@@ -113,9 +113,10 @@ void SerializeItemData(const ItemDB::FullItemRow& row, std::vector<BYTE>& bi) {
             // 药品
             case 23:
                 pushDWord(bi, 0); pushDWord(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); break;
-            // 改造材料（乌晶/素晶/防爆卷）：bKind + 成功率(nBasicData2) + 系数值(nBasicData3)
+            // 改造材料（乌晶/素晶/血晶）：m_bIsDividedRes(必须为0) + 成功率(nBasicData2) + 系数值(nBasicData3)
+            // 注意：客户端将此字节=1视为"不可改造"，乌晶bKind恰好=1会被拒绝，故固定发0
             case 25:
-                pushByte(bi, (BYTE)kind); pushWord(bi, (WORD)nd2); pushWord(bi, (WORD)nd3); break;
+                pushByte(bi, 0); pushWord(bi, (WORD)nd2); pushWord(bi, (WORD)nd3); break;
             // 彩票
             case 27:
                 pushByte(bi, 0); pushDWord(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushDWord(bi, 0); break;
