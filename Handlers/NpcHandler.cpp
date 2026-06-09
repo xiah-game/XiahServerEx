@@ -213,8 +213,8 @@ void OnFunctionalNpcItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload
                     pushWord((WORD)tpl.nData8); // wAtkRange
                     pushDWord(tpl.nData9); // wIncrHp (DWORD)
                     pushDWord(tpl.nData10); // wIncrIp (DWORD)
-                    pushWord(0); // wRestoreHp
-                    pushWord(0); // wRestoreIp
+                    pushDWord(0); // dwRestoreHp (DWORD: 支持超过65535)
+                    pushDWord(0); // dwRestoreIp (DWORD: 支持超过65535)
                     pushWord((WORD)tpl.nData13); // wIncrCritical
                     pushWord(0); // wHukjungModityCount (rebuild rarity)
                     pushWord(0); // wSojungModityCount (stx type)
@@ -478,8 +478,8 @@ MonsterData* pObj = NULL;
             pushWord((WORD)tpl.nData8); // wAtkRange
             pushDWord(tpl.nData9); // wIncrHp (DWORD)
             pushDWord(tpl.nData10); // wIncrIp (DWORD)
-            pushWord(0); // wRestoreHp
-            pushWord(0); // wRestoreIp
+            pushDWord(0); // dwRestoreHp (DWORD: 支持超过65535)
+            pushDWord(0); // dwRestoreIp (DWORD: 支持超过65535)
             pushWord((WORD)tpl.nData13); // wIncrCritical
             pushByte(0); // bRarity (HukjungModity)
             pushByte(0); // bStxType (SojungModity)

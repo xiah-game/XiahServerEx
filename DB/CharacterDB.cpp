@@ -280,6 +280,22 @@ bool CharacterDB::GetCharDefault(BYTE bCharType, CharDefault& out) {
     return found;
 }
 
+std::vector<CharacterDB::StartItem> CharacterDB::GetStartItems(BYTE bCharType) {
+    std::vector<StartItem> items;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT wRefID, bSackPos, wAmount FROM CHAR_STARTITEM "
+        "WHERE bCharType = " + std::to_string(bCharType) + " AND bEnabled = 1 "
+        "ORDER BY bSackPos",
+        [&](SQLHSTMT hStmt) {
+            StartItem si; SQLLEN c[3];
+            SQLGetData(hStmt, 1, SQL_C_USHORT, &si.wRefID, 0, &c[0]);
+            SQLGetData(hStmt, 2, SQL_C_UTINYINT, &si.bSackPos, 0, &c[1]);
+            SQLGetData(hStmt, 3, SQL_C_USHORT, &si.wAmount, 0, &c[2]);
+            items.push_back(si);
+        });
+    return items;
+}
+
 bool CharacterDB::GetSlotValues(DWORD dwCharID, std::vector<DWORD>& slots) {
     bool found = false;
     slots.resize(10, 0);

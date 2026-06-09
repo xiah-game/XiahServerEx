@@ -110,10 +110,10 @@ void GameDataDB::LoadLevelTemplates(std::map<WORD, std::map<BYTE, sLevelTemplate
 
 void GameDataDB::LoadItemTemplates(std::map<WORD, sItemTemplate>& out) {
     out.clear();
-    std::string q = "SELECT wRefID, bType, bKind, wVisualID, szName, dwCost, wLevel, bCharType, wAmount, nData1, nData2, nData3, nData4, nData5, nData6, nData7, nData8, nData9, nData10, nData13, nBasicData1, nBasicData2, nBasicData3, nBasicData4, nBasicData5, bCX, bCY FROM ITEMTEMPLATE";
+    std::string q = "SELECT wRefID, bType, bKind, wVisualID, szName, dwCost, wLevel, bCharType, wAmount, nData1, nData2, nData3, nData4, nData5, nData6, nData7, nData8, nData9, nData10, nData11, nData12, nData13, nBasicData1, nBasicData2, nBasicData3, nBasicData4, nBasicData5, bCX, bCY FROM ITEMTEMPLATE";
     DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
-        WORD ref=0, vis=0, lvl=0, amt=0; BYTE type=0, kind=0, charType=0, bCX=1, bCY=1; DWORD cost=0; char nameBuf[64]; SQLLEN c[27];
-        int d1=0,d2=0,d3=0,d4=0,d5=0,d6=0,d7=0,d8=0,d9=0,d10=0,d13=0,b1=0,b2=0,b3=0,b4=0,b5=0;
+        WORD ref=0, vis=0, lvl=0, amt=0; BYTE type=0, kind=0, charType=0, bCX=1, bCY=1; DWORD cost=0; char nameBuf[64]; SQLLEN c[29];
+        int d1=0,d2=0,d3=0,d4=0,d5=0,d6=0,d7=0,d8=0,d9=0,d10=0,d11=0,d12=0,d13=0,b1=0,b2=0,b3=0,b4=0,b5=0;
         memset(nameBuf, 0, sizeof(nameBuf));
         SQLGetData(hStmt, 1, SQL_C_USHORT, &ref, 0, &c[0]);
         SQLGetData(hStmt, 2, SQL_C_UTINYINT, &type, 0, &c[1]);
@@ -135,14 +135,16 @@ void GameDataDB::LoadItemTemplates(std::map<WORD, sItemTemplate>& out) {
         SQLGetData(hStmt, 17, SQL_C_SLONG, &d8, 0, &c[16]);
         SQLGetData(hStmt, 18, SQL_C_SLONG, &d9, 0, &c[17]);
         SQLGetData(hStmt, 19, SQL_C_SLONG, &d10, 0, &c[18]);
-        SQLGetData(hStmt, 20, SQL_C_SLONG, &d13, 0, &c[19]);
-        SQLGetData(hStmt, 21, SQL_C_SLONG, &b1, 0, &c[20]);
-        SQLGetData(hStmt, 22, SQL_C_SLONG, &b2, 0, &c[21]);
-        SQLGetData(hStmt, 23, SQL_C_SLONG, &b3, 0, &c[22]);
-        SQLGetData(hStmt, 24, SQL_C_SLONG, &b4, 0, &c[23]);
-        SQLGetData(hStmt, 25, SQL_C_SLONG, &b5, 0, &c[24]);
-        SQLGetData(hStmt, 26, SQL_C_UTINYINT, &bCX, 0, &c[25]);
-        SQLGetData(hStmt, 27, SQL_C_UTINYINT, &bCY, 0, &c[26]);
+        SQLGetData(hStmt, 20, SQL_C_SLONG, &d11, 0, &c[19]);
+        SQLGetData(hStmt, 21, SQL_C_SLONG, &d12, 0, &c[20]);
+        SQLGetData(hStmt, 22, SQL_C_SLONG, &d13, 0, &c[21]);
+        SQLGetData(hStmt, 23, SQL_C_SLONG, &b1, 0, &c[22]);
+        SQLGetData(hStmt, 24, SQL_C_SLONG, &b2, 0, &c[23]);
+        SQLGetData(hStmt, 25, SQL_C_SLONG, &b3, 0, &c[24]);
+        SQLGetData(hStmt, 26, SQL_C_SLONG, &b4, 0, &c[25]);
+        SQLGetData(hStmt, 27, SQL_C_SLONG, &b5, 0, &c[26]);
+        SQLGetData(hStmt, 28, SQL_C_UTINYINT, &bCX, 0, &c[27]);
+        SQLGetData(hStmt, 29, SQL_C_UTINYINT, &bCY, 0, &c[28]);
         sItemTemplate tpl;
         tpl.wRefID = ref; tpl.bType = type; tpl.bKind = kind; tpl.wVisualID = vis;
         if (c[4] != SQL_NULL_DATA) tpl.szName = nameBuf;
@@ -151,7 +153,7 @@ void GameDataDB::LoadItemTemplates(std::map<WORD, sItemTemplate>& out) {
         if (tpl.bCX == 0) tpl.bCX = 1;
         if (tpl.bCY == 0) tpl.bCY = 1;
         tpl.nData1=d1; tpl.nData2=d2; tpl.nData3=d3; tpl.nData4=d4; tpl.nData5=d5;
-        tpl.nData6=d6; tpl.nData7=d7; tpl.nData8=d8; tpl.nData9=d9; tpl.nData10=d10; tpl.nData13=d13;
+        tpl.nData6=d6; tpl.nData7=d7; tpl.nData8=d8; tpl.nData9=d9; tpl.nData10=d10; tpl.nData11=d11; tpl.nData12=d12; tpl.nData13=d13;
         tpl.nBasicData1=b1; tpl.nBasicData2=b2; tpl.nBasicData3=b3; tpl.nBasicData4=b4; tpl.nBasicData5=b5;
         out[ref] = tpl;
     });

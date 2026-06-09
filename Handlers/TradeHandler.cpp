@@ -611,7 +611,7 @@ void TradeManager::SendTradeSackItemAck(SOCKET targetSocket, WORD packetID, BYTE
                 pushByte(payload, d[0]);
                 pushWord(payload, d[1]); pushWord(payload, d[2]);
                 pushDWord(payload, d[3]); pushDWord(payload, d[4]); pushDWord(payload, d[5]); pushWord(payload, d[6]); pushWord(payload, d[7]);
-                pushDWord(payload, d[8]); pushDWord(payload, d[9]); pushWord(payload, d[10]); pushWord(payload, d[11]); pushWord(payload, d[12]);
+                pushDWord(payload, d[8]); pushDWord(payload, d[9]); pushDWord(payload, d[10]); pushDWord(payload, d[11]); pushWord(payload, d[12]);
                 pushByte(payload, dat18); pushByte(payload, dat19);
                 pushByte(payload, d[13]); pushByte(payload, d[14]); pushByte(payload, d[15]); pushByte(payload, d[16]);
                 if (type == 9) { pushDWord(payload, 0); pushWord(payload, 0); pushWord(payload, 0); pushWord(payload, 0); pushWord(payload, 0); }
@@ -704,7 +704,7 @@ static void SendAddOnSackAck(SOCKET s, BYTE bSackID, BYTE bSackPos, DWORD dwItem
         pushByte(bi, d[0]);
         pushWord(bi, d[1]); pushWord(bi, d[2]);
         pushDWord(bi, d[3]); pushDWord(bi, d[4]); pushDWord(bi, d[5]); pushWord(bi, d[6]); pushWord(bi, d[7]);
-        pushDWord(bi, d[8]); pushDWord(bi, d[9]); pushWord(bi, d[10]); pushWord(bi, d[11]); pushWord(bi, d[12]);
+        pushDWord(bi, d[8]); pushDWord(bi, d[9]); pushDWord(bi, d[10]); pushDWord(bi, d[11]); pushWord(bi, d[12]);
         pushByte(bi, dat18); pushByte(bi, dat19);
         pushByte(bi, d[13]); pushByte(bi, d[14]); pushByte(bi, d[15]); pushByte(bi, d[16]);
         if (type == 9) { pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); }

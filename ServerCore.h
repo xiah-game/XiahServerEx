@@ -249,7 +249,7 @@ struct sItemTemplate {
     BYTE bCX;
     BYTE bCY;
     int nBasicData1, nBasicData2, nBasicData3, nBasicData4, nBasicData5;
-    int nData1, nData2, nData3, nData4, nData5, nData6, nData7, nData8, nData9, nData10, nData13;
+    int nData1, nData2, nData3, nData4, nData5, nData6, nData7, nData8, nData9, nData10, nData11, nData12, nData13;
 };
 
 struct sLevelTemplate {

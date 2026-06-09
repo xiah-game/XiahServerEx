@@ -86,21 +86,24 @@ void OnNewCharacterReq(SOCKET clientSocket, const std::string& clientAccountName
     CharacterDB::GetInstance().InitializeSlot(newCharID);
     LOG("[CharHandler] New CharID from CHAR_BASIC: " + std::to_string(newCharID));
 
-    // 10. Create initial equipment per class
-    // Weapon at SackPos=0, Armor at SackPos=2
-    struct StartItem { WORD wRefID; BYTE bSackPos; };
-    std::vector<StartItem> items;
-    switch (bCharType) {
-        case 1: items = {{20001, 0}, {20014, 2}}; break;
-        case 2: items = {{20010, 0}, {20021, 2}}; break;
-        case 3: items = {{20157, 0}, {20161, 2}}; break;
-        case 4: items = {{20457, 0}, {20480, 2}}; break;
+    // 10. 从 CHAR_STARTITEM 表读取并创建初始装备（数据驱动，无需重编译即可调整）
+    auto startItems = CharacterDB::GetInstance().GetStartItems(bCharType);
+    if (startItems.empty()) {
+        LOG("[CharHandler] WARNING: No start items configured for bCharType=" + std::to_string(bCharType));
     }
-
-    for (const auto& si : items) {
+    for (const auto& si : startItems) {
         DWORD dwNewItemID = ItemDB::GetInstance().InsertItemFromTemplate(newCharID, si.wRefID, si.bSackPos);
-        if (dwNewItemID == 0) { LOG("[CharHandler] Failed to create item wRefID=" + std::to_string(si.wRefID)); continue; }
-        LOG("[CharHandler] Created item wRefID=" + std::to_string(si.wRefID) + " dwItemID=" + std::to_string(dwNewItemID) + " at pos=" + std::to_string(si.bSackPos));
+        if (dwNewItemID == 0) {
+            LOG("[CharHandler] Failed to create start item wRefID=" + std::to_string(si.wRefID));
+            continue;
+        }
+        // 消耗品等可能需要设置数量 >1
+        if (si.wAmount > 1) {
+            ItemDB::GetInstance().UpdateItemAmount(dwNewItemID, si.wAmount);
+        }
+        LOG("[CharHandler] Created start item wRefID=" + std::to_string(si.wRefID)
+            + " dwItemID=" + std::to_string(dwNewItemID) + " pos=" + std::to_string(si.bSackPos)
+            + " amount=" + std::to_string(si.wAmount));
     }
 
     LOG("[CharHandler] Character created! dwCharID=" + std::to_string(newCharID) + " Name=" + szNickName);

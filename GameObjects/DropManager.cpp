@@ -665,7 +665,7 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
                 pushByte(bi, d1);
                 pushWord(bi, d2); pushWord(bi, d3);
                 pushDWord(bi, d4); pushDWord(bi, d5); pushDWord(bi, d6); pushWord(bi, d7); pushWord(bi, d8);
-                pushDWord(bi, d9); pushDWord(bi, d10); pushWord(bi, d11); pushWord(bi, d12); pushWord(bi, d13);
+                pushDWord(bi, d9); pushDWord(bi, d10); pushDWord(bi, d11); pushDWord(bi, d12); pushWord(bi, d13);
                 pushByte(bi, dat18); pushByte(bi, dat19);
                 pushByte(bi, d14); pushByte(bi, d15); pushByte(bi, d16); pushByte(bi, d17);
                 if (type == 9) { pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); }

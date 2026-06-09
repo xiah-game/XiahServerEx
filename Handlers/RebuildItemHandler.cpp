@@ -101,7 +101,7 @@ void SendItemRefresh(SOCKET clientSocket, DWORD dwItemID, BYTE bSackID, BYTE bSa
             pushByte(bi, d1);
             pushWord(bi, d2); pushWord(bi, d3);
             pushDWord(bi, d4); pushDWord(bi, d5); pushDWord(bi, d6); pushWord(bi, d7); pushWord(bi, d8);
-            pushDWord(bi, d9); pushDWord(bi, d10); pushWord(bi, d11); pushWord(bi, d12); pushWord(bi, d13);
+            pushDWord(bi, d9); pushDWord(bi, d10); pushDWord(bi, d11); pushDWord(bi, d12); pushWord(bi, d13);
             pushByte(bi, dat18); pushByte(bi, dat19);
             pushByte(bi, d14); pushByte(bi, d15); pushByte(bi, d16); pushByte(bi, d17);
             if (type == 9) { pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); }
@@ -156,13 +156,26 @@ void OnRebuildItemTermReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
 
     BYTE result = 1; // 默认：物品未找到
     if (found) {
-        // 查模板获�?bType/bKind，校验是否可强化
+        // 查模板获?bType/bKind，校验是否可强化
         WORD refID = ItemDB::GetInstance().GetItemRefID(dwItemID);
         if (refID > 0 && g_ItemTemplates.count(refID)) {
             BYTE bType = g_ItemTemplates[refID].bType;
             BYTE bKind = g_ItemTemplates[refID].bKind;
             if (IsRebuildableItem(bType, bKind)) {
-                result = 0; // 校验通过
+                // 校验强化/追加等级上限：两者都已满99时，不允许继续改造
+                ItemDB::FullItemRow termRow;
+                if (ItemDB::GetInstance().GetFullItemData(dwItemID, termRow)) {
+                    int curRebuild = termRow.d[13]; // nData14 = 强化等级
+                    int curAppend  = termRow.d[14]; // nData15 = 追加等级
+                    if (curRebuild >= 99 && curAppend >= 99) {
+                        result = 3; // 强化和追加均已满级，拒绝改造
+                        LOG("[Rebuild] 拒绝放入改造槽：强化(" + std::to_string(curRebuild) + ")和追加(" + std::to_string(curAppend) + ")均已达上限 itemID=" + std::to_string(dwItemID));
+                    } else {
+                        result = 0; // 校验通过
+                    }
+                } else {
+                    result = 0; // 无 ITEMDATA 记录说明从未改造过，允许放入
+                }
             } else {
                 result = 3; // ERR_REBUILDITEMTREM_NOTREBUILDITEM：不可改造的物品
                 LOG("[Rebuild] 拒绝强化：bType=" + std::to_string(bType) + " bKind=" + std::to_string(bKind) + " refID=" + std::to_string(refID));
@@ -370,27 +383,28 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
         }
     };
     
-    // 素晶副属性池：nBasicData1 �?nData字段编号
-    // 排除当前装备的主属性后，从有追加值的属性中随机�?
+    // 素晶副属性池：nBasicData1 ?nData字段编号
+    // 排除当前装备的主属性后，从有追加值的属性中随机?
     auto GetSujingAttrField = [](int nBasicData1) -> int {
         switch (nBasicData1) {
-            case 2: return 4;   // 攻击�?
-            case 3: return 5;   // 防御�?
-            case 4: return 6;   // 命中�?
-            case 5: return 13;  // 暴击�?[百分比]
+            case 2: return 4;   // 攻击力
+            case 3: return 5;   // 防御力
+            case 4: return 6;   // 命中率
+            case 5: return 13;  // 暴击率 [百分比]
             case 6: return 9;   // 最大HP
             case 7: return 10;  // 最大MP
-            case 8: return 12;  // 回HP
+            case 8: return 11;  // 生命恢复
+            case 9: return 12;  // 内力恢复
             default: return -1;
         }
     };
     
-    // 判断字段是否为百分比类型（暴击率 nData13�?
+    // 判断字段是否为百分比类型（暴击率 nData13?
     auto IsPercentField = [](int fieldNum) -> bool {
         return fieldNum == 13;
     };
     
-    // 获取模板�?nData 字段的基础�?
+    // 获取模板?nData 字段的基础?
     auto GetTemplateNData = [&](int fieldNum) -> int {
         if (!g_ItemTemplates.count(fir.wRefID)) return 0;
         auto& tpl = g_ItemTemplates[fir.wRefID];
@@ -402,26 +416,27 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
             case 8: return tpl.nData8;
             case 9: return tpl.nData9;
             case 10: return tpl.nData10;
-            case 12: return 0; // 模板�?nData12 无定义，默认 0
+            case 11: return tpl.nData11;
+            case 12: return tpl.nData12;
             case 13: return tpl.nData13;
             default: return 0;
         }
     };
     
-    // 获取当前 ITEMDATA 中的 nData 字段�?
+    // 获取当前 ITEMDATA 中的 nData 字段?
     auto GetCurrentNData = [&](int fieldNum) -> int {
         // fir.d[] 映射: d[0]=nData1 .. d[12]=nData13, d[13]=nData14 ..
         if (fieldNum >= 1 && fieldNum <= 17) return fir.d[fieldNum - 1];
         return 0;
     };
     
-    // �?REBUILD_CONFIG 全量重算属性加成（SUM 1..level 的每级�?× 等级系数�?
+    // ?REBUILD_CONFIG 全量重算属性加成（SUM 1..level 的每级?× 等级系数?
     auto CalcTotalBonus = [&](const std::string& attrCol, int level) -> int {
         if (level <= 0) return 0;
         return ItemDB::GetInstance().GetRebuildBonusSum(attrCol, reqLevel, level);
     };
     
-    // nData 字段编号 �?GBK 属性名称（用于系统消息�?
+    // nData 字段编号 ?GBK 属性名称（用于系统消息?
     auto GetAttrName = [](int fieldNum) -> std::string {
         switch (fieldNum) {
             case 4:  return "\xB9\xA5\xBB\xF7";       // 攻击
@@ -429,27 +444,40 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
             case 6:  return "\xC3\xFC\xD6\xD0";       // 命中
             case 9:  return "HP";
             case 10: return "MP";
-            case 12: return "\xBB\xD8\xB8\xB4HP";     // 回复HP
+            case 11: return "\xBB\xD8\xB8\xB4HP";     // 回复HP
+            case 12: return "\xBB\xD8\xB8\xB4MP";     // 回复MP
             case 13: return "\xB1\xA9\xBB\xF7";       // 暴击
-            default: return "\xCA\xF4\xD0\xD4";       // 属�?
+            default: return "\xCA\xF4\xD0\xD4";       // 属?
         }
     };
     
     // ====================================================================
-    // 三分支判�?
+    // 三分支判?
     // ====================================================================
     bool isSuccess = false;
     bool didBreak = false;
-    std::map<int, int> dbFields; // 要写�?ITEMDATA 的字�?
-    bool updateItemTable = false; // 是否需要更�?ITEM �?
+    std::map<int, int> dbFields; // 要写?ITEMDATA 的字?
+    bool updateItemTable = false; // 是否需要更?ITEM ?
     int newNBasicData1 = 0;       // 血晶降级用
-    int attrFieldChanged = 0;     // 本次变化的属性字段编�?
-    int attrDelta = 0;            // 属性变化量（正=增加, �?减少�?
+    int attrFieldChanged = 0;     // 本次变化的属性字段编?
+    int attrDelta = 0;            // 属性变化量（正=增加, ?减少?
     
     if (crystalKind == 1) {
         // ==================== 乌晶强化 ====================
+        // 强化等级已达上限99，拒绝继续乌晶改造
+        if (currentRebuild >= 99) {
+            std::vector<BYTE> capBuf; capBuf.resize(4);
+            capBuf.push_back(6); // ERR_REBUILDITEM_FULL
+            capBuf.push_back(255); pushDWord(capBuf, 0);
+            pushString(capBuf, itemName); capBuf.push_back((BYTE)currentRebuild);
+            PACKET_HEADER* cHead = (PACKET_HEADER*)capBuf.data();
+            cHead->id = 0x4244; cHead->payloadSize = (WORD)(capBuf.size() - 4);
+            EncryptPacket(capBuf.data(), 0x42);
+            SafeSend(clientSocket, (const char*)capBuf.data(), capBuf.size(), 0);
+            LOG("[Rebuild] 乌晶强化拒绝：强化等级已达上限99 itemID=" + std::to_string(dwItemID));
+            return;
+        }
         int targetLevel = currentRebuild + 1;
-        if (targetLevel > 99) targetLevel = 99;
         
         int wAttr = 0, lMulti = 0, baseRate = 0, breakChance = 0;
         if (g_RebuildConfig.count(targetLevel)) {
@@ -475,7 +503,7 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
         }
         
         if (!didBreak) {
-            // 全量重算主属�?
+            // 全量重算主属?
             int oldVal = GetCurrentNData(primaryField);
             int baseVal = GetTemplateNData(primaryField);
             int bonus;
@@ -496,8 +524,20 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
         
     } else if (crystalKind == 2) {
         // ==================== 素晶追加 ====================
+        // 追加等级已达上限99，拒绝继续素晶改造
+        if (currentAppend >= 99) {
+            std::vector<BYTE> capBuf; capBuf.resize(4);
+            capBuf.push_back(6); // ERR_REBUILDITEM_FULL
+            capBuf.push_back(255); pushDWord(capBuf, 0);
+            pushString(capBuf, itemName); capBuf.push_back((BYTE)currentRebuild);
+            PACKET_HEADER* cHead = (PACKET_HEADER*)capBuf.data();
+            cHead->id = 0x4244; cHead->payloadSize = (WORD)(capBuf.size() - 4);
+            EncryptPacket(capBuf.data(), 0x42);
+            SafeSend(clientSocket, (const char*)capBuf.data(), capBuf.size(), 0);
+            LOG("[Rebuild] 素晶追加拒绝：追加等级已达上限99 itemID=" + std::to_string(dwItemID));
+            return;
+        }
         int targetLevel = currentAppend + 1;
-        if (targetLevel > 99) targetLevel = 99;
         
         int sAttr = 0, lMulti = 0, baseRate = 0;
         if (g_RebuildConfig.count(targetLevel)) {
@@ -514,15 +554,15 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
         if (isSuccess) {
             currentAppend++;
             
-            // 选择追加的属�?
+            // 选择追加的属?
             int chosenField = -1;
-            if (crystalAttrType >= 2 && crystalAttrType <= 8) {
+            if (crystalAttrType >= 2 && crystalAttrType <= 9) {
                 // 指定类型素晶
                 chosenField = GetSujingAttrField(crystalAttrType);
             } else {
-                // 随机�?7 种副属性中选（nData4,5,6,9,10,12,13�?
-                int candidates[] = {4, 5, 6, 9, 10, 12, 13};
-                chosenField = candidates[rand() % 7];
+                // 随机从 8 种副属性中选
+                int candidates[] = {4, 5, 6, 9, 10, 11, 12, 13};
+                chosenField = candidates[rand() % 8];
             }
             
             if (chosenField > 0) {
@@ -543,12 +583,12 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
             dbFields[17] = currentAttempts;
             
         } else {
-            // 失败：随机清零一项有追加值的非主属�?
-            // 收集所有有追加值的副属�?
-            int allFields[] = {4, 5, 6, 9, 10, 12, 13};
+            // 失败：随机清零一项有追加值的非主属?
+            // 收集所有有追加值的副属?
+            int allFields[] = {4, 5, 6, 9, 10, 11, 12, 13};
             std::vector<int> enhanced;
             for (int f : allFields) {
-                if (f == primaryField) continue; // 排除主属�?
+                if (f == primaryField) continue; // 排除主属?
                 int curVal = GetCurrentNData(f);
                 int baseVal = GetTemplateNData(f);
                 if (curVal > baseVal) {
@@ -562,7 +602,7 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
                 int baseVal = GetTemplateNData(clearField);
                 dbFields[clearField] = baseVal;
                 attrFieldChanged = clearField;
-                attrDelta = baseVal - curVal; // 负�?
+                attrDelta = baseVal - curVal; // 负?
             }
             
             // nData15 不减！只更新尝试次数
@@ -570,7 +610,7 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
         }
         
     } else if (crystalKind == 3) {
-        // ==================== 血晶降�?====================
+        // ==================== 血晶降?====================
         int finalSuccessRate = BLOOD_CRYSTAL_BASE_RATE + totalSuccessBonus;
         isSuccess = (rand() % 100) < finalSuccessRate;
         
@@ -598,10 +638,10 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
     }
 
     // =====================================================================
-    // PHASE 1: 所�?DB 操作（不发包�?
+    // PHASE 1: 所?DB 操作（不发包?
     // =====================================================================
     
-    // 1a. 材料消�?
+    // 1a. 材料消?
     struct ResourceRemoveInfo {
         std::vector<BYTE> packet;
         bool valid;
@@ -632,7 +672,7 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
         }
     }
     
-    // 1b. 装备破碎 �?属性写�?
+    // 1b. 装备破碎 ?属性写?
     std::vector<BYTE> itemBreakPacket;
     bool hasItemBreakPacket = false;
     
@@ -660,13 +700,13 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
     }
 
     // =====================================================================
-    // PHASE 2: 批量发包（同帧到达，�?UI 闪烁�?
+    // PHASE 2: 批量发包（同帧到达，?UI 闪烁?
     // =====================================================================
     
-    // 2-pre. 系统消息必须�?0x4244 之前发送，因为客户端收�?0x4244 �?
+    // 2-pre. 系统消息必须?0x4244 之前发送，因为客户端收?0x4244 ?
     //        立即触发 HideSack 重建 UI，后续聊天包会被丢弃或不显示
     {
-        // 构造属性变化描�?
+        // 构造属性变化描?
         std::string attrChangeStr;
         if (attrFieldChanged > 0 && attrDelta != 0) {
             std::string attrName = GetAttrName(attrFieldChanged);
@@ -676,7 +716,7 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
                 attrChangeStr = " " + std::to_string(attrDelta) + attrName;
             }
         } else if (crystalKind == 3 && isSuccess) {
-            attrChangeStr = " \xB5\xC8\xBC\xB6\xD0\xE8\xC7\xF3-1"; // 等级需�?1
+            attrChangeStr = " \xB5\xC8\xBC\xB6\xD0\xE8\xC7\xF3-1"; // 等级需?1
         }
         
         std::string attemptMsg;
@@ -685,7 +725,7 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
         } else if (didBreak) {
             attemptMsg = "\xB8\xC4\xD4\xEC\xCA\xA7\xB0\xDC\xA3\xAC\xD7\xB0\xB1\xB8\xD2\xD1\xCB\xF0\xBB\xD9\xA3\xA1"; // 改造失败，装备已损毁！
         } else {
-            attemptMsg = "\xB8\xC4\xD4\xEC\xCA\xA7\xB0\xDC\xA1\xA3"; // 改造失败�?
+            attemptMsg = "\xB8\xC4\xD4\xEC\xCA\xA7\xB0\xDC\xA1\xA3"; // 改造失败?
         }
         attemptMsg += attrChangeStr;
         LOG("[Rebuild] Result: success=" + std::to_string(isSuccess) + " break=" + std::to_string(didBreak) + " kind=" + std::to_string(crystalKind) + " attrField=" + std::to_string(attrFieldChanged) + " delta=" + std::to_string(attrDelta));
@@ -702,17 +742,18 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
         SafeSend(clientSocket, (const char*)chatBuf.data(), (int)chatBuf.size(), 0);
     }
 
-    // nData 字段编号 �?客户�?bFactor 索引映射
+    // nData 字段编号 ?客户?bFactor 索引映射
     auto GetClientFactor = [](int nDataField) -> BYTE {
         switch (nDataField) {
-            case 4:  return 0;   // 攻击�?
-            case 5:  return 1;   // 防御�?
-            case 6:  return 2;   // 命中�?
-            case 13: return 3;   // 暴击�?
+            case 4:  return 0;   // 攻击?
+            case 5:  return 1;   // 防御?
+            case 6:  return 2;   // 命中?
+            case 13: return 3;   // 暴击?
             case 9:  return 4;   // 最大生命力
-            case 10: return 5;   // 最大内�?
-            case 12: return 6;   // 自动生命力恢�?
-            default: return 255; // 不显�?
+            case 10: return 5;   // 最大内力
+            case 11: return 6;   // 自动生命力恢复
+            case 12: return 7;   // 自动内力恢复
+            default: return 255; // 不显?
         }
     };
     

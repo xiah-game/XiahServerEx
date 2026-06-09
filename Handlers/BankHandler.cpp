@@ -94,7 +94,7 @@ static void SendBankOrMallList(SOCKET clientSocket, DWORD charID, WORD opCodeACK
                 pushByte(bi, d1); 
                 pushWord(bi, d2); pushWord(bi, d3); 
                 pushDWord(bi, d4); pushDWord(bi, d5); pushDWord(bi, d6); pushWord(bi, d7); pushWord(bi, d8); 
-                pushDWord(bi, d9); pushDWord(bi, d10); pushWord(bi, d11); pushWord(bi, d12); pushWord(bi, d13); 
+                pushDWord(bi, d9); pushDWord(bi, d10); pushDWord(bi, d11); pushDWord(bi, d12); pushWord(bi, d13); 
                 pushByte(bi, dat18); pushByte(bi, dat19); 
                 pushByte(bi, d14); pushByte(bi, d15); pushByte(bi, d16); pushByte(bi, d17); 
                 
@@ -296,7 +296,7 @@ void OnDrawInBankReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tota
                 pushByte(iBuf, d1);
                 pushWord(iBuf, d2); pushWord(iBuf, d3);
                 pushDWord(iBuf, d4); pushDWord(iBuf, d5); pushDWord(iBuf, d6); pushWord(iBuf, d7); pushWord(iBuf, d8);
-                pushDWord(iBuf, d9); pushDWord(iBuf, d10); pushWord(iBuf, d11); pushWord(iBuf, d12); pushWord(iBuf, d13);
+                pushDWord(iBuf, d9); pushDWord(iBuf, d10); pushDWord(iBuf, d11); pushDWord(iBuf, d12); pushWord(iBuf, d13);
                 pushByte(iBuf, dat18); pushByte(iBuf, dat19);
                 pushByte(iBuf, d14); pushByte(iBuf, d15); pushByte(iBuf, d16); pushByte(iBuf, d17);
                 if (type == 9) { pushDWord(iBuf, 0); pushWord(iBuf, 0); pushWord(iBuf, 0); pushWord(iBuf, 0); pushWord(iBuf, 0); }
@@ -485,7 +485,7 @@ static void ProcessDrawOut(SOCKET clientSocket, DWORD charID, BYTE* payload, WOR
                 pushByte(bi, d1);
                 pushWord(bi, d2); pushWord(bi, d3);
                 pushDWord(bi, d4); pushDWord(bi, d5); pushDWord(bi, d6); pushWord(bi, d7); pushWord(bi, d8);
-                pushDWord(bi, d9); pushDWord(bi, d10); pushWord(bi, d11); pushWord(bi, d12); pushWord(bi, d13);
+                pushDWord(bi, d9); pushDWord(bi, d10); pushDWord(bi, d11); pushDWord(bi, d12); pushWord(bi, d13);
                 pushByte(bi, dat18); pushByte(bi, dat19);
                 pushByte(bi, d14); pushByte(bi, d15); pushByte(bi, d16); pushByte(bi, d17);
                 if (type == 9) { pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); }

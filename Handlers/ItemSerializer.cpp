@@ -60,7 +60,7 @@ void SerializeItemData(const ItemDB::FullItemRow& row, std::vector<BYTE>& bi) {
         pushByte(bi, d[0]);
         pushWord(bi, d[1]); pushWord(bi, d[2]);
         pushDWord(bi, d[3]); pushDWord(bi, d[4]); pushDWord(bi, d[5]); pushWord(bi, d[6]); pushWord(bi, d[7]);
-        pushDWord(bi, d[8]); pushDWord(bi, d[9]); pushWord(bi, d[10]); pushWord(bi, d[11]); pushWord(bi, d[12]);
+        pushDWord(bi, d[8]); pushDWord(bi, d[9]); pushDWord(bi, d[10]); pushDWord(bi, d[11]); pushWord(bi, d[12]);
         pushByte(bi, dat18); pushByte(bi, dat19);
         pushByte(bi, d[13]); pushByte(bi, d[14]); pushByte(bi, d[15]); pushByte(bi, d[16]);
         if (type == 9) {

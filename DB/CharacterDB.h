@@ -161,6 +161,10 @@ public:
     struct CharDefault { int wStr, wDex, wVit, wSus, bIncHp, bIncIp; };
     bool GetCharDefault(BYTE bCharType, CharDefault& out);
 
+    // 初始装备配置项（从 CHAR_STARTITEM 表读取）
+    struct StartItem { WORD wRefID; BYTE bSackPos; WORD wAmount; };
+    std::vector<StartItem> GetStartItems(BYTE bCharType);
+
     // Get slot values
     bool GetSlotValues(DWORD dwCharID, std::vector<DWORD>& slots);
 
