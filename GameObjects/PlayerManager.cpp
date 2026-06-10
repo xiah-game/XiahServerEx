@@ -182,11 +182,9 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
             pObj->dwHpMax = (baseInt * 8) + ((baseLevel - 1) * 8) + equipHp; // baseInt = wSus
             DWORD computedIpMax = (baseVit * 0) + ((baseLevel - 1) * 4) + (DWORD)equipIp;
             pObj->wIpMax = computedIpMax;
-            // Don't let current exceed max
-            if (pObj->dwHpCur > pObj->dwHpMax) pObj->dwHpCur = pObj->dwHpMax;
-            if (pObj->wIpCur > pObj->wIpMax) pObj->wIpCur = pObj->wIpMax;
+            // 注意：不在这里截断 current，因为 wIpMax/dwHpMax 还没加上被动武功/buff/称号加成
 
-            LOG("[RecalcStats] Applied to pObj: restoreHp=" + std::to_string(pObj->wEquipRestoreHp) + " restoreIp=" + std::to_string(pObj->wEquipRestoreIp) + " dwHpMax=" + std::to_string(pObj->dwHpMax) + " dwHpCur=" + std::to_string(pObj->dwHpCur) + " wIpMax=" + std::to_string(pObj->wIpMax));
+            LOG("[RecalcStats] Base to pObj: restoreHp=" + std::to_string(pObj->wEquipRestoreHp) + " restoreIp=" + std::to_string(pObj->wEquipRestoreIp) + " dwHpMax=" + std::to_string(pObj->dwHpMax) + " dwHpCur=" + std::to_string(pObj->dwHpCur) + " wIpMax=" + std::to_string(pObj->wIpMax));
         
             // ========== Additive Percentage Stat Calculation ==========
             // Phase 1: Accumulate ALL flat bonuses
@@ -273,6 +271,10 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
             // 绉板彿绯荤粺锛氱敓鍛戒笌鍐呭姏鏈澶т笂闄愮櫨鍒嗘瘮鍙犵畻
             pObj->dwHpMax = (DWORD)((unsigned long long)pObj->dwHpMax * (100 + titleHpPerc) / 100);
             pObj->wIpMax  = (DWORD)((unsigned long long)pObj->wIpMax * (100 + titleMpPerc) / 100);
+
+            // 所有加成（装备+被动武功+buff+称号百分比）全部累加后，再截断 current 不超过 max
+            if (pObj->dwHpCur > pObj->dwHpMax) pObj->dwHpCur = pObj->dwHpMax;
+            if (pObj->wIpCur > pObj->wIpMax) pObj->wIpCur = pObj->wIpMax;
 
             // 6. Save final stats to the object
             pObj->dwTotalAtk = totalAtk;
@@ -382,6 +384,18 @@ void SendCharStatusInfoAck(SOCKET clientSocket, DWORD dwCharID, WORD opCode) {
         }
     }
 
+    // 时序修复：0x3B02 在 RecalcStats/LoadVisualEquipAndFame 之前发送，
+    // 此时内存中 bRebirth 可能还未加载。直接从 CHAR_BASIC 补读。
+    if (playerObj.bRebirth == 0) {
+        DBHelper::GetInstance().ExecuteQuery(
+            "SELECT bRebirth FROM CHAR_BASIC WHERE dwCharID = " + std::to_string(dwCharID),
+            [&](SQLHSTMT hStmt) {
+                BYTE rb = 0; SQLLEN cb;
+                SQLGetData(hStmt, 1, SQL_C_UTINYINT, &rb, 0, &cb);
+                if (cb != SQL_NULL_DATA && rb > 0) playerObj.bRebirth = rb;
+            });
+    }
+
     std::vector<BYTE> ackBuf; ackBuf.resize(4);
     
     std::string q_unused = ""; // kept for reference
@@ -466,8 +480,10 @@ void SendCharStatusInfoAck(SOCKET clientSocket, DWORD dwCharID, WORD opCode) {
             ackBuf.push_back(playerObj.wPlusSpeed & 0xFF);
             pushWord(wRemainTp); pushDword(dwTotalTp);
             pushDword(dwFame);
-            ackBuf.push_back(0); ackBuf.push_back(0);
-            pushDword(0); pushDword(0); pushDword(0);
+            ackBuf.push_back(0); // bChangeItemSet
+            ackBuf.push_back(playerObj.bRebirth); // bRebirth（觉醒次数：从 CHAR_BASIC 加载）
+            LOG("[SendStatusAck] 0x3B02 bRebirth=" + std::to_string(playerObj.bRebirth) + " ackBufSize=" + std::to_string(ackBuf.size()));
+            pushDword(0); pushDword(0); pushDword(0); // dwPremiumTP, dwPremiumSP, dwGameMasterMark
         } else if (opCode == CS_IT_CHARSTATUSINFO_ACK) {
             pushWord(wLevel); pushWord(wStr); pushWord(wSus); pushWord(wDex); pushWord(wVit);
             ackBuf.push_back(0); ackBuf.push_back(0); ackBuf.push_back(0); ackBuf.push_back(0);

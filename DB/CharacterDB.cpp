@@ -655,6 +655,15 @@ void CharacterDB::LoadVisualEquipAndFame(DWORD dwCharID, PlayerData* pObj) {
         pObj->dwFame = cp.dwFame;
     }
 
+    // 加载觉醒次数（存储在 CHAR_BASIC 表中）
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT bRebirth FROM CHAR_BASIC WHERE dwCharID = " + std::to_string(dwCharID),
+        [&](SQLHSTMT hStmt) {
+            BYTE rb = 0; SQLLEN cb;
+            SQLGetData(hStmt, 1, SQL_C_UTINYINT, &rb, 0, &cb);
+            if (cb != SQL_NULL_DATA) pObj->bRebirth = rb;
+        });
+
     DBHelper::GetInstance().ExecuteQuery(
         "SELECT bSackPos, wVisualID FROM vCHAR_EQUIPITEM WHERE dwCharID = " + std::to_string(dwCharID),
         [&](SQLHSTMT hStmt) {

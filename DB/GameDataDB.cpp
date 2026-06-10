@@ -387,3 +387,17 @@ void GameDataDB::LoadMugongList(std::map<DWORD, std::map<BYTE, sMugongList>>& ou
         out[lst.dwMugongID][lst.bLevel] = lst;
     });
 }
+
+int GameDataDB::LoadRequiredClientVersion() {
+    int version = 1081;
+    std::string q = "SELECT TOP 1 dwVersionID FROM " + g_Config.dbServerInfo + ".dbo.VersionInfo WHERE bFlag = 1";
+    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+        SQLLEN cb = 0;
+        int v = 0;
+        SQLGetData(hStmt, 1, SQL_C_SLONG, &v, 0, &cb);
+        if (cb != SQL_NULL_DATA && v > 0) {
+            version = v;
+        }
+    });
+    return version;
+}

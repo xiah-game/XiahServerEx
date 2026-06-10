@@ -417,10 +417,21 @@ MonsterData* pObj = NULL;
             ItemDB::GetInstance().InsertItemData(newDbItemID, nData);
         }
 
-        if (bCharSackPos == 255) {
-            BYTE result = FindFreeSackPos(charID, bCharSackCnt, tpl.bCX, tpl.bCY);
+        // 无论客户端传什么位置，都由服务端自动分配空位，避免唯一约束冲突导致物品覆盖
+        {
+            BYTE result = 255;
+            for (BYTE tryPage = 1; tryPage <= 3 && result == 255; tryPage++) {
+                result = FindFreeSackPos(charID, tryPage, tpl.bCX, tpl.bCY);
+                if (result != 255) {
+                    bCharSackCnt = tryPage;
+                    break;
+                }
+            }
             if (result == 255) {
-                // Inventory full!
+                // 所有背包页都满了，回滚已创建的物品和扣款
+                ItemDB::GetInstance().DeleteItem(newDbItemID);
+                CharacterDB::GetInstance().AddMoney(charID, totalCost);
+                LOG("[NpcHandler] BuyItem FAILED: inventory full, rolled back itemID=" + std::to_string(newDbItemID));
                 return;
             }
             int startPos = (bCharSackCnt == 1) ? 20 : (bCharSackCnt == 2) ? 60 : 100;
@@ -432,6 +443,7 @@ MonsterData* pObj = NULL;
         else if (bCharSackCnt == 2) absolutePos = 60 + bCharSackPos;
         else if (bCharSackCnt == 3) absolutePos = 100 + bCharSackPos;
         
+        LOG("[NpcHandler] BuyItem SLOT: page=" + std::to_string(bCharSackCnt) + " relPos=" + std::to_string(bCharSackPos) + " absPos=" + std::to_string(absolutePos) + " itemID=" + std::to_string(newDbItemID));
         ItemDB::GetInstance().AddToSack(charID, absolutePos, newDbItemID);
 
         std::vector<BYTE> ackBuf;

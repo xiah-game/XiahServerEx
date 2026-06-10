@@ -51,6 +51,8 @@ public:
     void LoadNpcList(std::vector<MonsterData>& out, const std::map<BYTE, sNpcTemplate>& npcTemplates);
     void LoadFunctionalNpcItems(std::vector<MonsterData>& worldObjects);
 
+    // 从 xiah_server.VersionInfo 表读取客户端最低版本号
+    int LoadRequiredClientVersion();
     // DropManager startup loaders
     void LoadRootItems(std::map<BYTE, std::vector<sRootItem>>& out);
     void LoadDropGroups(std::map<BYTE, std::vector<sDropGroup>>& out);

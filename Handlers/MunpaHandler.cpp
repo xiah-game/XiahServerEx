@@ -142,7 +142,10 @@ void BroadcastPlayerVisualUpdate(DWORD dwCharID) {
         pB(0); pB(0); pB(0); pB(0); pB(0);
         pDW(objCopy.dwMunpaID); pDW(0);
         for(int i=0; i<9; i++) {
-            pW(0); pB(0); pB(0); pB(0);
+            pW(objCopy.wVisualID[i]);
+            pB(objCopy.bStxType[i]);
+            pB(objCopy.bRarity[i]);
+            pB(objCopy.bNeedCharType[i]);
         }
         pB(0); pB(0); pDW(0);
 
@@ -315,6 +318,20 @@ void OnAskMunwonReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
                 pushString(addAck, vizName);
                 
                 BroadcastToMunpa(dwMunpaID, 0x3A2C, addAck);
+                
+                // 向双方回发 0x3A2B 确认包，关闭客户端邀请对话框
+                std::vector<BYTE> okAck;
+                okAck.push_back(0); // ACT_ASKMUNWON_OK
+                pushDWord(okAck, dwAskID);
+                pushDWord(okAck, dwAskedID);
+                
+                // 通知邀请者：邀请已被接受
+                SOCKET inviterSocket = SessionMgr::GetInstance().GetSocketByCharID(inviterCharID);
+                if (inviterSocket != INVALID_SOCKET) {
+                    SendPacketToSocket(inviterSocket, 0x3A2B, okAck);
+                }
+                // 通知被邀请者（当前发包者）：加入成功
+                SendPacketToSocket(s, 0x3A2B, okAck);
             }
         }
     }

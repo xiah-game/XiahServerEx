@@ -126,6 +126,13 @@ void InitPacketHandlers() {
         if (charID) OnItemDropReq(s, charID, p, size);
     });
 
+    // 觉醒请求 (CS_IM_REBIRTH_REQ = OFFSET_CS_IM + 110 = 0x426F)
+    RegisterHandler(0x426F, [](SOCKET s, BYTE* p, WORD size) {
+        DWORD charID = SessionMgr::GetInstance().GetCharID(s);
+        if (charID) OnRebirthReq(s, charID, p, size);
+    });
+
+
     // Map & Loading Handlers
     RegisterHandler(0x3A55, [](SOCKET s, BYTE* p, WORD size) { OnMapLoadingSequenceReq(s, SessionMgr::GetInstance().GetCharID(s), p, size, 0x3A55); });
     RegisterHandler(0x3203, [](SOCKET s, BYTE* p, WORD size) { OnMapLoadingSequenceReq(s, SessionMgr::GetInstance().GetCharID(s), p, size, 0x3203); });

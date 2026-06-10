@@ -91,6 +91,9 @@ void LoadConfig() {
         }
     }
     
+    // 客户端最低版本号从数据库 xiah_server.VersionInfo 加载（在 LoadGameData 阶段执行）
+    // g_Config.requiredClientVersion 默认值 1081，DB 加载后覆盖
+
     std::cout << "[Config] Loaded configuration from " << iniPath << std::endl;
 }
 
@@ -154,6 +157,10 @@ void LoadGameData() {
     dao.LoadRealm(g_Config.dbServerInfo, g_Config.realmName);
     dao.LoadChannels(g_Config.dbServerInfo, g_Config.channelPorts, g_Config.cachedChannels);
     LOG("[Server] Realm Info Loaded. RealmName: " + g_Config.realmName + " | Channels: " + std::to_string(g_Config.cachedChannels.size()));
+
+    // 从 xiah_server.VersionInfo 表加载客户端最低版本号
+    g_Config.requiredClientVersion = dao.LoadRequiredClientVersion();
+    LOG("[Server] Required Client Version: " + std::to_string(g_Config.requiredClientVersion));
 
     DropManager::GetInstance()->LoadDropTables();
     MugongManager::GetInstance()->LoadMugongData();

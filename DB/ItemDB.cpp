@@ -415,7 +415,7 @@ void ItemDB::GetEquippedItemStats(DWORD dwCharID, std::vector<EquipStatRow>& out
 }
 
 void ItemDB::GetSackOccupancy(DWORD dwCharID, int startPos, int endPos, std::vector<SackOccupancy>& out) {
-    std::string q = "SELECT S.bSackPos, I.wRefID, S.dwItemID FROM SACKITEM S JOIN ITEM I ON S.dwItemID = I.dwItemID WHERE S.dwCharID = " + std::to_string(dwCharID) + " AND S.bSackPos >= " + std::to_string(startPos) + " AND S.bSackPos <= " + std::to_string(endPos);
+    std::string q = "SELECT S.bSackPos, ISNULL(I.wRefID, 0), S.dwItemID FROM SACKITEM S LEFT JOIN ITEM I ON S.dwItemID = I.dwItemID WHERE S.dwCharID = " + std::to_string(dwCharID) + " AND S.bSackPos >= " + std::to_string(startPos) + " AND S.bSackPos <= " + std::to_string(endPos);
     DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
         SackOccupancy r; SQLLEN c1, c2, c3;
         SQLGetData(hStmt, 1, SQL_C_SLONG, &r.bSackPos, 0, &c1);

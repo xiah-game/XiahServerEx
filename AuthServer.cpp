@@ -112,6 +112,31 @@ void RunAuthSvr() {
                         
                         LOG("[AuthSvr " + std::to_string(g_Config.authPort) + "] Received CS_IT_LOGIN_REQ for user: " + username);
                         
+                        // 解析客户端版本号（int, 4字节，紧跟在 password sString 之后）
+                        int clientVersion = 0;
+                        if (payload + 4 <= endPtr) {
+                            clientVersion = *(int*)payload;
+                            payload += 4;
+                        }
+                        LOG("[AuthSvr " + std::to_string(g_Config.authPort) + "] Client version: " + std::to_string(clientVersion) + " (required: " + std::to_string(g_Config.requiredClientVersion) + ")");
+
+                        // 版本校验：低于服务端要求的最低版本号时直接拒绝登录
+                        if (clientVersion < g_Config.requiredClientVersion) {
+                            LOG("[AuthSvr " + std::to_string(g_Config.authPort) + "] VERSION MISMATCH! Client v" + std::to_string(clientVersion) + " < Required v" + std::to_string(g_Config.requiredClientVersion) + " -> Rejecting");
+                            
+                            std::vector<BYTE> verFailBuf; verFailBuf.resize(4);
+                            verFailBuf.push_back(7); // bResult = 7 (VERSION_MISMATCH, 客户端显示为登录失败)
+                            DWORD dwDummyKey = 0;
+                            verFailBuf.push_back((BYTE)(dwDummyKey & 0xFF)); verFailBuf.push_back((BYTE)((dwDummyKey >> 8) & 0xFF)); verFailBuf.push_back((BYTE)((dwDummyKey >> 16) & 0xFF)); verFailBuf.push_back((BYTE)(dwDummyKey >> 24));
+                            verFailBuf.push_back(18); // bAge
+                            PACKET_HEADER* verHead = (PACKET_HEADER*)verFailBuf.data();
+                            verHead->id = CS_IT_LOGIN_ACK; verHead->payloadSize = verFailBuf.size() - sizeof(PACKET_HEADER);
+                            EncryptPacket(verFailBuf.data(), 0);
+                            SafeSend(clientSocket, (const char*)verFailBuf.data(), verFailBuf.size(), 0);
+                            LOG("[AuthSvr " + std::to_string(g_Config.authPort) + "] Sent VERSION_MISMATCH response. Please update client.");
+                            continue;
+                        }
+
                         BYTE bLoginResult = 1; // 1 = LOGINFAIL
                         DWORD accountId = 0;
                         if (!username.empty() && !password.empty()) {

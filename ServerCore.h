@@ -40,6 +40,7 @@ struct sServerConfig {
     WORD unitPort;
     
     std::map<int, WORD> channelPorts;
+    int requiredClientVersion = 1081; // 客户端最低版本号，低于此版本拒绝登录
     std::string realmName;
     std::vector<sChannelInfo> cachedChannels;
 
@@ -133,6 +134,9 @@ struct PlayerData : EntityBase {
 
     // 武功攻击与物理PK保护选项：0 = 保护所有角色, 1 = 保护本门派成员, 2 = 无对象/自由PK
     BYTE  bSafeMode = 0;
+
+    // 觉醒次数：0=未觉醒, 1~6=觉醒, 7~12=真觉醒（对应客户端 m_bRebirth）
+    BYTE  bRebirth = 0;
 
     // Visual equipment and Fame sync
     DWORD dwFame = 0;

@@ -1115,7 +1115,7 @@ void OnCharInfoReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
 
     }
 
-    pushByte(0); // bRebirth
+    pushByte(objCopy.bRebirth); // bRebirth（从 CHAR_BASIC 加载的觉醒次数）
 
     pushByte(0); // bPoisonUnderCover
 
@@ -1285,7 +1285,7 @@ void OnCharInfoListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
                 
 
-                pushByte(0); // bRebirth
+                pushByte(o.bRebirth); // bRebirth（从 CHAR_BASIC 加载的觉醒次数）
 
                 pushByte(0); // bPoisonUnderCover
 

@@ -190,6 +190,17 @@ void OnItemMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
         LOG("[ItemHandler] ITEM MOVE: CharID=" + std::to_string(charID) + " " + std::to_string(bSrcSackID) + ":" + std::to_string(bSrcSackPos) + " -> " + std::to_string(bDesSackID) + ":" + std::to_string(bDesSackPos));
         
         if (charID > 0) {
+            // 移动失败时发送 0x420E (bResult=3) 让客户端回滚物品位置并提示"能力不足，无法装备"
+            auto sendMoveFailAck = [&]() {
+                std::vector<BYTE> failBuf; failBuf.resize(4); failBuf.push_back(3); // 3 = 能力不足(IDS_SHORT_ABLE)
+                failBuf.push_back(bSrcSackID); failBuf.push_back(bSrcSackPos);
+                failBuf.push_back(bDesSackID); failBuf.push_back(bDesSackPos);
+                PACKET_HEADER* fh = (PACKET_HEADER*)failBuf.data();
+                fh->id = 0x420E;
+                fh->payloadSize = failBuf.size() - sizeof(PACKET_HEADER);
+                EncryptPacket(failBuf.data(), 0x42);
+                SafeSend(clientSocket, (const char*)failBuf.data(), failBuf.size(), 0);
+            };
             // Check if source and destination are same position
 
             // Boundary validation: if a specific position is given for a backpack sack,
@@ -249,6 +260,7 @@ void OnItemMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
 
                     if (!fits) {
                         LOG("[ItemHandler] Swap rejected: " + std::to_string(bcx) + "x" + std::to_string(bcy) + " item overlaps other items at (" + std::to_string(row) + "," + std::to_string(col) + ")");
+                        sendMoveFailAck();
                         return;
                     }
                 }
@@ -315,6 +327,8 @@ void OnItemMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
 
                     if (!validPos) {
                         LOG("[ItemHandler] Invalid Equip Slot " + std::to_string(bDesSackPos) + " for Item Type " + std::to_string(t));
+                        SendSystemWarningChat(clientSocket, "无法将该物品装备到此位置！");
+                        sendMoveFailAck();
                         return;
                     }
 
@@ -350,6 +364,16 @@ void OnItemMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
                             " Vit:" + std::to_string(pVit) + "/" + std::to_string(reqVit) +
                             " Sus:" + std::to_string(pSus) + "/" + std::to_string(reqSus) +
                             " CharType:" + std::to_string(pCharType) + "/" + std::to_string(reqCharType));
+
+                        // 细分失败原因，给玩家明确的中文提示
+                        if (reqCharType != 0 && pCharType != reqCharType) {
+                            SendSystemWarningChat(clientSocket, "职业不符，无法穿戴此装备！");
+                        } else if (pLevel < reqLv) {
+                            SendSystemWarningChat(clientSocket, "等级不足，需要 " + std::to_string(reqLv) + " 级才能穿戴！");
+                        } else {
+                            SendSystemWarningChat(clientSocket, "属性不足，无法穿戴此装备！");
+                        }
+                        sendMoveFailAck();
                         return;
                     }
                 }
@@ -1528,3 +1552,194 @@ void OnRemarkItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tota
     sendAck(0); // SUCCESS
 }
 
+// ============================================================
+// 觉醒请求处理器 (CS_IM_REBIRTH_REQ = 0x426F)
+// 客户端 payload: BYTE bSackID + BYTE bSackPos + DWORD dwItemID
+// 服务端应答 (CS_IM_REBIRTH_ACK = 0x4270):
+//   成功: BYTE bResult(0) + DWORD dwCharID + BYTE bRebirth
+//   失败: BYTE bResult(1~6)
+// ============================================================
+void OnRebirthReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
+    // 觉醒 ACK 包 ID: OFFSET_CS_IM(0x4201) + 111 = 0x4270
+    const WORD PKT_REBIRTH_ACK = 0x4270;
+
+    // 错误码（与客户端 csprotocol.h 一致）
+    const BYTE ERR_SUCCESS  = 0;
+    const BYTE ERR_LEVEL    = 1; // 等级不足
+    const BYTE ERR_STEP     = 2; // 觉醒阶段不符
+    const BYTE ERR_SPACE    = 3; // 背包空间不足（保留，当前未使用）
+    const BYTE ERR_INTERNAL = 4; // 内部错误
+
+    // 发送失败应答的辅助函数
+    auto sendError = [&](BYTE errCode) {
+        std::vector<BYTE> ack(4);
+        ack.push_back(errCode);
+        PACKET_HEADER* h = (PACKET_HEADER*)ack.data();
+        h->id = PKT_REBIRTH_ACK;
+        h->payloadSize = ack.size() - sizeof(PACKET_HEADER);
+        EncryptPacket(ack.data(), 0x42);
+        SafeSend(clientSocket, (const char*)ack.data(), ack.size(), 0);
+    };
+
+    if (totalSize < 6) {
+        LOG("[ItemHandler] OnRebirthReq: payload too small: " + std::to_string(totalSize));
+        sendError(ERR_INTERNAL);
+        return;
+    }
+
+    BYTE bSackID   = payload[0];
+    BYTE bSackPos  = payload[1];
+    DWORD dwItemID = *(DWORD*)(payload + 2);
+
+    LOG("[ItemHandler] OnRebirthReq: charID=" + std::to_string(charID) +
+        " bSackID=" + std::to_string(bSackID) +
+        " bSackPos=" + std::to_string(bSackPos) +
+        " dwItemID=" + std::to_string(dwItemID));
+
+    // 1. 从数据库读取物品的 wRefID
+    WORD wRefID = 0;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT wRefID FROM ITEM WHERE dwItemID = " + std::to_string(dwItemID),
+        [&](SQLHSTMT hStmt) { SQLLEN c; SQLGetData(hStmt, 1, SQL_C_USHORT, &wRefID, 0, &c); });
+
+    if (wRefID == 0) {
+        LOG("[ItemHandler] OnRebirthReq: Item not found! dwItemID=" + std::to_string(dwItemID));
+        sendError(ERR_INTERNAL);
+        return;
+    }
+
+    // 2. 确认物品模板是觉醒物品 (bType == 31)
+    auto it = g_ItemTemplates.find(wRefID);
+    if (it == g_ItemTemplates.end()) {
+        LOG("[ItemHandler] OnRebirthReq: Template not found! wRefID=" + std::to_string(wRefID));
+        sendError(ERR_INTERNAL);
+        return;
+    }
+    const sItemTemplate& tpl = it->second;
+    if (tpl.bType != 31) { // ITEMTYPE_REBIRTH = 31
+        LOG("[ItemHandler] OnRebirthReq: Not a rebirth item! bType=" + std::to_string(tpl.bType));
+        sendError(ERR_INTERNAL);
+        return;
+    }
+
+    // 3. 获取角色当前觉醒次数和等级
+    BYTE curRebirth = 0;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT bRebirth FROM CHAR_BASIC WHERE dwCharID = " + std::to_string(charID),
+        [&](SQLHSTMT hStmt) { SQLLEN c; SQLGetData(hStmt, 1, SQL_C_UTINYINT, &curRebirth, 0, &c); });
+
+    CharacterDB::CharPower cp;
+    if (!CharacterDB::GetInstance().GetCharData(charID, cp)) {
+        LOG("[ItemHandler] OnRebirthReq: GetCharData failed for charID=" + std::to_string(charID));
+        sendError(ERR_INTERNAL);
+        return;
+    }
+
+    // 4. 校验觉醒阶段（物品的 nBasicData1 必须等于角色当前 bRebirth）
+    //    DB 查询结果: nBasicData1 = 觉醒阶段要求 (0=未觉醒者, 1=1次觉醒者, ...)
+    BYTE reqStep = (BYTE)tpl.nBasicData1;
+    if (curRebirth != reqStep) {
+        LOG("[ItemHandler] OnRebirthReq: Step mismatch! curRebirth=" + std::to_string(curRebirth) +
+            " reqStep=" + std::to_string(reqStep));
+        sendError(ERR_STEP);
+        return;
+    }
+
+    // 5. 校验等级（物品的 nBasicData3 为需求等级）
+    WORD reqLevel = (WORD)tpl.nBasicData3;
+    if (cp.wLevel < reqLevel) {
+        LOG("[ItemHandler] OnRebirthReq: Level too low! curLevel=" + std::to_string(cp.wLevel) +
+            " reqLevel=" + std::to_string(reqLevel));
+        sendError(ERR_LEVEL);
+        return;
+    }
+
+    // 6. 所有校验通过 → 执行觉醒
+    BYTE newRebirth = curRebirth + 1;
+
+    // 6a. 更新数据库觉醒次数
+    DBHelper::GetInstance().ExecuteUpdate(
+        "UPDATE CHAR_BASIC SET bRebirth = " + std::to_string(newRebirth) +
+        " WHERE dwCharID = " + std::to_string(charID));
+
+    // 6b. 消耗觉醒物品（级联删除 SACKITEM + ITEMDATA + ITEM 等所有关联记录）
+    ItemDB::GetInstance().DeleteItemCascade(dwItemID);
+
+    LOG("[ItemHandler] OnRebirthReq: SUCCESS! charID=" + std::to_string(charID) +
+        " rebirth " + std::to_string(curRebirth) + " -> " + std::to_string(newRebirth) +
+        " consumed item " + std::to_string(dwItemID));
+
+    // 7. 更新内存中 PlayerManager 的觉醒数据
+    DWORD dwObjectID = charID + 400000000;
+    DWORD mapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+    if (g_MapInstances.count(mapID)) {
+        std::lock_guard<std::mutex> lock(g_MapInstances[mapID]->GetMutex());
+        sServerObject* pObj = g_MapInstances[mapID]->GetPlayer(dwObjectID);
+        if (pObj) {
+            pObj->bRebirth = newRebirth;
+        }
+    }
+
+    // 8. 从客户端背包移除物品视觉（SendRemoveFromSackAck）
+    //    正确格式: bSackID(1) + bSackPos(1) + bReason(1) = payload 3字节
+    {
+        std::vector<BYTE> rmBuf(7);
+        PACKET_HEADER* rh = (PACKET_HEADER*)rmBuf.data();
+        rh->id = 0x4208; // CS_IM_REMOVEFROMSACK_ACK
+        rh->payloadSize = 3;
+        rmBuf[4] = bSackID;   // 背包页码
+        rmBuf[5] = bSackPos;  // 页内位置
+        rmBuf[6] = 0;         // 移除原因 (0 = 正常消耗)
+        EncryptPacket(rmBuf.data(), 0x42);
+        SafeSend(clientSocket, (const char*)rmBuf.data(), rmBuf.size(), 0);
+    }
+
+    // 9. 发送成功 ACK（触发觉醒动画 + 设置 bRebirth）
+    auto sendSuccess = [&](SOCKET targetSocket) {
+        std::vector<BYTE> ack(4);
+        ack.push_back(ERR_SUCCESS);
+        // dwCharID（客户端用来定位角色对象播放动画）
+        ack.push_back(dwObjectID & 0xFF); ack.push_back((dwObjectID >> 8) & 0xFF);
+        ack.push_back((dwObjectID >> 16) & 0xFF); ack.push_back((dwObjectID >> 24) & 0xFF);
+        // bRebirth（新觉醒次数）
+        ack.push_back(newRebirth);
+        PACKET_HEADER* h = (PACKET_HEADER*)ack.data();
+        h->id = PKT_REBIRTH_ACK;
+        h->payloadSize = ack.size() - sizeof(PACKET_HEADER);
+        EncryptPacket(ack.data(), 0x42);
+        SafeSend(targetSocket, (const char*)ack.data(), ack.size(), 0);
+    };
+
+    // 发送给请求者
+    sendSuccess(clientSocket);
+
+    // 10. 广播觉醒成功包给 AOI 内所有其他玩家（让其他玩家看到觉醒动画和标记）
+    if (g_MapInstances.count(mapID)) {
+        WORD myPosX = 0, myPosY = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_MapInstances[mapID]->GetMutex());
+            sServerObject* pObj = g_MapInstances[mapID]->GetPlayer(dwObjectID);
+            if (pObj) { myPosX = pObj->wPosX; myPosY = pObj->wPosY; }
+        }
+        if (myPosX > 0 && myPosY > 0) {
+            SessionMgr::GetInstance().ForEachSocketInMap(mapID, [&](SOCKET s, DWORD sCharID) {
+                if (s != clientSocket) {
+                    DWORD sObjID = sCharID + 400000000;
+                    bool inRange = false;
+                    {
+                        std::lock_guard<std::mutex> lockA(g_MapInstances[mapID]->GetMutex());
+                        sServerObject* sObj = g_MapInstances[mapID]->GetPlayer(sObjID);
+                        if (sObj) {
+                            int dx = sObj->wPosX - myPosX;
+                            int dy = sObj->wPosY - myPosY;
+                            inRange = (dx*dx + dy*dy <= 150*150);
+                        }
+                    }
+                    if (inRange) {
+                        sendSuccess(s);
+                    }
+                }
+            });
+        }
+    }
+}

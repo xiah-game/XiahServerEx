@@ -171,7 +171,7 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
             }
             
             MonsterData* pTarget = mapInst->GetMonster(targetId);
-            if (pTarget) {
+            if (pTarget && pTarget->dwHpCur > 0) {
                 if (pTarget->bIsReturning) {
                     bResult = 1; // Miss during leash return
                     finalDmg = 0;
