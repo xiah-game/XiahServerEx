@@ -9,6 +9,9 @@
 #include <ctime>
 
 void InitPacketHandlers();
+void BroadcastWorldTime();
+void SendWorldTimeToSocket(SOCKET s);
+void LoadMapWeatherConfig();
 
 int main() {
     // Clear log file
@@ -29,6 +32,7 @@ int main() {
     InitPacketHandlers();
     LoadGameData();
     LoadWorldObjects();
+    LoadMapWeatherConfig();
     std::thread unitThread(RunUnitSvr);
 
     std::thread cleanupThread([]() {
@@ -38,6 +42,16 @@ int main() {
         }
     });
     cleanupThread.detach();
+
+    // 世界时间广播线程：每5分钟广播一次当前时间给所有在线玩家
+    std::thread worldTimeThread([]() {
+        LOG("[WorldTime] 世界时间广播线程启动");
+        while (true) {
+            std::this_thread::sleep_for(std::chrono::minutes(5));
+            BroadcastWorldTime();
+        }
+    });
+    worldTimeThread.detach();
 
     RunAuthSvr();
 

@@ -22,6 +22,7 @@ static bool IsRebuildableItem(BYTE bType, BYTE bKind) {
         case 2: // 衣服
         case 3: // 帽子
         case 4: // 鞋子
+        case 5: // 披风
         case 6: // 戒指
         case 7: // 项链
             return true;
@@ -377,6 +378,7 @@ void OnRebuildItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
             case 2: return 5;           // bType=2 �·�     �� nData5(������)
             case 3: return 6;           // bType=3 ñ��     �� nData6(������)
             case 4: return 13;          // bType=4 Ь��     �� nData13(������) [�ٷֱ�]
+            case 5: return 5;           // bType=5 披风     -> nData5(防御力)
             case 6: return 9;           // bType=6 ��ָ     �� nData9(���HP)
             case 7: return 10;          // bType=7 ����     �� nData10(���IP)
             default: return -1;         // bType=5(����)�Ȳ�֧���ھ�������ǿ��

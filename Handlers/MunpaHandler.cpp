@@ -26,7 +26,10 @@ std::string ReadString(BYTE*& p, BYTE* end) {
     WORD len = *(WORD*)p;
     p += 2;
     if (p + len > end) return "";
-    std::string s((char*)p, len);
+    // 客户端 sString 的 len 包含 null terminator，构造 string 时用 strnlen 排除，
+    // 防止 \0 嵌入 std::string 内部导致 SQL 拼接时引号截断
+    size_t actualLen = strnlen((char*)p, len);
+    std::string s((char*)p, actualLen);
     p += len;
     return s;
 }
@@ -45,9 +48,11 @@ void pushWord(std::vector<BYTE>& buf, WORD w) {
 }
 
 void pushString(std::vector<BYTE>& buf, const std::string& str) {
-    WORD len = (WORD)str.length();
+    // 客户端 sString 格式: WORD len（含 null terminator）+ char data[len]（含 null terminator）
+    WORD len = (WORD)(str.length() + 1);
     pushWord(buf, len);
     for (char c : str) buf.push_back((BYTE)c);
+    buf.push_back(0); // null terminator
 }
 
 // Generic packet sender
@@ -125,10 +130,11 @@ void BroadcastPlayerVisualUpdate(DWORD dwCharID) {
         auto pDW = [&](DWORD d) { ackBuf.push_back(d & 0xFF); ackBuf.push_back((d>>8)&0xFF); ackBuf.push_back((d>>16)&0xFF); ackBuf.push_back((d>>24)&0xFF); };
         auto pW = [&](WORD w) { ackBuf.push_back(w & 0xFF); ackBuf.push_back((w>>8)&0xFF); };
         auto pB = [&](BYTE b) { ackBuf.push_back(b); };
-        auto pS = [&](const std::string& str) { pW((WORD)str.length()); for (char c : str) pB(c); };
+        auto pS = [&](const std::string& str) { pW((WORD)(str.length() + 1)); for (char c : str) pB(c); pB(0); };
 
         pDW(mapID); pW(1);
         pDW(objCopy.dwObjectID);
+        pB(1); // bObjectType = 1 (PC)
         pW(objCopy.wPosX); pW(objCopy.wPosY); pB(objCopy.bHeight);
         if (objCopy.bIsMoving) {
             pW(objCopy.wMoveDesX); pW(objCopy.wMoveDesY); pB(objCopy.bMoveDesH);
@@ -167,9 +173,12 @@ void BroadcastPlayerVisualUpdate(DWORD dwCharID) {
     }
 }
 
+// 前向声明：创建门派成功后需要主动推送成员列表
+void OnMunwonListReq(SOCKET s, DWORD charID, BYTE* payload, WORD size);
+
 // 1. CS_RL_CREATEMUNPA_REQ (0x3A19)
 void OnCreateMunpaReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
-    BYTE* p = payload + 4;
+    BYTE* p = payload;
     BYTE* end = payload + size;
     std::string szMunpaName = ReadString(p, end);
     
@@ -180,6 +189,8 @@ void OnCreateMunpaReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
     WORD wTotalTp = 0, wRemainTp = 0;
     
     bool ok = CharacterDB::GetInstance().ExecCreateMunpa(szMunpaName, charID, (DWORD)time(NULL), 1, bResult, dwMunpaID, wTotalTp, wRemainTp);
+    
+    LOG("[MunpaHandler] ExecCreateMunpa result: ok=" + std::to_string(ok) + " bResult=" + std::to_string(bResult) + " dwMunpaID=" + std::to_string(dwMunpaID) + " wTotalTp=" + std::to_string(wTotalTp) + " wRemainTp=" + std::to_string(wRemainTp));
     
     std::vector<BYTE> ack;
     ack.push_back(bResult);
@@ -193,11 +204,20 @@ void OnCreateMunpaReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
         // Send character status sync to update TP count visually
         ::SendCharStatusInfoAck(s, charID, 0x4414);
         
-        // Broadcast visual update
-        BroadcastPlayerVisualUpdate(charID);
+        // 视觉广播暂时禁用——CHARINFOLIST_ACK 包格式与客户端不完全匹配会导致角色模型丢失
+        // 创建门派后，客户端 SetClanInfo 已更新本地门派状态，其他玩家的门派标记会在 AOI 同步时自然更新
+        // BroadcastPlayerVisualUpdate(charID);
     }
     
+    LOG("[MunpaHandler] Sending CREATEMUNPA_ACK (0x3A1A) payload size=" + std::to_string(ack.size()));
     SendPacketToSocket(s, 0x3A1A, ack); // CS_RL_CREATEMUNPA_ACK
+    LOG("[MunpaHandler] CREATEMUNPA_ACK sent successfully");
+    
+    // 创建成功后主动推送成员列表，填充 WINDOW_MUNPA 面板
+    // 不推送 MUNPAINFO_ACK（会打开公告板窗口覆盖成员列表面板）
+    if (ok && bResult == 0 && dwMunpaID > 0) {
+        OnMunwonListReq(s, charID, nullptr, 0);
+    }
 }
 
 // 2. CS_RL_DELETEMUNPA_REQ (0x3A1B)
@@ -238,7 +258,7 @@ void OnDeleteMunpaReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
 
 // 3. CS_RL_ASKMUNWON_REQ (0x3A2A)
 void OnAskMunwonReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
-    BYTE* p = payload + 4;
+    BYTE* p = payload;
     BYTE* end = payload + size;
     
     BYTE bResult = ReadVal<BYTE>(p, end);
@@ -248,102 +268,199 @@ void OnAskMunwonReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
     LOG("[MunpaHandler] OnAskMunwonReq: bResult=" + std::to_string(bResult) + " AskID=" + std::to_string(dwAskID) + " AskedID=" + std::to_string(dwAskedID));
     
     if (bResult == 1) { // ACT_ASKMUNWON_REQUEST
+        // 查发送者的门派信息
         DWORD dwMunpaID = 0, dwMunpaOrder = 0, dwMarkID = 0;
         std::string szMunpaName, szMunpaNick;
         CharacterDB::GetInstance().GetCharMunpaInfo(charID, dwMunpaID, dwMunpaOrder, szMunpaName, szMunpaNick, dwMarkID);
         
+        // 查目标玩家的门派信息
+        DWORD targetCharID = dwAskedID - 400000000;
+        DWORD targetMunpaID = 0, targetOrder = 0, targetMark = 0;
+        std::string tMunpa, tNick;
+        CharacterDB::GetInstance().GetCharMunpaInfo(targetCharID, targetMunpaID, targetOrder, tMunpa, tNick, targetMark);
+        
         if (dwMunpaID > 0 && dwMunpaOrder <= 3) {
-            DWORD targetCharID = dwAskedID - 400000000;
+            // ===== 场景1: 发送者是门主/副门主，邀请目标加入 =====
             SOCKET targetSocket = SessionMgr::GetInstance().GetSocketByCharID(targetCharID);
-            
-            // Check if invitee is already in a clan
-            DWORD targetMunpaID = 0, targetOrder = 0, targetMark = 0;
-            std::string tMunpa, tNick;
-            CharacterDB::GetInstance().GetCharMunpaInfo(targetCharID, targetMunpaID, targetOrder, tMunpa, tNick, targetMark);
             
             if (targetSocket != INVALID_SOCKET) {
                 if (targetMunpaID > 0) {
-                    // Already in clan
+                    // 目标已有门派
                     std::vector<BYTE> errAck;
                     errAck.push_back(4); // ERR_ASKMUNWON_ALREADY_JOIN
-                    errAck.push_back(dwAskID & 0xFF); errAck.push_back((dwAskID>>8)&0xFF); errAck.push_back((dwAskID>>16)&0xFF); errAck.push_back(dwAskID>>24);
-                    errAck.push_back(dwAskedID & 0xFF); errAck.push_back((dwAskedID>>8)&0xFF); errAck.push_back((dwAskedID>>16)&0xFF); errAck.push_back(dwAskedID>>24);
+                    pushDWord(errAck, dwAskID);
+                    pushDWord(errAck, dwAskedID);
                     SendPacketToSocket(s, 0x3A2B, errAck);
                 } else {
-                    // Forward invite to invitee
+                    // 转发邀请给目标
                     std::vector<BYTE> askAck;
                     askAck.push_back(1); // ACT_ASKMUNWON_REQUEST
                     pushDWord(askAck, dwAskID);
                     pushDWord(askAck, dwAskedID);
                     SendPacketToSocket(targetSocket, 0x3A2B, askAck);
                 }
+            } else {
+                // 目标不在线
+                std::vector<BYTE> errAck;
+                errAck.push_back(7); // 不在线
+                pushDWord(errAck, dwAskID);
+                pushDWord(errAck, dwAskedID);
+                SendPacketToSocket(s, 0x3A2B, errAck);
             }
+        } else if (dwMunpaID == 0 && targetMunpaID > 0) {
+            // ===== 场景2: 发送者无门派，向有门派的目标申请加入 =====
+            // 查目标门派的门主 CharID
+            DWORD leaderCharID = 0;
+            DBHelper::GetInstance().ExecuteQuery(
+                "SELECT dwCharID FROM CHAR_BASIC WHERE dwMunpaID = " + std::to_string(targetMunpaID) + " AND dwMunpaOrder = 1",
+                [&](SQLHSTMT hStmt) {
+                    SQLLEN ind;
+                    SQLGetData(hStmt, 1, SQL_C_ULONG, &leaderCharID, 0, &ind);
+                });
+            
+            if (leaderCharID > 0) {
+                SOCKET leaderSocket = SessionMgr::GetInstance().GetSocketByCharID(leaderCharID);
+                if (leaderSocket != INVALID_SOCKET) {
+                    // 将申请转发给门主（AskID=申请者, AskedID=申请者自己）
+                    // 门主收到后弹出"XXX想加入门派"对话框
+                    DWORD leaderObjID = leaderCharID + 400000000;
+                    std::vector<BYTE> askAck;
+                    askAck.push_back(1); // ACT_ASKMUNWON_REQUEST
+                    pushDWord(askAck, dwAskID);         // 申请者 ObjectID
+                    pushDWord(askAck, dwAskedID);       // 被选中目标 ObjectID（门主判断用）
+                    SendPacketToSocket(leaderSocket, 0x3A2B, askAck);
+                    
+                    LOG("[MunpaHandler] 申请加入: 转发给门主 CharID=" + std::to_string(leaderCharID));
+                } else {
+                    // 门主不在线
+                    std::vector<BYTE> errAck;
+                    errAck.push_back(7); // 门主不在线
+                    pushDWord(errAck, dwAskID);
+                    pushDWord(errAck, dwAskedID);
+                    SendPacketToSocket(s, 0x3A2B, errAck);
+                }
+            }
+        } else if (dwMunpaID == 0 && targetMunpaID == 0) {
+            // 双方都没有门派
+            std::vector<BYTE> errAck;
+            errAck.push_back(5); // ERR_ASKMUNWON_HASNOTMUNPA
+            pushDWord(errAck, dwAskID);
+            pushDWord(errAck, dwAskedID);
+            SendPacketToSocket(s, 0x3A2B, errAck);
         }
-    } else if (bResult == 2) { // ACT_ASKMUNWON_CANCEL (Rejection)
+    } else if (bResult == 3) { // ACT_ASKMUNWON_CANCEL (客户端定义: CANCEL=3)
         DWORD targetCharID = dwAskID - 400000000;
         SOCKET targetSocket = SessionMgr::GetInstance().GetSocketByCharID(targetCharID);
         if (targetSocket != INVALID_SOCKET) {
             std::vector<BYTE> ack;
-            ack.push_back(2); // ACT_ASKMUNWON_CANCEL
+            ack.push_back(3); // ACT_ASKMUNWON_CANCEL
             pushDWord(ack, dwAskID);
             pushDWord(ack, dwAskedID);
             SendPacketToSocket(targetSocket, 0x3A2B, ack);
         }
-    } else if (bResult == 0) { // ACT_ASKMUNWON_OK (Accept)
-        DWORD inviterCharID = dwAskID - 400000000;
-        DWORD inviteeCharID = dwAskedID - 400000000;
+    } else if (bResult == 2) { // ACT_ASKMUNWON_OK (客户端定义: OK=2)
+        // 两种场景: 
+        // (1) 门主A邀请B→B接受: dwAskID=A(门主), dwAskedID=B(接受者=发送者charID)
+        // (2) B申请加入A→A(门主)接受: dwAskID=B(申请者), dwAskedID=A(门主=发送者charID)
+        // 通用策略：查两端的门派信息，有门派的提供 MunpaID，无门派的是被加入者
         
-        DWORD dwMunpaID = 0, dwMunpaOrder = 0, dwMarkID = 0;
-        std::string szMunpaName, szMunpaNick;
-        CharacterDB::GetInstance().GetCharMunpaInfo(inviterCharID, dwMunpaID, dwMunpaOrder, szMunpaName, szMunpaNick, dwMarkID);
+        DWORD charID_Ask = dwAskID - 400000000;
+        DWORD charID_Asked = dwAskedID - 400000000;
+        
+        DWORD munpaID_Ask = 0, order_Ask = 0, mark_Ask = 0;
+        std::string mName_Ask, mNick_Ask;
+        CharacterDB::GetInstance().GetCharMunpaInfo(charID_Ask, munpaID_Ask, order_Ask, mName_Ask, mNick_Ask, mark_Ask);
+        
+        DWORD munpaID_Asked = 0, order_Asked = 0, mark_Asked = 0;
+        std::string mName_Asked, mNick_Asked;
+        CharacterDB::GetInstance().GetCharMunpaInfo(charID_Asked, munpaID_Asked, order_Asked, mName_Asked, mNick_Asked, mark_Asked);
+        
+        // 确定谁是门派方、谁是被加入者
+        DWORD dwMunpaID = 0, dwMarkID = 0;
+        DWORD inviteeCharID = 0; // 需要加入门派的角色
+        std::string szMunpaName;
+        
+        if (munpaID_Ask > 0 && munpaID_Asked == 0) {
+            // Ask方有门派（场景1: 门主邀请别人）
+            dwMunpaID = munpaID_Ask;
+            dwMarkID = mark_Ask;
+            szMunpaName = mName_Ask;
+            inviteeCharID = charID_Asked;
+        } else if (munpaID_Asked > 0 && munpaID_Ask == 0) {
+            // Asked方有门派（场景2: 玩家申请加入）
+            dwMunpaID = munpaID_Asked;
+            dwMarkID = mark_Asked;
+            szMunpaName = mName_Asked;
+            inviteeCharID = charID_Ask;
+        } else {
+            LOG("[MunpaHandler] ASKMUNWON_OK: 无法确定门派方和被加入方");
+            return;
+        }
         
         if (dwMunpaID > 0) {
             BYTE dbRes = 99;
-            bool ok = CharacterDB::GetInstance().ExecAddMunwon(dwMunpaID, 6, inviteeCharID, dbRes);
+            DWORD dwNewOrder = 6; // 门众
+            bool ok = CharacterDB::GetInstance().ExecAddMunwon(dwMunpaID, dwNewOrder, inviteeCharID, dbRes);
             if (ok && dbRes == 0) {
-                // Fetch invitee visual name
                 std::string vizName; BYTE vizType = 0;
                 CharacterDB::GetInstance().GetCharVisual(inviteeCharID, vizName, vizType);
                 
-                // Update invitee memory
-                UpdatePlayerInMemoryGuild(inviteeCharID, dwMunpaID, 6, szMunpaName, "", dwMarkID);
+                // 从数据库读取职务名（GBK 编码，与客户端一致）
+                std::string orderName;
+                DBHelper::GetInstance().ExecuteQuery(
+                    "SELECT szOrderName FROM MUNPA_ORDERTEMPLATE WHERE dwOrderID = " + std::to_string(dwNewOrder),
+                    [&](SQLHSTMT hStmt) {
+                        char buf[64] = {0}; SQLLEN ind;
+                        SQLGetData(hStmt, 1, SQL_C_CHAR, buf, sizeof(buf), &ind);
+                        orderName = buf;
+                    });
+                
+                UpdatePlayerInMemoryGuild(inviteeCharID, dwMunpaID, dwNewOrder, szMunpaName, "", dwMarkID);
+                // 广播视觉更新，让周围玩家看到新成员头顶出现门派名
                 BroadcastPlayerVisualUpdate(inviteeCharID);
                 
-                // Send CS_RL_ADDMUNWON_ACK (0x3A2C) to all guild members
+                // Send CS_RL_ADDMUNWON_ACK (0x3A2D) to all guild members
                 std::vector<BYTE> addAck;
+                addAck.push_back(0); // bResult=0 (成功)
                 pushDWord(addAck, dwMunpaID);
-                pushDWord(addAck, 6);
-                pushString(addAck, "门众");
-                pushDWord(addAck, inviteeCharID);
+                pushDWord(addAck, dwNewOrder);
+                pushString(addAck, orderName);
+                pushDWord(addAck, inviteeCharID + 400000000); // 转为 800M ObjectID
                 pushString(addAck, vizName);
                 
-                BroadcastToMunpa(dwMunpaID, 0x3A2C, addAck);
+                BroadcastToMunpa(dwMunpaID, 0x3A2D, addAck);
                 
-                // 向双方回发 0x3A2B 确认包，关闭客户端邀请对话框
+                // 向双方回发 0x3A2B 确认包
                 std::vector<BYTE> okAck;
-                okAck.push_back(0); // ACT_ASKMUNWON_OK
+                okAck.push_back(2); // ACT_ASKMUNWON_OK
                 pushDWord(okAck, dwAskID);
                 pushDWord(okAck, dwAskedID);
                 
-                // 通知邀请者：邀请已被接受
-                SOCKET inviterSocket = SessionMgr::GetInstance().GetSocketByCharID(inviterCharID);
-                if (inviterSocket != INVALID_SOCKET) {
-                    SendPacketToSocket(inviterSocket, 0x3A2B, okAck);
-                }
-                // 通知被邀请者（当前发包者）：加入成功
-                SendPacketToSocket(s, 0x3A2B, okAck);
+                SOCKET askSocket = SessionMgr::GetInstance().GetSocketByCharID(charID_Ask);
+                if (askSocket != INVALID_SOCKET)
+                    SendPacketToSocket(askSocket, 0x3A2B, okAck);
+                
+                SOCKET askedSocket = SessionMgr::GetInstance().GetSocketByCharID(charID_Asked);
+                if (askedSocket != INVALID_SOCKET && askedSocket != askSocket)
+                    SendPacketToSocket(askedSocket, 0x3A2B, okAck);
+                
+                LOG("[MunpaHandler] 加入门派成功: invitee=" + std::to_string(inviteeCharID) + " munpaID=" + std::to_string(dwMunpaID));
             }
         }
     }
 }
 
-// 4. CS_RL_DELMUNWON_REQ (0x3A2D)
+// 4. CS_RL_DELMUNWON_REQ (0x3A2E = OFFSET_CS_RL + 45)
 void OnDelMunwonReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
-    BYTE* p = payload + 4;
+    BYTE* p = payload;
     BYTE* end = payload + size;
     
     DWORD dwCharID = ReadVal<DWORD>(p, end);
     DWORD dwOrderID = ReadVal<DWORD>(p, end);
+    
+    // 客户端发送的是 800M ObjectID，转为 400M CharID
+    DWORD dwTargetCharID = dwCharID;
+    if (dwTargetCharID >= 800000000) dwTargetCharID -= 400000000;
     
     LOG("[MunpaHandler] OnDelMunwonReq: TargetCharID=" + std::to_string(dwCharID) + " TargetOrder=" + std::to_string(dwOrderID));
     
@@ -354,7 +471,7 @@ void OnDelMunwonReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
     if (dwMunpaID == 0) return;
     
     bool authorized = false;
-    if (dwCharID == charID) {
+    if (dwTargetCharID == charID) {
         // Voluntary leave: Sect Master cannot leave this way
         if (dwMunpaOrder != 1) authorized = true;
     } else {
@@ -363,34 +480,38 @@ void OnDelMunwonReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
     }
     
     if (authorized) {
-        // Delete member from DB
-        std::string q = "UPDATE CHAR_BASIC SET dwMunpaID = 0, dwMunpaOrder = 0, dateSecede = GETDATE() WHERE dwCharID = " + std::to_string(dwCharID);
+        // Delete member from DB（需要 400M CharID）
+        std::string q = "UPDATE CHAR_BASIC SET dwMunpaID = 0, dwMunpaOrder = 0, dateSecede = GETDATE() WHERE dwCharID = " + std::to_string(dwTargetCharID);
         DBHelper::GetInstance().ExecuteUpdate(q);
         
         // Update in-memory player caching
-        UpdatePlayerInMemoryGuild(dwCharID, 0, 0, "", "", 0);
-        BroadcastPlayerVisualUpdate(dwCharID);
+        UpdatePlayerInMemoryGuild(dwTargetCharID, 0, 0, "", "", 0);
+        // 广播视觉更新，让周围玩家看到被踢者头顶门派名消失
+        BroadcastPlayerVisualUpdate(dwTargetCharID);
         
         // Broadcast CS_RL_DELMUNWON_ACK (0x3A2E) to members of the guild
+        // 注意：ACK 中 dwCharID 保留 800M ObjectID 格式，客户端按此比较
         std::vector<BYTE> delAck;
         delAck.push_back(0); // success
         pushDWord(delAck, dwMunpaID);
         pushDWord(delAck, dwOrderID);
-        pushDWord(delAck, dwCharID);
+        pushDWord(delAck, dwCharID); // 保留原始 800M ObjectID
         
-        BroadcastToMunpa(dwMunpaID, 0x3A2E, delAck);
+        BroadcastToMunpa(dwMunpaID, 0x3A2F, delAck); // CS_RL_DELMUNWON_ACK = OFFSET_CS_RL + 46
         
-        // Send to kicked player too if they are online so their UI cleans up
-        SOCKET ks = SessionMgr::GetInstance().GetSocketByCharID(dwCharID);
+        // Send to leaving/kicked player too so their UI cleans up
+        SOCKET ks = SessionMgr::GetInstance().GetSocketByCharID(dwTargetCharID);
         if (ks != INVALID_SOCKET) {
-            SendPacketToSocket(ks, 0x3A2E, delAck);
+            SendPacketToSocket(ks, 0x3A2F, delAck);
         }
+        
+        LOG("[MunpaHandler] 成员退出/被踢: CharID=" + std::to_string(dwTargetCharID) + " MunpaID=" + std::to_string(dwMunpaID));
     }
 }
 
-// 5. CS_RL_CHANGEMUNWONORDER_REQ (0x3A2F)
+// 5. CS_RL_CHANGEMUNWONORDER_REQ (0x3A30 = OFFSET_CS_RL + 47)
 void OnChangeMunwonOrderReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
-    BYTE* p = payload + 4;
+    BYTE* p = payload;
     BYTE* end = payload + size;
     
     DWORD dwCharID = ReadVal<DWORD>(p, end);
@@ -426,7 +547,7 @@ void OnChangeMunwonOrderReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
             pushString(ack, rankName);
             pushDWord(ack, dwCharID);
             
-            BroadcastToMunpa(dwMunpaID, 0x3A30, ack); // CS_RL_CHANGEMUNWONORDER_ACK
+            BroadcastToMunpa(dwMunpaID, 0x3A31, ack); // CS_RL_CHANGEMUNWONORDER_ACK = OFFSET_CS_RL + 48
         }
     }
 }
@@ -482,7 +603,7 @@ void OnMunwonListReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
         for (const auto& me : members) {
             pushDWord(ack, me.dwOrderID);
             pushString(ack, me.szOrderName);
-            pushDWord(ack, me.dwCharID);
+            pushDWord(ack, me.dwCharID + 400000000); // 转为 ObjectID（800M 格式）供客户端匹配
             pushString(ack, me.szCharName);
             pushString(ack, me.szMunpaNick);
             
@@ -502,7 +623,7 @@ void OnMunwonListReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
 
 // 7. CS_RL_MUNWONINFO_REQ (0x3A36)
 void OnMunwonInfoReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
-    BYTE* p = payload + 4;
+    BYTE* p = payload;
     BYTE* end = payload + size;
     DWORD dwMunwonID = ReadVal<DWORD>(p, end);
     
@@ -555,7 +676,7 @@ void OnMunwonInfoReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
 
 // 8. CS_RL_MUNPACHAT_REQ (0x3A38)
 void OnMunpaChatReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
-    BYTE* p = payload + 4;
+    BYTE* p = payload;
     BYTE* end = payload + size;
     
     BYTE bType = ReadVal<BYTE>(p, end);
@@ -577,7 +698,7 @@ void OnMunpaChatReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
 
 // 9. CS_RL_MUNPAINFO_REQ (0x3A3A)
 void OnMunpaInfoReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
-    BYTE* p = payload + 4;
+    BYTE* p = payload;
     BYTE* end = payload + size;
     BYTE bType = ReadVal<BYTE>(p, end);
     DWORD dwReqMunpaID = ReadVal<DWORD>(p, end);
@@ -704,12 +825,16 @@ void OnMunpaInfoReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
 
 // 10. CS_RL_MUNPANICK_REQ (0x3A3C)
 void OnMunpaNickReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
-    BYTE* p = payload + 4;
+    BYTE* p = payload;
     BYTE* end = payload + size;
     
     DWORD dwMunpaID = ReadVal<DWORD>(p, end);
-    DWORD dwTargetCharID = ReadVal<DWORD>(p, end);
+    DWORD dwTargetObjID = ReadVal<DWORD>(p, end);  // 800M ObjectID
     std::string szMunpaNick = ReadString(p, end);
+    
+    // 转换为 400M CharID 用于数据库操作
+    DWORD dwTargetCharID = dwTargetObjID;
+    if (dwTargetCharID >= 800000000) dwTargetCharID -= 400000000;
     
     LOG("[MunpaHandler] OnMunpaNickReq: TargetCharID=" + std::to_string(dwTargetCharID) + " Nick=" + szMunpaNick);
     
@@ -720,24 +845,28 @@ void OnMunpaNickReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
     if (dwMyMunpaID > 0 && dwMyMunpaID == dwMunpaID && dwMyMunpaOrder <= 2) { // Master or Vice Master
         BYTE bResult = 99;
         bool ok = CharacterDB::GetInstance().ExecChangeMunpaNick(dwMunpaID, dwTargetCharID, szMunpaNick, bResult);
+        LOG("[MunpaHandler] MunpaNick DB result: ok=" + std::to_string(ok) + " bResult=" + std::to_string(bResult));
         if (ok && bResult == 0) {
             // Update target memory cached value
-            UpdatePlayerInMemoryGuild(dwTargetCharID, dwMunpaID, 6, szMyMunpaName, szMunpaNick, dwMyMarkID);
+            UpdatePlayerInMemoryGuild(dwTargetCharID, dwMunpaID, 0, szMyMunpaName, szMunpaNick, dwMyMarkID);
             
             std::vector<BYTE> ack;
             ack.push_back(0); // success
             pushDWord(ack, dwMunpaID);
-            pushDWord(ack, dwTargetCharID);
+            pushDWord(ack, dwTargetObjID); // 保留 800M ObjectID 给客户端
             pushString(ack, szMunpaNick);
             
+            LOG("[MunpaHandler] MunpaNick 广播 ACK: opcode=0x3A3D munpaID=" + std::to_string(dwMunpaID));
             BroadcastToMunpa(dwMunpaID, 0x3A3D, ack); // CS_RL_MUNPANICK_ACK
         }
+    } else {
+        LOG("[MunpaHandler] MunpaNick 权限不足: MyMunpaID=" + std::to_string(dwMyMunpaID) + " ReqMunpaID=" + std::to_string(dwMunpaID) + " MyOrder=" + std::to_string(dwMyMunpaOrder));
     }
 }
 
 // 11. CS_RL_MUNPANOTICE_REQ (0x3A5D)
 void OnMunpaNoticeReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
-    BYTE* p = payload + 4;
+    BYTE* p = payload;
     BYTE* end = payload + size;
     std::string szNotice = ReadString(p, end);
     
@@ -753,6 +882,14 @@ void OnMunpaNoticeReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
             std::string q = "UPDATE MUNPA_BASIC SET szNotice = '" + szNotice + "' WHERE dwMunpaID = " + std::to_string(dwMunpaID);
             if (DBHelper::GetInstance().ExecuteUpdate(q)) {
                 bResult = 0; // ERR_MUNPANOTICE_SUCCESS
+                
+                // 通过门派聊天频道广播公告内容（bType=9 = 门主公告）
+                DWORD senderObjID = charID + 400000000; // 转为 800M ObjectID
+                std::vector<BYTE> chatAck;
+                pushDWord(chatAck, senderObjID);
+                chatAck.push_back(9); // bType = 门主公告
+                pushString(chatAck, szNotice);
+                BroadcastToMunpa(dwMunpaID, 0x3A39, chatAck); // CS_RL_MUNPACHAT_ACK
             }
         } else {
             bResult = 2; // ERR_MUNPANOTICE_ONLYMUNJU
@@ -766,7 +903,7 @@ void OnMunpaNoticeReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
 
 // 12. CS_RL_MUNPAMARKREG_REQ (0x3A5F)
 void OnMunpaMarkRegReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
-    BYTE* p = payload + 4;
+    BYTE* p = payload;
     BYTE* end = payload + size;
     
     BYTE bRegType = ReadVal<BYTE>(p, end);
@@ -815,7 +952,7 @@ void OnMunpaMarkRegReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
 
 // 13. CS_RL_GAINMARKIMAGE_REQ (0x3A62)
 void OnGainMarkImageReq(SOCKET s, DWORD charID, BYTE* payload, WORD size) {
-    BYTE* p = payload + 4;
+    BYTE* p = payload;
     BYTE* end = payload + size;
     DWORD dwMarkID = ReadVal<DWORD>(p, end);
     
@@ -841,8 +978,8 @@ void RegisterMunpaHandlers() {
     RegisterHandler(0x3A19, [](SOCKET s, BYTE* p, WORD size) { OnCreateMunpaReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
     RegisterHandler(0x3A1B, [](SOCKET s, BYTE* p, WORD size) { OnDeleteMunpaReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
     RegisterHandler(0x3A2A, [](SOCKET s, BYTE* p, WORD size) { OnAskMunwonReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
-    RegisterHandler(0x3A2D, [](SOCKET s, BYTE* p, WORD size) { OnDelMunwonReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
-    RegisterHandler(0x3A2F, [](SOCKET s, BYTE* p, WORD size) { OnChangeMunwonOrderReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
+    RegisterHandler(0x3A2E, [](SOCKET s, BYTE* p, WORD size) { OnDelMunwonReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
+    RegisterHandler(0x3A30, [](SOCKET s, BYTE* p, WORD size) { OnChangeMunwonOrderReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
     RegisterHandler(0x3A34, [](SOCKET s, BYTE* p, WORD size) { OnMunwonListReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
     RegisterHandler(0x3A36, [](SOCKET s, BYTE* p, WORD size) { OnMunwonInfoReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
     RegisterHandler(0x3A38, [](SOCKET s, BYTE* p, WORD size) { OnMunpaChatReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });

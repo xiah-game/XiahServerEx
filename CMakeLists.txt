@@ -45,6 +45,7 @@ set(SOURCES
     Handlers/ShopHandler.cpp
     Handlers/RepairHandler.cpp
     Handlers/MunpaHandler.cpp
+    Handlers/WorldTimeHandler.cpp
     GameObjects/DropManager.cpp
     GameObjects/ExpSystem.cpp
     DB/CharacterDB.cpp

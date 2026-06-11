@@ -952,6 +952,53 @@ void OnImReadyReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
         }
         // 称号系统补发：在此处客户端已经完全 Ready 并建立好了实体对象，立即重新同步玩家属性与装备视觉包（wVisualID[8]）以确保默认佩戴的称号完美显示
         UpdatePlayerStatsAndSend(clientSocket, charID);
+        
+        // 登录时推送门派公告：如果该玩家有门派且门派有公告，在聊天框中显示
+        {
+            DWORD dwMunpaID = 0, dwMunpaOrder = 0, dwMarkID = 0;
+            std::string szMunpaName, szMunpaNick;
+            CharacterDB::GetInstance().GetCharMunpaInfo(charID, dwMunpaID, dwMunpaOrder, szMunpaName, szMunpaNick, dwMarkID);
+            if (dwMunpaID > 0) {
+                std::string szNotice;
+                std::string q = "SELECT szNotice FROM MUNPA_BASIC WHERE dwMunpaID = " + std::to_string(dwMunpaID);
+                DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+                    char buf[256] = {0}; SQLLEN c;
+                    SQLGetData(hStmt, 1, SQL_C_CHAR, buf, sizeof(buf), &c);
+                    if (c > 0) szNotice = buf;
+                });
+                if (!szNotice.empty()) {
+                    DWORD senderObjID = charID + 400000000;
+                    WORD noticeLen = (WORD)szNotice.size();
+                    
+                    // 构建 MUNPACHAT_ACK 包: sender(4) + bType(1) + sString(2+N)
+                    std::vector<BYTE> pkt(sizeof(PACKET_HEADER));
+                    // sender DWORD
+                    pkt.push_back(senderObjID & 0xFF); pkt.push_back((senderObjID >> 8) & 0xFF);
+                    pkt.push_back((senderObjID >> 16) & 0xFF); pkt.push_back(senderObjID >> 24);
+                    // bType = 9 (门主公告)
+                    pkt.push_back(9);
+                    // sString: WORD length + data
+                    pkt.push_back(noticeLen & 0xFF); pkt.push_back(noticeLen >> 8);
+                    pkt.insert(pkt.end(), szNotice.begin(), szNotice.end());
+                    
+                    PACKET_HEADER* hdr = (PACKET_HEADER*)pkt.data();
+                    hdr->id = 0x3A39; // CS_RL_MUNPACHAT_ACK
+                    hdr->payloadSize = pkt.size() - sizeof(PACKET_HEADER);
+                    EncryptPacket(pkt.data(), 0x42);
+                    SafeSend(clientSocket, (const char*)pkt.data(), (int)pkt.size(), 0);
+                    
+                    LOG("[MapHandler] 登录推送门派公告: CharID=" + std::to_string(charID) + " Notice=" + szNotice);
+                }
+            }
+        }
+
+        // 登录时推送当前世界时间：驱动客户端右上角日期显示和日夜光照
+        extern void SendWorldTimeToSocket(SOCKET s);
+        SendWorldTimeToSocket(clientSocket);
+
+        // 登录时推送当前地图天气：雨/雪粒子效果
+        extern void SendWeatherToSocket(SOCKET s, DWORD dwMapID);
+        SendWeatherToSocket(clientSocket, dwMapID);
     }
 }
 
@@ -1039,11 +1086,13 @@ void OnCharInfoReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
 
     auto pushString = [&](const std::string& str) {
 
-        WORD len = str.length();
+        WORD len = (WORD)(str.length() + 1); // +1 含 null terminator
 
         pushWord(len);
 
         for (char c : str) pushByte(c);
+
+        pushByte(0); // null terminator
 
     };
 
@@ -1100,6 +1149,15 @@ void OnCharInfoReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
     pushByte(0); // bChangeItemSet
 
     pushDWord(objCopy.dwMunpaID); // dwMunpaID
+
+    // 客户端 if(dwMunpaID) 条件分支
+    if (objCopy.dwMunpaID > 0) {
+        pushString(objCopy.szMunpaName);     // szMunpaName
+        pushDWord(objCopy.dwMunpaOrder);     // dwMunpaOrder
+        pushString(objCopy.szMunpaNickName); // szMunpaNickName
+        pushDWord(objCopy.dwMunpaMarkID);    // dwMunpaMarkID
+        pushByte(0);                         // bWarStatus (0=无战争)
+    }
 
     pushDWord(0); // dwPartyID
 
@@ -1203,11 +1261,13 @@ void OnCharInfoListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
     auto pushString = [&](const std::string& str) {
 
-        WORD len = str.length();
+        WORD len = (WORD)(str.length() + 1); // +1 含 null terminator
 
         pushWord(len);
 
         for (char c : str) pushByte(c);
+
+        pushByte(0); // null terminator
 
     };
 
@@ -1264,6 +1324,15 @@ void OnCharInfoListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                 pushByte(0); // bChangeItemSet
 
                 pushDWord(o.dwMunpaID); // dwMunpaID
+
+                // 客户端 if(dwMunpaID) 条件分支：需要额外读取门派详细信息
+                if (o.dwMunpaID > 0) {
+                    pushString(o.szMunpaName);     // szMunpaName
+                    pushDWord(o.dwMunpaOrder);     // dwMunpaOrder
+                    pushString(o.szMunpaNickName); // szMunpaNickName
+                    pushDWord(o.dwMunpaMarkID);    // dwMunpaMarkID
+                    pushByte(0);                   // bWarStatus (0=无战争)
+                }
 
                 pushDWord(0); // dwPartyID
 

@@ -520,24 +520,88 @@ bool CharacterDB::GetCharMunpaInfo(DWORD dwCharID, DWORD& dwMunpaID, DWORD& dwMu
 
 bool CharacterDB::ExecCreateMunpa(const std::string& szMunpaName, DWORD dwCreatorID, DWORD dwCurrentTime, BYTE bMunpaLevel, BYTE& bResult, DWORD& dwMunpaID, WORD& wTotalTp, WORD& wRemainTp) {
     bResult = 99; dwMunpaID = 0; wTotalTp = 0; wRemainTp = 0;
-    std::string q = "DECLARE @bResult TINYINT; DECLARE @dwMunpaID INT; DECLARE @wTotalTp SMALLINT; DECLARE @wRemainTp SMALLINT; "
-                    "EXEC spCreateMunpa '" + szMunpaName + "', " + std::to_string(dwCurrentTime) + ", " + std::to_string(dwCreatorID) + ", " + std::to_string(bMunpaLevel) + ", @bResult OUTPUT, @dwMunpaID OUTPUT, @wTotalTp OUTPUT, @wRemainTp OUTPUT; "
-                    "SELECT @bResult, @dwMunpaID, @wTotalTp, @wRemainTp;";
-    bool executed = false;
-    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
-        SQLLEN c;
-        int res = 0, mId = 0, total = 0, remain = 0;
-        SQLGetData(hStmt, 1, SQL_C_SLONG, &res, 0, &c);
-        SQLGetData(hStmt, 2, SQL_C_SLONG, &mId, 0, &c);
-        SQLGetData(hStmt, 3, SQL_C_SLONG, &total, 0, &c);
-        SQLGetData(hStmt, 4, SQL_C_SLONG, &remain, 0, &c);
-        bResult = (BYTE)res;
-        dwMunpaID = (DWORD)mId;
-        wTotalTp = (WORD)total;
-        wRemainTp = (WORD)remain;
-        executed = true;
-    });
-    return executed;
+
+    // 对门派名中的单引号进行转义，防止 SQL 注入
+    std::string safeName;
+    for (char c : szMunpaName) {
+        safeName += c;
+        if (c == '\'') safeName += '\'';
+    }
+
+    // 1. 检查门派名是否已存在
+    int nameCount = 0;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT COUNT(*) FROM MUNPA_BASIC WHERE szName = '" + safeName + "'",
+        [&](SQLHSTMT hStmt) {
+            SQLLEN ind;
+            SQLGetData(hStmt, 1, SQL_C_SLONG, &nameCount, 0, &ind);
+        });
+    if (nameCount > 0) {
+        bResult = 1; // 名称重复
+        return true;
+    }
+
+    // 2. 查询角色等级和 TP
+    WORD wLevel = 0;
+    bool foundChar = false;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT wLevel, dwTotalTp, wRemainTp FROM CHAR_POWER WHERE dwCharID = " + std::to_string(dwCreatorID),
+        [&](SQLHSTMT hStmt) {
+            SQLLEN ind;
+            int lv = 0, tt = 0, rt = 0;
+            SQLGetData(hStmt, 1, SQL_C_SLONG, &lv, 0, &ind);
+            SQLGetData(hStmt, 2, SQL_C_SLONG, &tt, 0, &ind);
+            SQLGetData(hStmt, 3, SQL_C_SLONG, &rt, 0, &ind);
+            wLevel = (WORD)lv;
+            wTotalTp = (WORD)tt;
+            wRemainTp = (WORD)rt;
+            foundChar = true;
+        });
+    if (!foundChar) { bResult = 1; return true; }
+
+    if (wLevel < 30) {
+        bResult = 2; // 等级不足
+        return true;
+    }
+    if (wRemainTp < 10) {
+        bResult = 3; // TP 不足
+        return true;
+    }
+
+    // 3. 插入门派记录
+    bool insertOk = DBHelper::GetInstance().ExecuteUpdate(
+        "INSERT INTO MUNPA_BASIC (szName, dwMunjuID, bLevel, dwCreateTime) VALUES ('" + safeName + "', " +
+        std::to_string(dwCreatorID) + ", " + std::to_string(bMunpaLevel) + ", " + std::to_string(dwCurrentTime) + ")");
+    if (!insertOk) {
+        bResult = 1;
+        return true;
+    }
+
+    // 4. 获取新门派 ID
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT MAX(dwMunpaID) FROM MUNPA_BASIC WHERE dwMunjuID = " + std::to_string(dwCreatorID),
+        [&](SQLHSTMT hStmt) {
+            SQLLEN ind;
+            int mId = 0;
+            SQLGetData(hStmt, 1, SQL_C_SLONG, &mId, 0, &ind);
+            dwMunpaID = (DWORD)mId;
+        });
+
+    // 5. 更新角色门派归属
+    DBHelper::GetInstance().ExecuteUpdate(
+        "UPDATE CHAR_BASIC SET dwMunpaID = " + std::to_string(dwMunpaID) +
+        ", dwMunpaOrder = 1 WHERE dwCharID = " + std::to_string(dwCreatorID));
+
+    // 6. 扣除 TP
+    wTotalTp -= 10;
+    wRemainTp -= 10;
+    DBHelper::GetInstance().ExecuteUpdate(
+        "UPDATE CHAR_POWER SET dwTotalTp = " + std::to_string(wTotalTp) +
+        ", wRemainTp = " + std::to_string(wRemainTp) +
+        " WHERE dwCharID = " + std::to_string(dwCreatorID));
+
+    bResult = 0;
+    return true;
 }
 
 bool CharacterDB::ExecDeleteMunpa(DWORD dwMunpaID, BYTE& bResult) {
@@ -558,18 +622,58 @@ bool CharacterDB::ExecDeleteMunpa(DWORD dwMunpaID, BYTE& bResult) {
 
 bool CharacterDB::ExecAddMunwon(DWORD dwMunpaID, DWORD dwOrderID, DWORD dwMunwonID, BYTE& bResult) {
     bResult = 99;
-    std::string q = "DECLARE @bResult SMALLINT; "
-                    "EXEC Munpa_AddMunwon " + std::to_string(dwMunpaID) + ", " + std::to_string(dwOrderID) + ", " + std::to_string(dwMunwonID) + ", @bResult OUTPUT; "
-                    "SELECT @bResult;";
-    bool executed = false;
-    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
-        SQLLEN c;
-        int res = 0;
-        SQLGetData(hStmt, 1, SQL_C_SLONG, &res, 0, &c);
-        bResult = (BYTE)res;
-        executed = true;
-    });
-    return executed;
+
+    // 1. 检查门派是否存在
+    int munpaExists = 0;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT COUNT(*) FROM MUNPA_BASIC WHERE dwMunpaID = " + std::to_string(dwMunpaID),
+        [&](SQLHSTMT hStmt) {
+            SQLLEN ind;
+            SQLGetData(hStmt, 1, SQL_C_SLONG, &munpaExists, 0, &ind);
+        });
+    if (munpaExists == 0) {
+        bResult = 1; // 门派不存在
+        return true;
+    }
+
+    // 2. 检查成员数上限（最大50人）
+    int memberCount = 0;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT COUNT(*) FROM CHAR_BASIC WHERE dwMunpaID = " + std::to_string(dwMunpaID),
+        [&](SQLHSTMT hStmt) {
+            SQLLEN ind;
+            SQLGetData(hStmt, 1, SQL_C_SLONG, &memberCount, 0, &ind);
+        });
+    if (memberCount >= 50) {
+        bResult = 6; // ERR_ADDMUNWON_MAX
+        return true;
+    }
+
+    // 3. 检查角色是否已有门派
+    int existingMunpa = 0;
+    DBHelper::GetInstance().ExecuteQuery(
+        "SELECT dwMunpaID FROM CHAR_BASIC WHERE dwCharID = " + std::to_string(dwMunwonID),
+        [&](SQLHSTMT hStmt) {
+            SQLLEN ind;
+            SQLGetData(hStmt, 1, SQL_C_SLONG, &existingMunpa, 0, &ind);
+        });
+    if (existingMunpa > 0) {
+        bResult = 3; // ERR_ADDMUNWON_DUPLICATION
+        return true;
+    }
+
+    // 4. 更新角色门派归属
+    bool updateOk = DBHelper::GetInstance().ExecuteUpdate(
+        "UPDATE CHAR_BASIC SET dwMunpaID = " + std::to_string(dwMunpaID) +
+        ", dwMunpaOrder = " + std::to_string(dwOrderID) +
+        " WHERE dwCharID = " + std::to_string(dwMunwonID));
+    if (!updateOk) {
+        bResult = 5; // ERR_ADDMUNWON_ERROR
+        return true;
+    }
+
+    bResult = 0;
+    return true;
 }
 
 bool CharacterDB::ExecChangeMunwon(DWORD dwMunpaID, DWORD dwMunwonID, DWORD dwOldOrderID, DWORD dwNewOrderID, BYTE& bResult) {
