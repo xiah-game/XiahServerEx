@@ -94,6 +94,9 @@
     <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\MunpaHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\FiveElmHandler.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\WorldTimeHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

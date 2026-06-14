@@ -161,10 +161,11 @@ void GameDataDB::LoadItemTemplates(std::map<WORD, sItemTemplate>& out) {
 
 void GameDataDB::LoadNpcTemplates(std::map<BYTE, sNpcTemplate>& out) {
     out.clear();
-    std::string q = "SELECT bType, dwHpInit, dwPwrInit, dwDefInit, wWalkSpeed100, wSightRangeInit, wWanderRangeInit, wMeleeAtkRangeInit, wShotAtkRangeInit, szName, wAtkRatio, wAvoidRatio, wRegen, dwExpInit, wHealPoint, bIdleRatio, bLevel, bWalkSpeed, wAtkInterval, wStaggerTime FROM NPCTEMPLATE";
+    std::string q = "SELECT bType, dwHpInit, dwPwrInit, dwDefInit, wWalkSpeed100, wSightRangeInit, wWanderRangeInit, wMeleeAtkRangeInit, wShotAtkRangeInit, szName, wAtkRatio, wAvoidRatio, wRegen, dwExpInit, wHealPoint, bIdleRatio, bLevel, bWalkSpeed, wAtkInterval, wStaggerTime, bFiveElm, wFiveElmExp FROM NPCTEMPLATE";
     DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
         int t=0,hp=0,pwr=0,def1=0,wspeed=0,sight=0,wander=0,melee=0,shot=0,atkratio=0,avoidratio=0,regen=0,expinit=0,healpoint=0,idleratio=0,lvl=0,walkspdbyte=0,atkinterval=1500,staggertime=500;
-        char nameBuf[64] = {0}; SQLLEN c[20] = {0};
+        int fiveElm=0, fiveElmExp=0;
+        char nameBuf[64] = {0}; SQLLEN c[22] = {0};
         SQLGetData(hStmt,1,SQL_C_SLONG,&t,0,&c[0]); SQLGetData(hStmt,2,SQL_C_SLONG,&hp,0,&c[1]);
         SQLGetData(hStmt,3,SQL_C_SLONG,&pwr,0,&c[2]); SQLGetData(hStmt,4,SQL_C_SLONG,&def1,0,&c[3]);
         SQLGetData(hStmt,5,SQL_C_SLONG,&wspeed,0,&c[4]); SQLGetData(hStmt,6,SQL_C_SLONG,&sight,0,&c[5]);
@@ -175,6 +176,7 @@ void GameDataDB::LoadNpcTemplates(std::map<BYTE, sNpcTemplate>& out) {
         SQLGetData(hStmt,15,SQL_C_SLONG,&healpoint,0,&c[14]); SQLGetData(hStmt,16,SQL_C_SLONG,&idleratio,0,&c[15]);
         SQLGetData(hStmt,17,SQL_C_SLONG,&lvl,0,&c[16]); SQLGetData(hStmt,18,SQL_C_SLONG,&walkspdbyte,0,&c[17]);
         SQLGetData(hStmt,19,SQL_C_SLONG,&atkinterval,0,&c[18]); SQLGetData(hStmt,20,SQL_C_SLONG,&staggertime,0,&c[19]);
+        SQLGetData(hStmt,21,SQL_C_SLONG,&fiveElm,0,&c[20]); SQLGetData(hStmt,22,SQL_C_SLONG,&fiveElmExp,0,&c[21]);
         sNpcTemplate tpl;
         tpl.bType = t; tpl.dwHpInit = hp; tpl.dwPwrInit = pwr; tpl.dwDefInit = def1;
         tpl.bLevel = (c[16]!=SQL_NULL_DATA) ? lvl : 1;
@@ -189,6 +191,8 @@ void GameDataDB::LoadNpcTemplates(std::map<BYTE, sNpcTemplate>& out) {
         tpl.bIdleRatio = (c[15]!=SQL_NULL_DATA) ? idleratio : 50;
         tpl.wAtkInterval = (c[18]!=SQL_NULL_DATA) ? atkinterval : 1500;
         tpl.wStaggerTime = (c[19]!=SQL_NULL_DATA) ? staggertime : 500;
+        tpl.bFiveElm = (c[20]!=SQL_NULL_DATA) ? (BYTE)fiveElm : 0;
+        tpl.wFiveElmExp = (c[21]!=SQL_NULL_DATA) ? (WORD)fiveElmExp : 0;
         if (c[9] != SQL_NULL_DATA) tpl.szName = nameBuf;
         out[t] = tpl;
     });
@@ -251,10 +255,11 @@ void GameDataDB::LoadFunctionalNpcItems(std::vector<MonsterData>& worldObjects) 
 }
 
 void GameDataDB::LoadNpcList(std::vector<MonsterData>& out, const std::map<BYTE, sNpcTemplate>& npcTemplates) {
-    std::string q = "SELECT dwID, dwMapID, wPosX, wPosY, bNpcType, szName, dwMovePattern, dwAttackPattern, wWanderRangeInc, wCount, wPosRange, wSightRangeInc, wHpInc, wPwrInc, wDefInc, dwExpInc, wMeleeAtkRangeInc, wShotAtkRangeInc, wRootItem, wRootMoney, wRootRes, wRootBook, wLevel, bGroupOrder, wAtkRatioInc, wAvoidRatioInc FROM NPCLIST";
+    std::string q = "SELECT dwID, dwMapID, wPosX, wPosY, bNpcType, szName, dwMovePattern, dwAttackPattern, wWanderRangeInc, wCount, wPosRange, wSightRangeInc, wHpInc, wPwrInc, wDefInc, dwExpInc, wMeleeAtkRangeInc, wShotAtkRangeInc, wRootItem, wRootMoney, wRootRes, wRootBook, wLevel, bGroupOrder, wAtkRatioInc, wAvoidRatioInc, bFiveElm, wIncFiveElmExp FROM NPCLIST";
     DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
         int id=0,mapid=0,x=0,y=0,t=0,mp=0,ap=0,wander=0,count=0,range=0,sightInc=0,hpInc=0,pwrInc=0,defInc=0,expInc=0,meleeInc=0,shotInc=0,rItem=0,rMoney=0,rRes=0,rBook=0,npcLevel=0,groupOrder=0,atkRatioInc=0,avoidRatioInc=0;
-        char nameBuf[64] = {0}; SQLLEN c[26] = {0};
+        int fiveElm=0, incFiveElmExp=0;
+        char nameBuf[64] = {0}; SQLLEN c[28] = {0};
         SQLGetData(hStmt,1,SQL_C_SLONG,&id,0,&c[0]); SQLGetData(hStmt,2,SQL_C_SLONG,&mapid,0,&c[1]);
         SQLGetData(hStmt,3,SQL_C_SLONG,&x,0,&c[2]); SQLGetData(hStmt,4,SQL_C_SLONG,&y,0,&c[3]);
         SQLGetData(hStmt,5,SQL_C_SLONG,&t,0,&c[4]); SQLGetData(hStmt,6,SQL_C_CHAR,nameBuf,sizeof(nameBuf),&c[5]);
@@ -268,6 +273,7 @@ void GameDataDB::LoadNpcList(std::vector<MonsterData>& out, const std::map<BYTE,
         SQLGetData(hStmt,21,SQL_C_SLONG,&rRes,0,&c[20]); SQLGetData(hStmt,22,SQL_C_SLONG,&rBook,0,&c[21]);
         SQLGetData(hStmt,23,SQL_C_SLONG,&npcLevel,0,&c[22]); SQLGetData(hStmt,24,SQL_C_SLONG,&groupOrder,0,&c[23]);
         SQLGetData(hStmt,25,SQL_C_SLONG,&atkRatioInc,0,&c[24]); SQLGetData(hStmt,26,SQL_C_SLONG,&avoidRatioInc,0,&c[25]);
+        SQLGetData(hStmt,27,SQL_C_SLONG,&fiveElm,0,&c[26]); SQLGetData(hStmt,28,SQL_C_SLONG,&incFiveElmExp,0,&c[27]);
         if (c[9]==SQL_NULL_DATA||count<=0) count=1;
         if (c[10]==SQL_NULL_DATA) range=0;
         for (int i=0; i<count; ++i) {
@@ -302,6 +308,10 @@ void GameDataDB::LoadNpcList(std::vector<MonsterData>& out, const std::map<BYTE,
                 obj.wAtkRatio = tpl.wAtkRatio + (c[24]!=SQL_NULL_DATA?atkRatioInc:0);
                 obj.wAvoidRatio = tpl.wAvoidRatio + (c[25]!=SQL_NULL_DATA?avoidRatioInc:0);
                 obj.bWalkSpeedByte = tpl.bWalkSpeed;
+                
+                // 加载五行属性与增量经验
+                if (c[26]!=SQL_NULL_DATA) obj.bFiveElm=(BYTE)fiveElm; else obj.bFiveElm=tpl.bFiveElm;
+                if (c[27]!=SQL_NULL_DATA) obj.wIncFiveElmExp=(WORD)incFiveElmExp; else obj.wIncFiveElmExp=0;
             }
             out.push_back(obj);
         }

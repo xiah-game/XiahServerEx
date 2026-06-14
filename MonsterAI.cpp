@@ -198,12 +198,20 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
                         BYTE bLevel;
                     };
                     std::vector<ExpiredBuff> expiredBuffs;
+                    std::vector<DWORD> expiredSpirits;
                     {
                         std::lock_guard<std::mutex> lock(pair.second->GetMutex());
                         auto& players = pair.second->GetPlayers();
                         for (auto& pp : players) {
                             sServerObject& pl = pp.second;
                             if (pl.bObjectType != 1) continue;
+
+                            // 检查暴气状态是否超时
+                            if (pl.bSpiritActive && tick >= pl.dwSpiritEndTime) {
+                                pl.bSpiritActive = false;
+                                expiredSpirits.push_back(pl.dwObjectID);
+                            }
+
                             for (auto it = pl.activeBuffs.begin(); it != pl.activeBuffs.end(); ) {
                                 if (tick >= it->second.dwEndTime) {
                                     ExpiredBuff eb;
@@ -221,6 +229,38 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
                         }
                     }
                     // Send buff end packets & refresh stats outside map mutex
+                    if (!expiredSpirits.empty()) {
+                        for (DWORD dwObjID : expiredSpirits) {
+                            std::vector<BYTE> buf;
+                            buf.resize(4, 0); // Header placeholder
+                            buf.push_back(11); // bType = 11 (Spirit/Potion)
+                            
+                            auto pushDWord = [&](DWORD d) { buf.push_back(d & 0xFF); buf.push_back((d >> 8) & 0xFF); buf.push_back((d >> 16) & 0xFF); buf.push_back(d >> 24); };
+                            auto pushString = [&](const std::string& str) {
+                                WORD len = (WORD)str.length();
+                                buf.push_back(len & 0xFF); buf.push_back(len >> 8);
+                                for (char c : str) buf.push_back(c);
+                            };
+                            
+                            pushDWord(dwObjID);
+                            pushDWord(1); // dwData1 -> bInstanceType = 1 (Spirit)
+                            pushDWord(0); // dwData2 -> 0 (Stop spirit)
+                            pushDWord(0); // dwData3 -> 0
+                            pushString(""); pushString(""); pushString("");
+
+                            WORD packetID = 0x3F10; // CS_CD_CHARUPDATE_ACK
+                            WORD payloadSize = (WORD)(buf.size() - 4);
+                            memcpy(&buf[0], &packetID, 2);
+                            memcpy(&buf[2], &payloadSize, 2);
+                            EncryptPacket(buf.data(), 0x42);
+
+                            SessionMgr::GetInstance().BroadcastToMap(mapID, buf);
+
+                            DWORD charID = dwObjID - 400000000;
+                            PlayerManager::GetInstance().RecalculateStats(charID, true);
+                            LOG("[SpiritExpiry] Spirit expired on player dwObjectID=" + std::to_string(dwObjID));
+                        }
+                    }
                     if (!expiredBuffs.empty()) {
                         // 1. Send 0x402E (KeepUpMugongEnd_ACK) to remove buff icon
                         {

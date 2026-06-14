@@ -244,10 +244,10 @@ void OnFunctionalNpcItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload
                     break;
                 case 16: // ITEMTYPE_NPCITEM
                     pushWord((WORD)tpl.nData1); // wTamingLevel
-                    pushWord((WORD)tpl.nData2); // wNpcItemType
+                    pushWord((WORD)tpl.nData2); // wNpcItemType — 客户端商店列表读 WORD（非背包的 BYTE）
                     pushWord((WORD)tpl.nData3); // wTamingRate
-                    pushWord((WORD)tpl.nData4); // wWildRate
-                    pushDWord((DWORD)tpl.nData5); // wIncrHp
+                    pushWord((WORD)tpl.nData4); // wWildRate — 客户端商店列表读 WORD（非背包的 BYTE）
+                    pushDWord((DWORD)tpl.nData5); // wIncrHp (DWORD)
                     break;
                 case 18: // SUNANG (event item)
                     pushByte(0); // bModifyCnt
@@ -540,7 +540,7 @@ MonsterData* pObj = NULL;
             pushByte((BYTE)tpl.nData2); // m_bNpcItemType
             pushWord((WORD)tpl.nData3); // m_wTamingRate
             pushByte((BYTE)tpl.nData4); // m_bWildRate
-            pushWord((WORD)tpl.nData5); // m_wIncrHp
+            pushDWord((DWORD)tpl.nData5); // m_wIncrHp
         } else if (tpl.bType == 18) { // ITEMTYPE_SUNANG
             pushByte(0); // m_bFuncID
             pushDWord(0); // m_dwValue

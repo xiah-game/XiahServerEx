@@ -65,11 +65,11 @@ void OnMugongListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tota
 
         bool isGeneral = (id >= 30 && id <= 149);
 
-        
+        bool isFiveElm = (id >= 150 && id <= 154);
 
         if (bMugongType == 0 && isGeneral) filteredSkills.push_back(s); // GENERAL/ACTIVE
 
-        else if (bMugongType == 1 && isPassive) filteredSkills.push_back(s); // PASSIVE
+        else if (bMugongType == 1 && (isPassive || isFiveElm)) filteredSkills.push_back(s); // PASSIVE
 
     }
 
@@ -345,9 +345,35 @@ void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
 
     bool isBuff = (pd && pd->dwKeepUpTime > 0);
 
-
-
     DWORD playerMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+
+    // 检查五行必杀蓄气值
+    /*
+    if (dwMugongID >= 150 && dwMugongID <= 154) {
+        bool canCast = false;
+        if (g_MapInstances.count(playerMapID)) {
+            CMapInstance* mapInst = g_MapInstances[playerMapID];
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            PlayerData* pObj = mapInst->GetPlayer(charID + 400000000);
+            if (pObj && pObj->dwFiveElmGauge >= 5000) {
+                canCast = true;
+            }
+        }
+        if (!canCast) {
+            LOG("[MugongHandler] 蓄气值不足5000，无法释放五行必杀技! ID=" + std::to_string(dwMugongID));
+            // 发送失败包 (bResult = 1, 代表内功/蓄力不足)
+            std::vector<BYTE> failBuf(4 + 29, 0);
+            failBuf[4] = 1; // bResult = 1
+            *(DWORD*)(failBuf.data() + 5) = dwMugongID;
+            PACKET_HEADER* head = (PACKET_HEADER*)failBuf.data();
+            head->id = 0x4014; // PKT_MUGONGPREATTACK_ACK
+            head->payloadSize = failBuf.size() - 4;
+            EncryptPacket(failBuf.data(), 0x42);
+            SafeSend(clientSocket, (const char*)failBuf.data(), failBuf.size(), 0);
+            return;
+        }
+    }
+    */
     // �������� Debuff (����/����/ѣ��) ���ؼ�������
     if (g_MapInstances.count(playerMapID)) {
         CMapInstance* mapInst = g_MapInstances[playerMapID];
@@ -736,6 +762,38 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
 
     LOG("[MugongHandler] OnMugongAttackReq: Skill " + std::to_string(dwMugongID) + " by " + std::to_string(dwAttackID) + " against " + std::to_string(dwDefenseID));
+
+    // 如果是五行必杀技，校验蓄力值并扣除
+    /*
+    if (dwMugongID >= 150 && dwMugongID <= 154) {
+        bool canCast = false;
+        DWORD playerMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+        PlayerData* pAttacker = nullptr;
+        if (g_MapInstances.count(playerMapID)) {
+            CMapInstance* mapInst = g_MapInstances[playerMapID];
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            pAttacker = mapInst->GetPlayer(charID + 400000000);
+            if (pAttacker && pAttacker->dwFiveElmGauge >= 5000) {
+                pAttacker->dwFiveElmGauge -= 5000;
+                canCast = true;
+            }
+        }
+        if (!canCast) {
+            LOG("[MugongHandler] OnMugongAttackReq 校验失败：蓄气不足5000，拦截释放! ID=" + std::to_string(dwMugongID));
+            return;
+        }
+
+        // 异步扣除落盘并同步给客户端进度条
+        if (pAttacker) {
+            CharacterDB::ExpData expData;
+            if (CharacterDB::GetInstance().GetExpData(charID, expData)) {
+                CharacterDB::GetInstance().UpdateFiveElm(charID, expData.wFiveElmPoint, expData.wFiveElmPointCnt, expData.dwFiveElmPower, pAttacker->dwFiveElmGauge,
+                                                         expData.wFireExp, expData.wWaterExp, expData.wWoodExp, expData.wMetalExp, expData.wEarthExp);
+            }
+            SyncFiveElmStatus(clientSocket, charID, pAttacker);
+        }
+    }
+    */
 
 
 
@@ -1503,6 +1561,8 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
         std::string szName;
 
+        DWORD dwFiveElmExp;
+
     };
 
     std::vector<sDeadEntity> deadEntities;
@@ -1725,6 +1785,13 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
                     finalDmg = (DWORD)rawDmg;
 
+                    // 武功命中蓄力（普通武功技能命中怪物）：施法者处于五行激活状态
+                    if (pAttacker && pAttacker->bCurFiveElm > 0 && (dwMugongID < 150 || dwMugongID > 154)) {
+                        pAttacker->dwFiveElmGauge += 5;
+                        if (pAttacker->dwFiveElmGauge > 5000) pAttacker->dwFiveElmGauge = 5000;
+                        SyncFiveElmStatus(clientSocket, pAttacker->dwObjectID - 400000000, pAttacker);
+                    }
+
                     
 
                     if (pTarget->dwHpCur > finalDmg) {
@@ -1745,9 +1812,10 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
                         deadExp = pTarget->dwExp; // Use computed Init+Inc value
 
-                        
+                        DWORD targetFiveElmExp = g_NpcTemplates.count(pTarget->bPropType) ? g_NpcTemplates[pTarget->bPropType].wFiveElmExp : 0;
+                        targetFiveElmExp += pTarget->wIncFiveElmExp;
 
-                        deadEntities.push_back({dwDefenseID, deadExp, g_NpcTemplates[pTarget->bPropType].szName});
+                        deadEntities.push_back({dwDefenseID, deadExp, g_NpcTemplates[pTarget->bPropType].szName, targetFiveElmExp});
 
                         DropManager::GetInstance()->GenerateDrops(dwAttackID, *pTarget);
 
@@ -1949,7 +2017,10 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
                                 
 
-                                deadEntities.push_back({pSplashMon->dwObjectID, pSplashMon->dwExp, g_NpcTemplates[pSplashMon->bPropType].szName});
+                                DWORD splashFiveElmExp = g_NpcTemplates.count(pSplashMon->bPropType) ? g_NpcTemplates[pSplashMon->bPropType].wFiveElmExp : 0;
+                                splashFiveElmExp += pSplashMon->wIncFiveElmExp;
+
+                                deadEntities.push_back({pSplashMon->dwObjectID, pSplashMon->dwExp, g_NpcTemplates[pSplashMon->bPropType].szName, splashFiveElmExp});
 
                                 DropManager::GetInstance()->GenerateDrops(dwAttackID, *pSplashMon);
 
@@ -2315,6 +2386,21 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
                     finalDmg = (DWORD)rawDmg;
 
+                    // 武功PvP命中蓄力与受创蓄力
+                    if (pAttacker && pAttacker->bCurFiveElm > 0 && (dwMugongID < 150 || dwMugongID > 154) && p[0] == 2) {
+                        pAttacker->dwFiveElmGauge += 5;
+                        if (pAttacker->dwFiveElmGauge > 5000) pAttacker->dwFiveElmGauge = 5000;
+                        SyncFiveElmStatus(clientSocket, pAttacker->dwObjectID - 400000000, pAttacker);
+                    }
+                    if (pTarget && pTarget->bCurFiveElm > 0 && p[0] == 2) {
+                        pTarget->dwFiveElmGauge += 10;
+                        if (pTarget->dwFiveElmGauge > 5000) pTarget->dwFiveElmGauge = 5000;
+                        SOCKET targetSock = SessionMgr::GetInstance().GetSocketByCharID(pTarget->dwObjectID - 400000000);
+                        if (targetSock != INVALID_SOCKET) {
+                            SyncFiveElmStatus(targetSock, pTarget->dwObjectID - 400000000, pTarget);
+                        }
+                    }
+
                     
 
                     if (pTarget->dwHpCur > finalDmg) {
@@ -2529,7 +2615,10 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
                                 
 
-                                deadEntities.push_back({pSplashMon->dwObjectID, pSplashMon->dwExp, g_NpcTemplates[pSplashMon->bPropType].szName});
+                                DWORD splashFiveElmExp2 = g_NpcTemplates.count(pSplashMon->bPropType) ? g_NpcTemplates[pSplashMon->bPropType].wFiveElmExp : 0;
+                                splashFiveElmExp2 += pSplashMon->wIncFiveElmExp;
+
+                                deadEntities.push_back({pSplashMon->dwObjectID, pSplashMon->dwExp, g_NpcTemplates[pSplashMon->bPropType].szName, splashFiveElmExp2});
 
                                 DropManager::GetInstance()->GenerateDrops(dwAttackID, *pSplashMon);
 
@@ -2818,7 +2907,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
         DWORD attackerCharID = dwAttackID - 400000000; // 800000301 -> 400000301 (matches DB/SessionMgr format)
 
-        bool needRefresh = GrantExpToPlayer(attackerCharID, de.dwExp);
+        bool needRefresh = GrantExpToPlayer(attackerCharID, de.dwExp, de.dwFiveElmExp);
 
         if (needRefresh) {
 

@@ -661,6 +661,48 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
             targetLevel = reqPrevLevel + 1; // Advance the skill!
         }
 
+        // 五行必杀技学习门槛校验 (150 ~ 154)
+        if (dwMugongID >= 150 && dwMugongID <= 154) {
+            WORD reqPoints = 0;
+            if (targetLevel == 1) reqPoints = 200;
+            else if (targetLevel == 2) reqPoints = 400;
+            else if (targetLevel == 3) reqPoints = 600;
+
+            WORD currentFiveElmVal = 0;
+            // 从 DB 中直接加载最新的玩家五行分配值进行校验
+            CharacterDB::ExpData expData;
+            if (CharacterDB::GetInstance().GetExpData(charID, expData)) {
+                if (dwMugongID == 150) currentFiveElmVal = expData.wFireExp;
+                else if (dwMugongID == 151) currentFiveElmVal = expData.wWaterExp;
+                else if (dwMugongID == 152) currentFiveElmVal = expData.wWoodExp;
+                else if (dwMugongID == 153) currentFiveElmVal = expData.wMetalExp;
+                else if (dwMugongID == 154) currentFiveElmVal = expData.wEarthExp;
+            }
+
+            if (currentFiveElmVal < reqPoints) {
+                LOG("[ItemHandler] 五行加点数值不足以学习该技能书! Current: " + std::to_string(currentFiveElmVal) + " Required: " + std::to_string(reqPoints));
+                
+                // 向客户端发送读取武功书结果失败包 0x421E (CS_IM_READRESULT_ACK)
+                // 协议格式：bResult(1) + szMugongBookName (sString: WORD len + data)
+                std::vector<BYTE> ackBuf; ackBuf.reserve(64);
+                ackBuf.resize(4); // 占位 header
+                ackBuf.push_back(10); // bResult = 10 (IDS_FIVEELEMENT_EXPLACK)
+                
+                std::string bookName = tpl.szName;
+                WORD nameLen = (WORD)bookName.length();
+                ackBuf.push_back(nameLen & 0xFF);
+                ackBuf.push_back(nameLen >> 8);
+                for (char c : bookName) ackBuf.push_back(c);
+                
+                PACKET_HEADER* head = (PACKET_HEADER*)ackBuf.data();
+                head->id = 0x421E; // CS_IM_READRESULT_ACK = OFFSET_CS_IM + 29 = 0x4201 + 29 = 0x421E
+                head->payloadSize = ackBuf.size() - 4;
+                EncryptPacket(ackBuf.data(), 0x42);
+                SafeSend(clientSocket, (const char*)ackBuf.data(), ackBuf.size(), 0);
+                return;
+            }
+        }
+
         if (!MugongManager::GetInstance()->CanLearnMugong(charID, dwMugongID, targetLevel)) {
             LOG("[ItemHandler] Failed CanLearnMugong pre-check, item deduction aborted.");
             return;
@@ -801,7 +843,7 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
                     case 15:
                         pushByte(0); pushWord((WORD)tplOpen.nBasicData1); pushWord((WORD)tplOpen.nBasicData1); pushByte(0); pushByte(0); break;
                     case 16:
-                        pushWord((WORD)tplOpen.nData1); pushByte((BYTE)tplOpen.nData2); pushWord((WORD)tplOpen.nData3); pushByte((BYTE)tplOpen.nData4); pushWord((WORD)tplOpen.nData5); break;
+                        pushWord((WORD)tplOpen.nData1); pushByte((BYTE)tplOpen.nData2); pushWord((WORD)tplOpen.nData3); pushByte((BYTE)tplOpen.nData4); pushDWord((DWORD)tplOpen.nData5); break;
                     case 18:
                         pushByte(0); break;
                     case 19:

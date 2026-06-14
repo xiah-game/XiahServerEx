@@ -8,6 +8,7 @@
 #include "../Network/SessionMgr.h"
 #include "../GameObjects/MapInstance.h"
 #include "../Handlers/MugongHandler.h"
+#include "ExpSystem.h"
 
 // 称号系统：服务端单点偏置升级工具，将4亿CharID转换为客户端8亿ObjectID
 inline DWORD ToClientPCID(DWORD dwCharID) {
@@ -206,7 +207,7 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
             for (auto& mg : pObj->learnedMugongs) {
                 DWORD mugID = mg.first;
                 BYTE mugLvl = mg.second;
-                if (mugID >= 1 && mugID <= 29) {
+                if ((mugID >= 1 && mugID <= 29) || (mugID >= 150 && mugID <= 154)) {
                     sMugongList* pd = MugongManager::GetInstance()->GetMugongLevelData(mugID, mugLvl);
                     if (pd) {
                         flatAtk  += pd->wIncAtk;
@@ -216,10 +217,10 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
                         flatIpMax += pd->wIncIpMax;
                         flatCrit  += pd->wIncCritical;
 
-                        if (pd->wIncAtkPerc > 0) percAtk += ((int)pd->wIncAtkPerc - 100);
-                        if (pd->wIncDefPerc > 0) percDef += ((int)pd->wIncDefPerc - 100);
-                        if (pd->wIncRatePerc > 0) percHit += ((int)pd->wIncRatePerc - 100);
-                        if (pd->wIncCriticalPerc > 0) percCrit += ((int)pd->wIncCriticalPerc - 100);
+                        if (pd->wIncAtkPerc > 0) percAtk += (pd->wIncAtkPerc > 100 ? (int)pd->wIncAtkPerc - 100 : (int)pd->wIncAtkPerc);
+                        if (pd->wIncDefPerc > 0) percDef += (pd->wIncDefPerc > 100 ? (int)pd->wIncDefPerc - 100 : (int)pd->wIncDefPerc);
+                        if (pd->wIncRatePerc > 0) percHit += (pd->wIncRatePerc > 100 ? (int)pd->wIncRatePerc - 100 : (int)pd->wIncRatePerc);
+                        if (pd->wIncCriticalPerc > 0) percCrit += (pd->wIncCriticalPerc > 100 ? (int)pd->wIncCriticalPerc - 100 : (int)pd->wIncCriticalPerc);
 
                         LOG("[RecalcStats] Passive ID=" + std::to_string(mugID) + " Lv=" + std::to_string(mugLvl) 
                             + " flatAtk+" + std::to_string(pd->wIncAtk) + " percAtk+" + std::to_string(pd->wIncAtkPerc)
@@ -243,16 +244,23 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
                         flatIpMax += bd->wIncIpMax;
                         flatCrit  += bd->wIncCritical;
 
-                        if (bd->wIncAtkPerc > 0) percAtk += ((int)bd->wIncAtkPerc - 100);
-                        if (bd->wIncDefPerc > 0) percDef += ((int)bd->wIncDefPerc - 100);
-                        if (bd->wIncRatePerc > 0) percHit += ((int)bd->wIncRatePerc - 100);
-                        if (bd->wIncCriticalPerc > 0) percCrit += ((int)bd->wIncCriticalPerc - 100);
+                        if (bd->wIncAtkPerc > 0) percAtk += (bd->wIncAtkPerc > 100 ? (int)bd->wIncAtkPerc - 100 : (int)bd->wIncAtkPerc);
+                        if (bd->wIncDefPerc > 0) percDef += (bd->wIncDefPerc > 100 ? (int)bd->wIncDefPerc - 100 : (int)bd->wIncDefPerc);
+                        if (bd->wIncRatePerc > 0) percHit += (bd->wIncRatePerc > 100 ? (int)bd->wIncRatePerc - 100 : (int)bd->wIncRatePerc);
+                        if (bd->wIncCriticalPerc > 0) percCrit += (bd->wIncCriticalPerc > 100 ? (int)bd->wIncCriticalPerc - 100 : (int)bd->wIncCriticalPerc);
                     }
                     ++it;
                 }
             }
 
-            // Phase 3: Apply percentages once 鍨?totalFlat * (100 + totalPerc) / 100
+            // 暴气属性增益结算
+            if (pObj->bSpiritActive) {
+                percAtk += 20; // 攻击力+20%
+                percDef += 20; // 防御力+20%
+                flatCrit += 10; // 暴击率+10
+            }
+
+            // Phase 3: Apply percentages once totalFlat * (100 + totalPerc) / 100
             int finalAtkPerc = 100 + percAtk; if (finalAtkPerc < 1) finalAtkPerc = 1;
             int finalDefPerc = 100 + percDef; if (finalDefPerc < 1) finalDefPerc = 1;
             int finalHitPerc = 100 + percHit; if (finalHitPerc < 1) finalHitPerc = 1;
@@ -463,6 +471,9 @@ void SendCharStatusInfoAck(SOCKET clientSocket, DWORD dwCharID, WORD opCode) {
         auto pushDword = [&](DWORD d) { pushWord((WORD)(d & 0xFFFF)); pushWord((WORD)(d >> 16)); };
         auto pushInt64 = [&](long long int d) { pushDword((DWORD)(d & 0xFFFFFFFF)); pushDword((DWORD)(d >> 32)); };
         
+        CharacterDB::ExpData expData;
+        CharacterDB::GetInstance().GetExpData(dwCharID, expData);
+
         if (opCode == CS_IF_CHARINFO_ACK) {
             pushWord(wLevel); pushWord(wStr); pushWord(wSus); pushWord(wDex); pushWord(wVit);
             pushWord(wRemainSp); pushDword(dwTotalSp);
@@ -501,11 +512,18 @@ void SendCharStatusInfoAck(SOCKET clientSocket, DWORD dwCharID, WORD opCode) {
             pushWord(playerObj.wCritical);
             ackBuf.push_back(10); ackBuf.push_back(0);
             pushDword(dwFame);
-            pushWord(0);
-            pushDword(0); pushDword(0); pushDword(0);
-            pushWord(0); pushWord(0); pushWord(0); pushWord(0); pushWord(0);
-            ackBuf.push_back(0);
+            pushWord(expData.wFiveElmPoint);
+            pushDword(expData.dwFiveElmPower); 
+            pushDword(1000); // dwFiveElmPowerMax (max range for UI slider)
+            pushDword(expData.dwFiveElmGauge); 
+            pushWord(expData.wFireExp); 
+            pushWord(expData.wWaterExp); 
+            pushWord(expData.wWoodExp); 
+            pushWord(expData.wMetalExp); 
+            pushWord(expData.wEarthExp);
+            ackBuf.push_back(playerObj.bRebirth);
         }
+        SendStaminaSync(clientSocket, expData.dwFiveElmGauge);
     }
     
     LOG("[PlayerManager] ackBuf size: " + std::to_string(ackBuf.size()));

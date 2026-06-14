@@ -20,8 +20,28 @@
 #include "ShopHandler.h"
 #include "RepairHandler.h"
 #include "MunpaHandler.h"
+#include "FiveElmHandler.h"
 
 void InitPacketHandlers() {
+    RegisterHandler(0x3B70, [](SOCKET s, BYTE* p, WORD size) {
+        DWORD charID = SessionMgr::GetInstance().GetCharID(s);
+        if (charID) OnExecFiveElmReq(s, charID, p, size);
+    });
+
+    RegisterHandler(0x3B72, [](SOCKET s, BYTE* p, WORD size) {
+        DWORD charID = SessionMgr::GetInstance().GetCharID(s);
+        if (charID) OnChangeFiveElmReq(s, charID, p, size);
+    });
+
+    RegisterHandler(0x3B7A, [](SOCKET s, BYTE* p, WORD size) {
+        DWORD charID = SessionMgr::GetInstance().GetCharID(s);
+        if (charID) OnEndFiveElmReq(s, charID, p, size);
+    });
+
+    RegisterHandler(0x3B78, [](SOCKET s, BYTE* p, WORD size) {
+        DWORD charID = SessionMgr::GetInstance().GetCharID(s);
+        if (charID) OnExecStaminaReq(s, charID, p, size);
+    });
     RegisterHandler(CS_IT_LOGINCHECK_REQ, [](SOCKET s, BYTE* p, WORD size) {
         std::string account = SessionMgr::GetInstance().GetAccount(s);
         OnLoginCheckReq(s, account, p, size);

@@ -79,8 +79,19 @@ public:
         WORD wRemainTp = 0, wRemainSp = 0;
         DWORD dwTotalSp = 0;
         BYTE bCharType = 1;
+        WORD wFiveElmPoint = 0;
+        WORD wFiveElmPointCnt = 0;
+        DWORD dwFiveElmPower = 0;
+        DWORD dwFiveElmGauge = 0;
+        WORD wFireExp = 0;
+        WORD wWaterExp = 0;
+        WORD wWoodExp = 0;
+        WORD wMetalExp = 0;
+        WORD wEarthExp = 0;
     };
     bool GetExpData(DWORD dwCharID, ExpData& out);
+    void UpdateFiveElm(DWORD dwCharID, WORD wFiveElmPoint, WORD wFiveElmPointCnt, DWORD dwFiveElmPower, DWORD dwFiveElmGauge,
+                        WORD wFireExp, WORD wWaterExp, WORD wWoodExp, WORD wMetalExp, WORD wEarthExp);
 
     // Get current position from CHAR_STATUS
     bool GetCharPosition(DWORD dwCharID, int& wPosX, int& wPosY, int& bHeight);

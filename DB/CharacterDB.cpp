@@ -114,12 +114,15 @@ void CharacterDB::UpdateExpAndLevel(DWORD dwCharID, long long int newExp, WORD w
 }
 
 bool CharacterDB::GetExpData(DWORD dwCharID, ExpData& out) {
-    std::string q = "SELECT P.dwExp, P.wLevel, P.dwTotalTp, P.wRemainTp, P.wRemainSp, P.dwTotalSp, B.bCharType "
+    std::string q = "SELECT P.dwExp, P.wLevel, P.dwTotalTp, P.wRemainTp, P.wRemainSp, P.dwTotalSp, B.bCharType, "
+                    "P.wFiveElmPoint, P.wFiveElmPointCnt, P.dwFiveElmPower, P.dwFiveElmGauge, "
+                    "P.wFireExp, P.wWaterExp, P.wWoodExp, P.wMetalExp, P.wEarthExp "
                     "FROM CHAR_POWER P INNER JOIN CHAR_BASIC B ON P.dwCharID = B.dwCharID "
                     "WHERE P.dwCharID = " + std::to_string(dwCharID);
     bool found = false;
     DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
         SQLLEN c;
+        LONG tmp;
         SQLGetData(hStmt, 1, SQL_C_SBIGINT, &out.dwExp, 0, &c);
         SQLGetData(hStmt, 2, SQL_C_USHORT, &out.wLevel, 0, &c);
         SQLGetData(hStmt, 3, SQL_C_ULONG, &out.dwTotalTp, 0, &c);
@@ -127,9 +130,36 @@ bool CharacterDB::GetExpData(DWORD dwCharID, ExpData& out) {
         SQLGetData(hStmt, 5, SQL_C_USHORT, &out.wRemainSp, 0, &c);
         SQLGetData(hStmt, 6, SQL_C_ULONG, &out.dwTotalSp, 0, &c);
         SQLGetData(hStmt, 7, SQL_C_UTINYINT, &out.bCharType, 0, &c);
+        
+        SQLGetData(hStmt, 8, SQL_C_SLONG, &tmp, 0, &c); out.wFiveElmPoint = (WORD)tmp;
+        SQLGetData(hStmt, 9, SQL_C_SLONG, &tmp, 0, &c); out.wFiveElmPointCnt = (WORD)tmp;
+        SQLGetData(hStmt, 10, SQL_C_SLONG, &tmp, 0, &c); out.dwFiveElmPower = (DWORD)tmp;
+        SQLGetData(hStmt, 11, SQL_C_SLONG, &tmp, 0, &c); out.dwFiveElmGauge = (DWORD)tmp;
+        
+        SQLGetData(hStmt, 12, SQL_C_SLONG, &tmp, 0, &c); out.wFireExp = (WORD)tmp;
+        SQLGetData(hStmt, 13, SQL_C_SLONG, &tmp, 0, &c); out.wWaterExp = (WORD)tmp;
+        SQLGetData(hStmt, 14, SQL_C_SLONG, &tmp, 0, &c); out.wWoodExp = (WORD)tmp;
+        SQLGetData(hStmt, 15, SQL_C_SLONG, &tmp, 0, &c); out.wMetalExp = (WORD)tmp;
+        SQLGetData(hStmt, 16, SQL_C_SLONG, &tmp, 0, &c); out.wEarthExp = (WORD)tmp;
+        
         found = true;
     });
     return found;
+}
+
+void CharacterDB::UpdateFiveElm(DWORD dwCharID, WORD wFiveElmPoint, WORD wFiveElmPointCnt, DWORD dwFiveElmPower, DWORD dwFiveElmGauge,
+                                WORD wFireExp, WORD wWaterExp, WORD wWoodExp, WORD wMetalExp, WORD wEarthExp) {
+    std::string q = "UPDATE CHAR_POWER SET wFiveElmPoint = " + std::to_string(wFiveElmPoint)
+                  + ", wFiveElmPointCnt = " + std::to_string(wFiveElmPointCnt)
+                  + ", dwFiveElmPower = " + std::to_string(dwFiveElmPower)
+                  + ", dwFiveElmGauge = " + std::to_string(dwFiveElmGauge)
+                  + ", wFireExp = " + std::to_string(wFireExp)
+                  + ", wWaterExp = " + std::to_string(wWaterExp)
+                  + ", wWoodExp = " + std::to_string(wWoodExp)
+                  + ", wMetalExp = " + std::to_string(wMetalExp)
+                  + ", wEarthExp = " + std::to_string(wEarthExp)
+                  + " WHERE dwCharID = " + std::to_string(dwCharID);
+    DBHelper::GetInstance().ExecuteUpdate(q);
 }
 
 void CharacterDB::SavePosition(DWORD dwCharID, WORD wPosX, WORD wPosY, DWORD dwMapID) {

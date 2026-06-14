@@ -223,6 +223,13 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                     }
                     
                     pTarget->dwHpCur = (pTarget->dwHpCur > finalDmg) ? (pTarget->dwHpCur - finalDmg) : 0;
+
+                    // 物理攻击命中蓄力：攻击者开启五行状态且成功命中时
+                    if (pAttacker && pAttacker->bCurFiveElm > 0 && bResult == 2) {
+                        pAttacker->dwFiveElmGauge += 5;
+                        if (pAttacker->dwFiveElmGauge > 5000) pAttacker->dwFiveElmGauge = 5000;
+                        SyncFiveElmStatus(clientSocket, pAttacker->dwObjectID - 400000000, pAttacker);
+                    }
                 }
                 
                 // Xiah AI Bitmask - NON-COMBAT (0) vs PASSIVE/ACTIVE
@@ -252,6 +259,13 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                     pTarget->dwDeadTime = GetTickCount();
                     pTarget->dwTargetID = 0;
                     monsterDied = true;
+                    
+                    // 击杀蓄气：攻击者开启五行状态且击杀怪物时，在内存中增加 50 蓄力点，随后在 GrantExpToPlayer 里会自动写库落盘并发送 0x3B10 包
+                    if (pAttacker && pAttacker->bCurFiveElm > 0) {
+                        pAttacker->dwFiveElmGauge += 50;
+                        if (pAttacker->dwFiveElmGauge > 5000) pAttacker->dwFiveElmGauge = 5000;
+                    }
+
                     deadObjType = pTarget->bObjectType;
                     deadObjID = pTarget->dwObjectID;
                     deadPropType = pTarget->bPropType;
@@ -259,6 +273,13 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                     LOG("[CombatHandler] Monster " + g_NpcTemplates[deadPropType].szName + " died!");
                     
                     attackerCharID = attackerId - 400000000;
+                    
+                    // 计算被击杀怪物提供的五行经验值
+                    DWORD monsterFiveElmExp = 0;
+                    if (g_NpcTemplates.count(deadPropType)) {
+                        monsterFiveElmExp = g_NpcTemplates[deadPropType].wFiveElmExp;
+                    }
+                    monsterFiveElmExp += pTarget->wIncFiveElmExp;
                     
                     // Party EXP sharing
                     DWORD partyID = PartyManager::GetInstance().GetPartyID(attackerCharID);
@@ -298,13 +319,15 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                         DWORD sharedExp = deadExp / (DWORD)nearbyMembers.size();
                         if (sharedExp == 0) sharedExp = 1;
                         
+                        DWORD sharedFiveElmExp = monsterFiveElmExp / (DWORD)nearbyMembers.size();
+                        
                         LOG("[PARTY-EXP] Party " + std::to_string(partyID) + 
-                            " sharing " + std::to_string(deadExp) + " EXP among " + 
+                            " sharing " + std::to_string(deadExp) + " EXP & " + std::to_string(monsterFiveElmExp) + " FiveElmEXP among " + 
                             std::to_string(nearbyMembers.size()) + " nearby members (" + 
                             std::to_string(sharedExp) + " each)");
                         
                         for (DWORD memberCharID : nearbyMembers) {
-                            bool lvlUp = GrantExpToPlayer(memberCharID, sharedExp);
+                            bool lvlUp = GrantExpToPlayer(memberCharID, sharedExp, sharedFiveElmExp);
                             if (memberCharID == attackerCharID) {
                                 needStatusRefresh = lvlUp;
                             } else if (lvlUp) {
@@ -323,7 +346,7 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                         partyExpMembers = nearbyMembers;
                     } else {
                         // Individual mode or not in party
-                        needStatusRefresh = GrantExpToPlayer(attackerCharID, deadExp);
+                        needStatusRefresh = GrantExpToPlayer(attackerCharID, deadExp, monsterFiveElmExp);
                     }
                     
                     // Save monster copy for GenerateDrops (called after mutex release)
@@ -406,6 +429,16 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                     else finalDmg = 1;
                     
                     pTargetPlayer->dwHpCur = (pTargetPlayer->dwHpCur > finalDmg) ? (pTargetPlayer->dwHpCur - finalDmg) : 0;
+
+                    // 物理受创蓄力：被击中玩家开启五行状态且成功命中时
+                    if (pTargetPlayer->bCurFiveElm > 0 && bResult == 2) {
+                        pTargetPlayer->dwFiveElmGauge += 10;
+                        if (pTargetPlayer->dwFiveElmGauge > 5000) pTargetPlayer->dwFiveElmGauge = 5000;
+                        SOCKET targetSock = SessionMgr::GetInstance().GetSocketByCharID(pTargetPlayer->dwObjectID - 400000000);
+                        if (targetSock != INVALID_SOCKET) {
+                            SyncFiveElmStatus(targetSock, pTargetPlayer->dwObjectID - 400000000, pTargetPlayer);
+                        }
+                    }
                     if (pTargetPlayer->dwHpCur == 0) {
                         pTargetPlayer->dwDeadTime = GetTickCount();
                         monsterDied = true; // 复用死亡动画触发机制

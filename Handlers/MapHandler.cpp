@@ -234,15 +234,25 @@ void OnMapEnterReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
         }
 
         pObj->dwHpMax = (dbHpMax > 0) ? dbHpMax : 60000;
-
         pObj->dwHpCur = (dbHpCur > 0) ? dbHpCur : pObj->dwHpMax;
-
         pObj->wIpMax = (dbIpMax > 0) ? dbIpMax : 100;
-
         pObj->wIpCur = (dbIpCur > 0) ? dbIpCur : pObj->wIpMax;
-
         LOG("[MapHandler] Initialized player HP/IP from DB: HpCur=" + std::to_string(pObj->dwHpCur) + "/" + std::to_string(pObj->dwHpMax) + " IpCur=" + std::to_string(pObj->wIpCur) + "/" + std::to_string(pObj->wIpMax));
 
+        // 从 DB 加载五行数据到内存玩家实体
+        CharacterDB::ExpData expData;
+        if (CharacterDB::GetInstance().GetExpData(dwActualCharID, expData)) {
+            pObj->wFiveElmPoint = expData.wFiveElmPoint;
+            pObj->wFiveElmPointCnt = expData.wFiveElmPointCnt;
+            pObj->dwFiveElmPower = expData.dwFiveElmPower;
+            pObj->dwFiveElmGauge = expData.dwFiveElmGauge;
+            pObj->wMetalExp = expData.wMetalExp;
+            pObj->wWoodExp = expData.wWoodExp;
+            pObj->wWaterExp = expData.wWaterExp;
+            pObj->wFireExp = expData.wFireExp;
+            pObj->wEarthExp = expData.wEarthExp;
+            LOG("[MapHandler] Initialized player Five Elm from DB: Gauge=" + std::to_string(pObj->dwFiveElmGauge) + " Power=" + std::to_string(pObj->dwFiveElmPower));
+        }
     }
 
     
@@ -1140,9 +1150,8 @@ void OnCharInfoReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
 
     pushByte(0); // bSemiPKStatus
 
-    pushByte(0); // bCurFiveElm
-
-    pushByte(0); // bFELevel
+    pushByte(objCopy.bCurFiveElm); // bCurFiveElm
+    pushByte(objCopy.bFELevel); // bFELevel
 
     pushByte(0); // bInstanceCnt
 
@@ -1313,9 +1322,8 @@ void OnCharInfoListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
                 pushByte(0); // bSemiPKStatus
 
-                pushByte(0); // bCurFiveElm
-
-                pushByte(0); // bFELevel
+                pushByte(o.bCurFiveElm); // bCurFiveElm
+                pushByte(o.bFELevel); // bFELevel
 
                 pushByte(0); // bInstanceCnt
 

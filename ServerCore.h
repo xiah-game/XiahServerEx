@@ -145,12 +145,43 @@ struct PlayerData : EntityBase {
     BYTE  bStxType[9] = {0};
     BYTE  bNeedCharType[9] = {0};
 
+    // 五行内存临时状态 (方案A)
+    BYTE  bCurFiveElm = 0;
+    BYTE  bFELevel = 0;
+    DWORD dwLastFiveElmChangeTime = 0;
+    WORD  wFiveElmPoint = 0;
+    WORD  wFiveElmPointCnt = 0;
+    DWORD dwFiveElmPower = 0;
+    DWORD dwFiveElmGauge = 0;
+    WORD  wMetalExp = 0;
+    WORD  wWoodExp = 0;
+    WORD  wWaterExp = 0;
+    WORD  wFireExp = 0;
+    WORD  wEarthExp = 0;
+    // 暴气临时内存状态
+    bool  bSpiritActive = false;
+    DWORD dwSpiritEndTime = 0;
+
     PlayerData() { 
         bObjectType = 1; 
         memset(wVisualID, 0, sizeof(wVisualID));
         memset(bRarity, 0, sizeof(bRarity));
         memset(bStxType, 0, sizeof(bStxType));
         memset(bNeedCharType, 0, sizeof(bNeedCharType));
+        bCurFiveElm = 0;
+        bFELevel = 0;
+        dwLastFiveElmChangeTime = 0;
+        wFiveElmPoint = 0;
+        wFiveElmPointCnt = 0;
+        dwFiveElmPower = 0;
+        dwFiveElmGauge = 0;
+        wMetalExp = 0;
+        wWoodExp = 0;
+        wWaterExp = 0;
+        wFireExp = 0;
+        wEarthExp = 0;
+        bSpiritActive = false;
+        dwSpiritEndTime = 0;
     }
 };
 
@@ -189,7 +220,11 @@ struct MonsterData : EntityBase {
     // Active Buffs / Debuffs on monsters
     std::map<DWORD, PlayerData::sActiveBuff> activeBuffs;
 
-    MonsterData() { bObjectType = 3; bIsReturning = false; }
+    // 五行属性与增量经验
+    BYTE  bFiveElm = 0;
+    WORD  wIncFiveElmExp = 0;
+
+    MonsterData() { bObjectType = 3; bIsReturning = false; bFiveElm = 0; wIncFiveElmExp = 0; }
 };
 
 // Backward-compat alias — will be removed after all handlers are migrated
@@ -227,6 +262,15 @@ struct sNpcTemplate {
     WORD wAtkInterval; // Attack cooldown in ms (default 1500)
     WORD wStaggerTime; // Hit stagger duration in ms (default 500)
     std::vector<sNpcMugong> mugongs;
+
+    // 五行属性与经验
+    BYTE bFiveElm = 0;
+    WORD wFiveElmExp = 0;
+
+    sNpcTemplate() : bType(0), bLevel(1), bWalkSpeed(8), dwHpInit(0), dwPwrInit(0), dwDefInit(0), dwExpInit(0),
+                     wAtkRatio(0), wAvoidRatio(0), wHealPoint(0), bIdleRatio(50), wWalkSpeed100(0),
+                     wSightRangeInit(0), wWanderRangeInit(0), wMeleeAtkRangeInit(0), wShotAtkRangeInit(0),
+                     wRegen(10), wAtkInterval(1500), wStaggerTime(500), bFiveElm(0), wFiveElmExp(0) {}
 };
 
 struct sWorldMap {

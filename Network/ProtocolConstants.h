@@ -25,6 +25,8 @@ constexpr WORD PKT_CHARINFO_ACK        = 0x3B02;  // CS_IF_CHARINFO_ACK
 constexpr WORD PKT_CHAREXP_ACK         = 0x3B10;  // CS_IF_CHAREXP_ACK
 constexpr WORD PKT_CHARINFOLIST_REQ    = 0x4411;
 constexpr WORD PKT_HELPMESSAGE_ACK     = 0x3B3F;  // CS_IF_HELPMESSAGE_ACK
+constexpr WORD PKT_EXECSTAMINA_REQ    = 0x3B78;  // CS_IF_EXECSTAMINA_REQ
+constexpr WORD PKT_EXECSTAMINA_ACK    = 0x3B79;  // CS_IF_EXECSTAMINA_ACK
 
 // ============================================================
 // Character Status (CS_IT family, offset 0x4401)

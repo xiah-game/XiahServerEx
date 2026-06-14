@@ -113,7 +113,7 @@ static void SendBankOrMallList(SOCKET clientSocket, DWORD charID, WORD opCodeACK
                     case 15:
                         pushByte(bi, d1); pushWord(bi, d2); pushWord(bi, d3); pushByte(bi, 0); pushByte(bi, 0); break;
                     case 16:
-                        pushWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); break;
+                        pushWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); pushByte(bi, 0); pushDWord(bi, 0); break;
                     case 18:
                         pushByte(bi, 0); pushDWord(bi, 0); pushWord(bi, d2); pushWord(bi, d3); pushByte(bi, 0); break;
                     case 19:
@@ -307,7 +307,7 @@ void OnDrawInBankReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tota
                 switch (type) {
                     case 11: case 12: case 13: case 14: case 17: pushByte(iBuf, 0); pushWord(iBuf, d2); pushWord(iBuf, d3); break;
                     case 15: pushByte(iBuf, d1); pushWord(iBuf, d2); pushWord(iBuf, d3); pushByte(iBuf, 0); pushByte(iBuf, 0); break;
-                    case 16: pushWord(iBuf, 0); pushByte(iBuf, 0); pushWord(iBuf, 0); pushByte(iBuf, 0); pushWord(iBuf, 0); break;
+                    case 16: pushWord(iBuf, 0); pushByte(iBuf, 0); pushWord(iBuf, 0); pushByte(iBuf, 0); pushDWord(iBuf, 0); break;
                     case 18: pushByte(iBuf, 0); pushDWord(iBuf, 0); pushWord(iBuf, d2); pushWord(iBuf, d3); pushByte(iBuf, 0); break;
                     case 19: pushWord(iBuf, 0); pushWord(iBuf, 0); break;
                     case 20: pushByte(iBuf, 0); pushDWord(iBuf, 0); break;
@@ -496,7 +496,7 @@ static void ProcessDrawOut(SOCKET clientSocket, DWORD charID, BYTE* payload, WOR
                 switch (type) {
                     case 11: case 12: case 13: case 14: case 17: pushByte(bi, 0); pushWord(bi, d2); pushWord(bi, d3); break;
                     case 15: pushByte(bi, d1); pushWord(bi, d2); pushWord(bi, d3); pushByte(bi, 0); pushByte(bi, 0); break;
-                    case 16: pushWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); break;
+                    case 16: pushWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); pushByte(bi, 0); pushDWord(bi, 0); break;
                     case 18: pushByte(bi, 0); pushDWord(bi, 0); pushWord(bi, d2); pushWord(bi, d3); pushByte(bi, 0); break;
                     case 19: pushWord(bi, 0); pushWord(bi, 0); break;
                     case 20: pushByte(bi, 0); pushDWord(bi, 0); break;

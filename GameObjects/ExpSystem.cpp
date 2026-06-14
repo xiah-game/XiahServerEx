@@ -8,7 +8,7 @@
 
 extern std::map<DWORD, CMapInstance*> g_MapInstances;
 
-bool GrantExpToPlayer(DWORD dwCharID, DWORD dwIncrExp) {
+bool GrantExpToPlayer(DWORD dwCharID, DWORD dwIncrExp, DWORD dwFiveElmExpGained) {
     if (dwIncrExp == 0) return false;
     
     SOCKET clientSocket = SessionMgr::GetInstance().GetSocketByCharID(dwCharID);
@@ -191,6 +191,43 @@ bool GrantExpToPlayer(DWORD dwCharID, DWORD dwIncrExp) {
     CharacterDB::GetInstance().UpdateExpAndLevel(dwCharID, newExp, wLevel,
         wRemainSp, dwTotalSp, wRemainTp, dwTotalTp, bLevelUp, bTpUp);
     
+    // 累加五行点数计数器并保存
+    WORD expCnt = expData.wFiveElmPointCnt;
+    WORD elmPoint = expData.wFiveElmPoint;
+    
+    // 取消原有打怪普通经验兑换五行点数的临时硬凑逻辑 (20000 EXP = 1 Point)
+    // 这样普通经验将不再错误地兑换为大量的五行点数。
+    WORD finalFiveElmPointCnt = expCnt;
+    
+    // 2. 怪物五行经验直接结算并累加 (只通过怪物实际五行经验累积至 1000 时进行换点)
+    if (dwFiveElmExpGained > 0) {
+        expData.dwFiveElmPower += dwFiveElmExpGained;
+        if (expData.dwFiveElmPower >= 1000) {
+            DWORD powerGained = expData.dwFiveElmPower / 1000;
+            elmPoint += (WORD)powerGained;
+            expData.dwFiveElmPower = expData.dwFiveElmPower % 1000;
+            bLevelUp = 1; // 强制客户端刷新状态
+        }
+    }
+    
+    // 内存同步更新 (落盘前读取最新的内存蓄气值)
+    DWORD playerMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+    if (g_MapInstances.count(playerMapID)) {
+        CMapInstance* mapInst = g_MapInstances[playerMapID];
+        // 移除重复加锁，外层包处理已持有地图锁，防止非递归锁发生死锁
+        PlayerData* pObj = mapInst->GetPlayer(dwCharID + 400000000);
+        if (pObj) {
+            pObj->wFiveElmPoint = elmPoint;
+            pObj->wFiveElmPointCnt = finalFiveElmPointCnt;
+            pObj->dwFiveElmPower = expData.dwFiveElmPower;
+            expData.dwFiveElmGauge = pObj->dwFiveElmGauge; // 同步内存中高频更新的必杀蓄气值进行落盘
+        }
+    }
+
+    CharacterDB::GetInstance().UpdateFiveElm(dwCharID, elmPoint, finalFiveElmPointCnt, expData.dwFiveElmPower, expData.dwFiveElmGauge,
+                                             expData.wFireExp, expData.wWaterExp, expData.wWoodExp, expData.wMetalExp, expData.wEarthExp);
+    expData.wFiveElmPoint = elmPoint;
+    
     // --- Build 0x3B10 (CS_IF_CHAREXP_ACK) packet ---
     std::vector<BYTE> buf; buf.reserve(64);
     buf.resize(4); 
@@ -209,24 +246,112 @@ bool GrantExpToPlayer(DWORD dwCharID, DWORD dwIncrExp) {
     buf.push_back(0);           // bFiveElmLevelUp
     pushInt64(i64NextLevelUpExp); // i64NextLevelUpExp
     pushInt64(i64NextTpUpExp);   // i64NextTpUpExp
-    pushWord(0);                // wFiveElmPoint
-    pushDWord(0);               // dwFiveElmPower
-    pushDWord(0);               // dwFiveElmPowerMax
-    pushDWord(0);               // dwFiveElmGauge
-    pushDWord(dwEventExp);       // dwEventExp (发送增益活动经验值，触发客户端 基础经验(+加成经验) 提示)
-    pushWord(0);                // wFiveElmExp
+    pushWord(expData.wFiveElmPoint);                // wFiveElmPoint
+    pushDWord(expData.dwFiveElmPower);               // dwFiveElmPower
+    pushDWord(1000);               // dwFiveElmPowerMax
+    
+    // 优先采用内存中最新的蓄气值
+    DWORD curGauge = expData.dwFiveElmGauge;
+    if (g_MapInstances.count(playerMapID)) {
+        // 移除重复加锁，外层包处理已持有地图锁，防止非递归锁发生死锁
+        PlayerData* pObj = g_MapInstances[playerMapID]->GetPlayer(dwCharID + 400000000);
+        if (pObj) curGauge = pObj->dwFiveElmGauge;
+    }
+    pushDWord(curGauge);               // dwFiveElmGauge
+    pushDWord(dwEventExp);       // dwEventExp
+    pushWord((WORD)dwFiveElmExpGained);                // wFiveElmExp (同步回传本次获得的经验值)
     
     PACKET_HEADER* head = (PACKET_HEADER*)buf.data();
     head->id = 0x3B10;
     head->payloadSize = buf.size() - sizeof(PACKET_HEADER); 
     EncryptPacket(buf.data(), 0x42);
     SafeSend(clientSocket, (const char*)buf.data(), buf.size(), 0);
+    SendStaminaSync(clientSocket, curGauge);
     
     // NOTE: Do NOT call SendCharStatusInfoAck here!
     // Caller must call it AFTER releasing the map mutex.
     
-    LOG("[ExpSystem] Granted " + std::to_string(dwIncrExp) + " EXP to player " + std::to_string(dwCharID) 
+    LOG("[ExpSystem] Granted " + std::to_string(dwIncrExp) + " EXP & " + std::to_string(dwFiveElmExpGained) + " FiveElmEXP to player " + std::to_string(dwCharID) 
         + " | LvlUp=" + std::to_string(bLevelUp) + " TpUp=" + std::to_string(bTpUp) 
-        + " NewExp=" + std::to_string(newExp) + " Level=" + std::to_string(wLevel));
+        + " NewExp=" + std::to_string(newExp) + " Level=" + std::to_string(wLevel) + " Power=" + std::to_string(expData.dwFiveElmPower) + " Point=" + std::to_string(expData.wFiveElmPoint));
     return bLevelUp || bTpUp;
+}
+
+// 辅助状态同步函数：发送 0x3B10 给客户端同步五行与经验最新状态
+void SyncFiveElmStatus(SOCKET clientSocket, DWORD charID, PlayerData* pObj) {
+    if (!pObj) return;
+    CharacterDB::ExpData expData;
+    if (CharacterDB::GetInstance().GetExpData(charID, expData)) {
+        auto getLevelExp = [&](WORD lvl) -> long long int {
+            if (!g_LevelTemplates.count(lvl)) return 0;
+            auto& charMap = g_LevelTemplates[lvl];
+            if (charMap.count(expData.bCharType)) return charMap[expData.bCharType].dwNeedExp;
+            return charMap.begin()->second.dwNeedExp;
+        };
+        long long int levelExp = getLevelExp(expData.wLevel);
+        long long int nextLevelExp = getLevelExp(expData.wLevel + 1);
+        if (nextLevelExp <= levelExp) nextLevelExp = levelExp + 1000;
+        long long int i64NextLevelUpExp = nextLevelExp;
+
+        long long int diff = nextLevelExp - levelExp;
+        long long int segSize = diff / 6;
+        if (segSize <= 0) segSize = 1;
+        long long int newOffset = expData.dwExp - levelExp;
+        if (newOffset < 0) newOffset = 0;
+        long long int newSegIndex = newOffset / segSize;
+        if (newSegIndex > 5) newSegIndex = 5;
+
+        long long int curSegBase = levelExp + (newSegIndex * segSize);
+        long long int curSegNext = curSegBase + segSize;
+        if (newSegIndex == 5) curSegNext = nextLevelExp;
+        long long int i64NextTpUpExp = curSegNext;
+
+        std::vector<BYTE> buf; buf.reserve(64);
+        buf.resize(4); 
+        auto pushDWord = [&](DWORD d) { buf.push_back(d&0xFF); buf.push_back((d>>8)&0xFF); buf.push_back((d>>16)&0xFF); buf.push_back(d>>24); };
+        auto pushInt64 = [&](long long int d) {
+            pushDWord((DWORD)(d & 0xFFFFFFFF));
+            pushDWord((DWORD)((d >> 32) & 0xFFFFFFFF));
+        };
+        auto pushWord = [&](WORD w) { buf.push_back(w&0xFF); buf.push_back(w>>8); };
+        
+        pushDWord(0); // dwIncrExp
+        pushInt64(expData.dwExp);
+        buf.push_back(0); // bLevelUp
+        buf.push_back(0); // bTpUp
+        buf.push_back(0); // bFiveElmLevelUp
+        pushInt64(i64NextLevelUpExp);
+        pushInt64(i64NextTpUpExp);
+        pushWord(pObj->wFiveElmPoint);
+        pushDWord(pObj->dwFiveElmPower);
+        pushDWord(1000);
+        pushDWord(pObj->dwFiveElmGauge);
+        pushDWord(0); // dwEventExp
+        pushWord(0);  // wFiveElmExpGained
+        
+        PACKET_HEADER* head = (PACKET_HEADER*)buf.data();
+        head->id = 0x3B10;
+        head->payloadSize = buf.size() - sizeof(PACKET_HEADER); 
+        EncryptPacket(buf.data(), 0x42);
+        SafeSend(clientSocket, (const char*)buf.data(), buf.size(), 0);
+        
+        LOG("[ExpSystem] SyncFiveElmStatus: Sync player " + std::to_string(charID) + " Gauge=" + std::to_string(pObj->dwFiveElmGauge));
+        SendStaminaSync(clientSocket, pObj->dwFiveElmGauge);
+    }
+}
+
+void SendStaminaSync(SOCKET clientSocket, DWORD dwGauge) {
+    if (clientSocket == INVALID_SOCKET) return;
+    BYTE bStaminaCnt = (BYTE)(dwGauge / 1000);
+    if (bStaminaCnt > 5) bStaminaCnt = 5;
+    
+    std::vector<BYTE> buf(5);
+    PACKET_HEADER* head = (PACKET_HEADER*)buf.data();
+    head->id = 0x3B77; // CS_IF_STAMINA_ACK
+    head->payloadSize = 1;
+    buf[4] = bStaminaCnt;
+    
+    EncryptPacket(buf.data(), 0x42);
+    SafeSend(clientSocket, (const char*)buf.data(), buf.size(), 0);
+    LOG("[ExpSystem] SendStaminaSync sent bStaminaCnt=" + std::to_string(bStaminaCnt) + " for Gauge=" + std::to_string(dwGauge));
 }

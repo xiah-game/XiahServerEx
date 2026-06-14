@@ -622,7 +622,7 @@ void TradeManager::SendTradeSackItemAck(SOCKET targetSocket, WORD packetID, BYTE
                 switch (type) {
                     case 11: case 12: case 13: case 14: case 17: pushByte(payload, 0); pushWord(payload, d[1]); pushWord(payload, d[2]); break;
                     case 15: pushByte(payload, d[0]); pushWord(payload, d[1]); pushWord(payload, d[2]); pushByte(payload, 0); pushByte(payload, 0); break;
-                    case 16: pushWord(payload, 0); pushByte(payload, 0); pushWord(payload, 0); pushByte(payload, 0); pushWord(payload, 0); break;
+                    case 16: pushWord(payload, 0); pushByte(payload, 0); pushWord(payload, 0); pushByte(payload, 0); pushDWord(payload, 0); break;
                     case 18: pushByte(payload, 0); pushDWord(payload, 0); pushWord(payload, d[1]); pushWord(payload, d[2]); pushByte(payload, 0); break;
                     case 19: pushWord(payload, 0); pushWord(payload, 0); break;
                     case 20: pushByte(payload, 0); pushDWord(payload, 0); break;
@@ -715,7 +715,7 @@ static void SendAddOnSackAck(SOCKET s, BYTE bSackID, BYTE bSackPos, DWORD dwItem
         switch (type) {
             case 11: case 12: case 13: case 14: case 17: pushByte(bi, 0); pushWord(bi, d[1]); pushWord(bi, d[2]); break;
             case 15: pushByte(bi, d[0]); pushWord(bi, d[1]); pushWord(bi, d[2]); pushByte(bi, 0); pushByte(bi, 0); break;
-            case 16: pushWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); break;
+            case 16: pushWord(bi, 0); pushByte(bi, 0); pushWord(bi, 0); pushByte(bi, 0); pushDWord(bi, 0); break;
             case 18: pushByte(bi, 0); pushDWord(bi, 0); pushWord(bi, d[1]); pushWord(bi, d[2]); pushByte(bi, 0); break;
             case 19: pushWord(bi, 0); pushWord(bi, 0); break;
             case 20: pushByte(bi, 0); pushDWord(bi, 0); break;
