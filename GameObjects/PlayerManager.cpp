@@ -17,7 +17,7 @@ inline DWORD ToClientPCID(DWORD dwCharID) {
 
 extern std::map<DWORD, CMapInstance*> g_MapInstances;
 
-void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
+void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket, bool sendIFPacket) {
     DWORD dwObjectID = ToClientPCID(dwCharID);
     LOG("[RecalcStats] Triggered! dwCharID: " + std::to_string(dwCharID) + " calculated dwObjectID: " + std::to_string(dwObjectID) + " sendPacket: " + std::to_string(sendPacket));
 
@@ -54,11 +54,15 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
 
     // 2. Fetch equipment stats from DB
     int equipAtk=0, equipDef=0, equipMag=0, equipSpd=0, equipAtkSpd=0, equipCrit=0, equipHp=0, equipIp=0, equipRestoreHp=0, equipRestoreIp=0;
+    int equippedWeaponKind = -1; // 记录装备的武器子类型
     std::vector<ItemDB::EquipStatRow> equipRows;
     ItemDB::GetInstance().GetEquippedItemStats(dwCharID, equipRows);
     for (auto& row : equipRows) {
         int d4=row.d4, d5=row.d5, d6=row.d6, d7=row.d7, d13=row.d13, d9=row.d9, d10=row.d10, d11=row.d11, d12=row.d12;
         WORD ref = row.wRefID;
+        if (g_ItemTemplates.count(ref) && g_ItemTemplates[ref].bType == 1) {
+            equippedWeaponKind = g_ItemTemplates[ref].bKind;
+        }
         if (d4 == -9999) d4 = (g_ItemTemplates.count(ref) ? g_ItemTemplates[ref].nData4 : 0);
         if (d5 == -9999) d5 = (g_ItemTemplates.count(ref) ? g_ItemTemplates[ref].nData5 : 0);
         if (d6 == -9999) d6 = (g_ItemTemplates.count(ref) ? g_ItemTemplates[ref].nData6 : 0);
@@ -203,11 +207,33 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
             int percHit  = 0;
             int percCrit = 0;
 
-            // 4.5. Passive Inner Skill (宕樻噹婵) flat + perc (dwMugongID 1-29)
+            // 4.5. Passive Inner Skill (内功) flat + perc (dwMugongID 1-29, 150-154, 31, 40, 91)
             for (auto& mg : pObj->learnedMugongs) {
                 DWORD mugID = mg.first;
                 BYTE mugLvl = mg.second;
-                if ((mugID >= 1 && mugID <= 29) || (mugID >= 150 && mugID <= 154)) {
+                if ((mugID >= 1 && mugID <= 29) || (mugID >= 150 && mugID <= 154) || mugID == 31 || mugID == 40 || mugID == 91) {
+                    // 职业匹配校验
+                    sMugongTemplate* pTpl = MugongManager::GetInstance()->GetTemplate(mugID);
+                    if (pTpl && pTpl->bCharType != 0 && pTpl->bCharType != pObj->bPropType && pTpl->bCharType != 5) {
+                        continue;
+                    }
+
+                    // 专精被动技能 8-15 生效校验：手持武器子类必须与专精匹配
+                    if (mugID >= 8 && mugID <= 15) {
+                        bool isMatch = false;
+                        switch (mugID) {
+                            case 8:  isMatch = (equippedWeaponKind == 0); break; // 独孤九式 -> 剑
+                            case 9:  isMatch = (equippedWeaponKind == 1); break; // 修罗刀法 -> 刀
+                            case 10: isMatch = (equippedWeaponKind == 2); break; // 天翔扇法 -> 扇
+                            case 11: isMatch = (equippedWeaponKind == 3); break; // 铁画银钩 -> 笔
+                            case 12: isMatch = (equippedWeaponKind == 5); break; // 分筋错骨 -> 爪
+                            case 13: isMatch = (equippedWeaponKind == 4); break; // 麒麟狂击 -> 斧
+                            case 14: isMatch = (equippedWeaponKind == 6); break; // 昊天刺法 -> 刺
+                            case 15: isMatch = (equippedWeaponKind == 7); break; // 夜叉刀法 -> 大刀
+                        }
+                        if (!isMatch) continue;
+                    }
+
                     sMugongList* pd = MugongManager::GetInstance()->GetMugongLevelData(mugID, mugLvl);
                     if (pd) {
                         flatAtk  += pd->wIncAtk;
@@ -217,7 +243,13 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
                         flatIpMax += pd->wIncIpMax;
                         flatCrit  += pd->wIncCritical;
 
-                        if (pd->wIncAtkPerc > 0) percAtk += (pd->wIncAtkPerc > 100 ? (int)pd->wIncAtkPerc - 100 : (int)pd->wIncAtkPerc);
+                        if (pd->wIncAtkPerc > 0) {
+                            if (mugID == 31 || mugID == 40 || mugID == 91) {
+                                percAtk += pd->wIncAtkPerc / 100;
+                            } else {
+                                percAtk += (pd->wIncAtkPerc > 100 ? (int)pd->wIncAtkPerc - 100 : (int)pd->wIncAtkPerc);
+                            }
+                        }
                         if (pd->wIncDefPerc > 0) percDef += (pd->wIncDefPerc > 100 ? (int)pd->wIncDefPerc - 100 : (int)pd->wIncDefPerc);
                         if (pd->wIncRatePerc > 0) percHit += (pd->wIncRatePerc > 100 ? (int)pd->wIncRatePerc - 100 : (int)pd->wIncRatePerc);
                         if (pd->wIncCriticalPerc > 0) percCrit += (pd->wIncCriticalPerc > 100 ? (int)pd->wIncCriticalPerc - 100 : (int)pd->wIncCriticalPerc);
@@ -242,10 +274,22 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
                         flatHit  += bd->wIncRate;
                         flatHpMax += bd->wIncHpMax;
                         flatIpMax += bd->wIncIpMax;
-                        flatCrit  += bd->wIncCritical;
+                        
+                        if (it->second.dwMugongID == 32) {
+                            flatCrit  += bd->wIncCritical / 100;
+                        } else {
+                            flatCrit  += bd->wIncCritical;
+                        }
 
                         if (bd->wIncAtkPerc > 0) percAtk += (bd->wIncAtkPerc > 100 ? (int)bd->wIncAtkPerc - 100 : (int)bd->wIncAtkPerc);
-                        if (bd->wIncDefPerc > 0) percDef += (bd->wIncDefPerc > 100 ? (int)bd->wIncDefPerc - 100 : (int)bd->wIncDefPerc);
+                        if (bd->wIncDefPerc > 0) {
+                            int val = (bd->wIncDefPerc > 100 ? (int)bd->wIncDefPerc - 100 : (int)bd->wIncDefPerc);
+                            if (it->second.dwMugongID == 99) {
+                                percDef -= val; // 天魔解体：降低防御力
+                            } else {
+                                percDef += val;
+                            }
+                        }
                         if (bd->wIncRatePerc > 0) percHit += (bd->wIncRatePerc > 100 ? (int)bd->wIncRatePerc - 100 : (int)bd->wIncRatePerc);
                         if (bd->wIncCriticalPerc > 0) percCrit += (bd->wIncCriticalPerc > 100 ? (int)bd->wIncCriticalPerc - 100 : (int)bd->wIncCriticalPerc);
                     }
@@ -258,6 +302,20 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
                 percAtk += 20; // 攻击力+20%
                 percDef += 20; // 防御力+20%
                 flatCrit += 10; // 暴击率+10
+            }
+
+            // bType=4, bKind=2（天魔解体99）：percDef 已在buff循环中降低，降掉的防御 × nEtc1% 转攻击
+            for (auto& bf : pObj->activeBuffs) {
+                sMugongTemplate* bfTpl = MugongManager::GetInstance()->GetTemplate(bf.second.dwMugongID);
+                if (bfTpl && bfTpl->bType == 4 && bfTpl->bKind == 2) {
+                    sMugongList* bfData = MugongManager::GetInstance()->GetMugongLevelData(bf.second.dwMugongID, bf.second.bLevel);
+                    if (bfData && bfData->nEtc1 > 0) {
+                        int reducedDef = (int)flatDef * (int)bfData->wIncDefPerc / 100;
+                        int defToAtk = reducedDef * bfData->nEtc1 / 100;
+                        flatAtk += defToAtk;
+                        LOG("[RecalcStats] DefToAtk buff ID=" + std::to_string(bf.second.dwMugongID) + " flatDef=" + std::to_string(flatDef) + " wIncDefPerc=" + std::to_string(bfData->wIncDefPerc) + "% nEtc1=" + std::to_string(bfData->nEtc1) + "% -> flatAtk+" + std::to_string(defToAtk));
+                    }
+                }
             }
 
             // Phase 3: Apply percentages once totalFlat * (100 + totalPerc) / 100
@@ -331,6 +389,12 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket) {
                         + " IpCur=" + std::to_string(pObj2->wIpCur) + "/" + std::to_string(pObj2->wIpMax));
                 }
             }
+        }
+    } else if (sendIFPacket) {
+        SOCKET s = SessionMgr::GetInstance().GetSocketByCharID(dwCharID);
+        if (s) {
+            SendCharStatusInfoAck(s, dwCharID, 0x3B02); // 用 0x3B02 静默刷新客户端面板数据，不清空武功窗口
+            LOG("[RecalcStats] Sent 0x3B02 silent stats update for charID: " + std::to_string(dwCharID));
         }
     }
 }

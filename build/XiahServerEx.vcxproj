@@ -397,6 +397,9 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\CombatHandler.cpp" />
     <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\NpcHandler.cpp" />
     <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\MugongHandler.cpp" />
+    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\MugongPreAttack.cpp" />
+    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\MugongSkill_Summon.cpp" />
+    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\MugongSkill_FiveElm.cpp" />
     <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\ChatHandler.cpp" />
     <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\PartyHandler.cpp" />
     <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\RebuildItemHandler.cpp" />

@@ -21,6 +21,7 @@
 #include "RepairHandler.h"
 #include "MunpaHandler.h"
 #include "FiveElmHandler.h"
+#include "MugongAttackContext.h"
 
 void InitPacketHandlers() {
     RegisterHandler(0x3B70, [](SOCKET s, BYTE* p, WORD size) {
@@ -175,6 +176,9 @@ void InitPacketHandlers() {
     RegisterHandler(0x352D, [](SOCKET s, BYTE* p, WORD size) { OnNpcInfoListReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
     RegisterHandler(0x3531, [](SOCKET s, BYTE* p, WORD size) { OnFunctionalNpcInfoListReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
     RegisterHandler(0x3533, [](SOCKET s, BYTE* p, WORD size) { OnFunctionalNpcItemListReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
+
+    // 分身/宠物详细信息请求 (CS_NC_PETINFO_REQ = OFFSET_CS_NC + 54 = 0x3537)
+    RegisterHandler(0x3537, [](SOCKET s, BYTE* p, WORD size) { OnPetInfoReq(s, p, size); });
 
     // Move Handlers
     RegisterHandler(0x430B, [](SOCKET s, BYTE* p, WORD size) { OnMoveReq(s, SessionMgr::GetInstance().GetCharID(s), p, size, 0x430B); });

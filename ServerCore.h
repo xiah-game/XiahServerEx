@@ -84,6 +84,8 @@ struct EntityBase {
     DWORD dwDeadTime = 0;
     WORD  wLastUpdateX = 0;  // AoI distance tracking
     WORD  wLastUpdateY = 0;
+    DWORD dwOwnerID = 0;      // 所有人ObjectID / CharID (用于分身/召唤兽结算)
+    DWORD dwBunsinEndTime = 0;// 分身过期时间戳
 };
 
 struct PlayerData : EntityBase {
@@ -111,10 +113,12 @@ struct PlayerData : EntityBase {
     DWORD dwTotalAtk = 0, dwTotalDef = 0, dwTotalHit = 0, dwTotalDodge = 0;
     // Buffs
     struct sActiveBuff {
-        DWORD dwMugongID;
-        BYTE bLevel;
-        DWORD dwEndTime;
-        bool bIsDebuff;
+        DWORD dwMugongID = 0;
+        BYTE bLevel = 0;
+        DWORD dwEndTime = 0;
+        bool bIsDebuff = false;
+        DWORD dwLastTickTime = 0; // DoT 上次 tick 时间（bKind=19/21 用）
+        DWORD dwSnapshotAtk = 0;  // DoT 施放瞬间攻击力快照（bKind=21 用）
     };
     std::map<DWORD, sActiveBuff> activeBuffs;
     // Skills
@@ -134,6 +138,14 @@ struct PlayerData : EntityBase {
 
     // 武功攻击与物理PK保护选项：0 = 保护所有角色, 1 = 保护本门派成员, 2 = 无对象/自由PK
     BYTE  bSafeMode = 0;
+
+    // 分身标记：true 表示该 PlayerData 是一个分身实体，不是真实玩家
+    // 怪物 AI 可攻击，但战斗系统不向其发送 socket 包
+    bool  bIsBunsin = false;
+
+    // 分身模型与外观：bNpcType 对应客户端 NPC_TYPE 表，251=剑影分身
+    BYTE  bNpcType = 0;
+    WORD  wBunsinVisualID[6] = {0}; // 复制主人装备外观
 
     // 觉醒次数：0=未觉醒, 1~6=觉醒, 7~12=真觉醒（对应客户端 m_bRebirth）
     BYTE  bRebirth = 0;
@@ -161,6 +173,9 @@ struct PlayerData : EntityBase {
     // 暴气临时内存状态
     bool  bSpiritActive = false;
     DWORD dwSpiritEndTime = 0;
+
+    // 技能CD跟踪：技能ID → 上次释放时间(GetTickCount)
+    std::map<DWORD, DWORD> mugongLastCastTime;
 
     PlayerData() { 
         bObjectType = 1; 

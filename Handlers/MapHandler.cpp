@@ -345,7 +345,7 @@ void OnMapEnterReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
 
     // Use PlayerManager to recalculate all stats (including passive inner skill bonuses)
 
-    PlayerManager::GetInstance().RecalculateStats(dwActualCharID, false);
+    PlayerManager::GetInstance().RecalculateStats(dwActualCharID, false, false);
 
 
 
@@ -459,6 +459,7 @@ void OnMapEnterReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
         }
 
         for (auto* obj : players) {
+            if (obj->dwObjectID >= 850000000) continue;
 
             if (obj->dwObjectID != dwObjectID) {
 
@@ -499,6 +500,7 @@ void OnMapEnterReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
         }
 
         for (auto* obj : players) {
+            if (obj->dwObjectID >= 850000000) continue;
 
             if (obj->dwObjectID != dwObjectID) {
 
@@ -793,6 +795,7 @@ void OnImReadyReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
             }
 
             for (auto* o : players) {
+                if (o->dwObjectID >= 850000000) continue;
 
                 if (o->dwObjectID != dwObjectID) {
 
@@ -831,6 +834,7 @@ void OnImReadyReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
 
             // 写入 Players 数据
             for (auto* o : players) {
+                if (o->dwObjectID >= 850000000) continue;
 
                 if (o->dwObjectID != dwObjectID) {
 

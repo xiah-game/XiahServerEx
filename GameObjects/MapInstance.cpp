@@ -3,6 +3,7 @@
 #include <cmath>
 #include <unordered_set>
 #include "MugongManager.h"
+#include "../Handlers/MugongHandler.h"
 
 
 
@@ -76,6 +77,37 @@ void CMapInstance::BroadcastPacket(const std::vector<BYTE>& packet) {
 
 void CMapInstance::Update(DWORD tick) {
     // -----------------------------------------------------
+    // -0. Process Expired or Dead Bunsins (Clones)
+    // -----------------------------------------------------
+    for (auto it = m_players.begin(); it != m_players.end(); ) {
+        PlayerData& pl = it->second;
+        if (pl.dwObjectID >= 850000000 && (tick >= pl.dwBunsinEndTime || pl.dwHpCur == 0)) {
+            // Broadcast despawn PKT_MAPLEAVE_ACK (0x3506)
+            std::vector<BYTE> leaveBuf; leaveBuf.resize(4);
+            leaveBuf.push_back(0); // bResult = 0
+            DWORD oid = pl.dwObjectID;
+            leaveBuf.push_back(oid & 0xFF); leaveBuf.push_back((oid >> 8) & 0xFF); leaveBuf.push_back((oid >> 16) & 0xFF); leaveBuf.push_back(oid >> 24);
+            leaveBuf.push_back(4); // bObjectType = 4 (PET)
+            DWORD mid = m_dwMapID;
+            leaveBuf.push_back(mid & 0xFF); leaveBuf.push_back((mid >> 8) & 0xFF); leaveBuf.push_back((mid >> 16) & 0xFF); leaveBuf.push_back(mid >> 24);
+            leaveBuf.push_back(0); // bType = 0 (Normal leave)
+            PACKET_HEADER* leaveHead = (PACKET_HEADER*)leaveBuf.data(); leaveHead->id = 0x3506; leaveHead->payloadSize = leaveBuf.size() - sizeof(PACKET_HEADER);
+            EncryptPacket(leaveBuf.data(), 0x42);
+            BroadcastPacketAOI_NoLock(pl.wPosX, pl.wPosY, leaveBuf);
+            
+            LOG("[BunsinExpiry] Bunsin ObjID=" + std::to_string(pl.dwObjectID) + " expired or dead. HP=" + std::to_string(pl.dwHpCur) + ". Despawning.");
+            
+            // Remove from grid
+            int idx = GetGridIndex(pl.wPosX, pl.wPosY);
+            if (idx >= 0) RemoveFromGrid(m_playerGrid, idx, pl.dwObjectID);
+            
+            it = m_players.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // -----------------------------------------------------
     // 0. Process Deferred Player Death Broadcasts
     // -----------------------------------------------------
     for (auto& pair : m_players) {
@@ -130,6 +162,69 @@ void CMapInstance::Update(DWORD tick) {
         }
         ProcessMonsterAI(tick, obj);
     }
+
+    // -----------------------------------------------------
+    // 4. 地面持续 AoE 特效 tick（如寸草不生 bKind=24）
+    // -----------------------------------------------------
+    for (auto gIt = m_groundEffects.begin(); gIt != m_groundEffects.end(); ) {
+        if (tick >= gIt->dwEndTime) {
+            LOG("[GroundEffect] Effect " + std::to_string(gIt->dwMugongID) + " expired at (" + std::to_string(gIt->wPosX) + "," + std::to_string(gIt->wPosY) + ")");
+            gIt = m_groundEffects.erase(gIt);
+            continue;
+        }
+        if (tick - gIt->dwLastTickTime >= gIt->dwTickInterval) {
+            gIt->dwLastTickTime = tick;
+            DWORD dotDmg = gIt->dwSnapshotAtk * gIt->wAtkPerc / 100;
+            if (dotDmg < 1) dotDmg = 1;
+
+            // 搜索范围内所有怪物
+            std::vector<MonsterData*> nearby = GetMonstersInAOI(gIt->wPosX, gIt->wPosY);
+            for (MonsterData* pMon : nearby) {
+                if (!pMon || pMon->dwHpCur == 0) continue;
+                float dx = (float)pMon->wPosX - (float)gIt->wPosX;
+                float dy = (float)pMon->wPosY - (float)gIt->wPosY;
+                if (sqrtf(dx * dx + dy * dy) > gIt->fRadius) continue;
+
+                if (pMon->dwHpCur > dotDmg) {
+                    pMon->dwHpCur -= dotDmg;
+                } else {
+                    pMon->dwHpCur = 0;
+                }
+
+                // 广播 0x4016 伤害包让客户端更新怪物血条
+                std::vector<BYTE> dmgPkt(4 + 38, 0);
+                BYTE* p = dmgPkt.data() + 4;
+                p[0] = 0; // bResult
+                *(DWORD*)(p + 1) = gIt->dwMugongID;
+                p[5] = gIt->bLevel;
+                p[6] = 1; // bAtkType (PC)
+                *(DWORD*)(p + 7) = gIt->dwCasterID;
+                *(WORD*)(p + 11) = gIt->wPosX;
+                *(WORD*)(p + 13) = gIt->wPosY;
+                p[15] = 0; // bAtkHeight
+                p[16] = pMon->bObjectType; // bDefType
+                *(DWORD*)(p + 17) = pMon->dwObjectID;
+                *(DWORD*)(p + 21) = pMon->dwHpMax;
+                *(DWORD*)(p + 25) = pMon->dwHpCur;
+                *(DWORD*)(p + 29) = dotDmg;
+                *(DWORD*)(p + 33) = 0; // dwExp
+                p[37] = 1; // bHitFlag
+                PACKET_HEADER* dh = (PACKET_HEADER*)dmgPkt.data();
+                dh->id = 0x4016; dh->payloadSize = 38;
+                EncryptPacket(dmgPkt.data(), 0x42);
+                BroadcastPacketAOI_NoLock(pMon->wPosX, pMon->wPosY, dmgPkt);
+            }
+        }
+        ++gIt;
+    }
+}
+
+void CMapInstance::AddGroundEffect(const sGroundEffect& effect) {
+    m_groundEffects.push_back(effect);
+    LOG("[GroundEffect] Added effect " + std::to_string(effect.dwMugongID)
+        + " at (" + std::to_string(effect.wPosX) + "," + std::to_string(effect.wPosY) + ")"
+        + " radius=" + std::to_string((int)effect.fRadius) + " dmg=" + std::to_string(effect.dwSnapshotAtk * effect.wAtkPerc / 100)
+        + " duration=" + std::to_string((effect.dwEndTime - GetTickCount()) / 1000) + "s");
 }
 
 void CMapInstance::InterpolatePlayerPositions(DWORD tick) {
@@ -338,7 +433,75 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
     if (obj.bIsReturning) {
         targetId = 0;
         obj.dwTargetID = 0;
-    } else if ((obj.dwAttackPattern & 1) != 0 || targetId != 0) {
+    }
+
+    // 恐惧/致盲 debuff 检查：被恐惧(bKind=8)/致盲(bKind=16)的怪物脱战游荡
+    // 致盲与恐惧区别：受到攻击立即清醒（在玩家伤害结算中处理）
+    // 麻痹 debuff 检查（bType=4, bKind=17 锁骨术）：怪物完全定身，不移动不攻击
+    // 定身 debuff 检查（bType=4, bKind=18 擒拿）：怪物不能移动，但可以原地攻击
+    bool isFeared = false;
+    bool isBlinded = false;
+    bool isParalyzed = false;
+    bool isRooted = false;
+    for (auto it = obj.activeBuffs.begin(); it != obj.activeBuffs.end(); ) {
+        if (tick > it->second.dwEndTime) {
+            it = obj.activeBuffs.erase(it);
+        } else {
+            sMugongTemplate* bfTpl = MugongManager::GetInstance()->GetTemplate(it->second.dwMugongID);
+            if (bfTpl && bfTpl->bType == 4) {
+                if (bfTpl->bKind == 8)  isFeared = true;
+                if (bfTpl->bKind == 16) isBlinded = true;
+                if (bfTpl->bKind == 17) isParalyzed = true;
+                if (bfTpl->bKind == 18) isRooted = true;
+
+                // DoT (bKind=19 化骨功/毒烟神功)：每 nEtc2 毫秒扣 nEtc1 固定HP
+                if (bfTpl->bKind == 19 && it->second.bIsDebuff) {
+                    sMugongList* dotData = MugongManager::GetInstance()->GetMugongLevelData(it->second.dwMugongID, it->second.bLevel);
+                    if (dotData) {
+                        DWORD tickInterval = (dotData->nEtc2 > 0) ? dotData->nEtc2 : 1000;
+                        if (tick - it->second.dwLastTickTime >= tickInterval) {
+                            it->second.dwLastTickTime = tick;
+                            DWORD dotDmg = (dotData->nEtc1 > 0) ? dotData->nEtc1 : 1;
+                            if (obj.dwHpCur > dotDmg) {
+                                obj.dwHpCur -= dotDmg;
+                            } else {
+                                obj.dwHpCur = 0;
+                            }
+                        }
+                    }
+                }
+
+                // DoT (bKind=21 五毒针)：每秒扣 施放者攻击 × wIncAtkPerc / 100
+                if (bfTpl->bKind == 21 && it->second.bIsDebuff) {
+                    sMugongList* dotData = MugongManager::GetInstance()->GetMugongLevelData(it->second.dwMugongID, it->second.bLevel);
+                    if (dotData) {
+                        DWORD tickInterval = 1000; // 固定1秒tick
+                        if (tick - it->second.dwLastTickTime >= tickInterval) {
+                            it->second.dwLastTickTime = tick;
+                            DWORD dotDmg = it->second.dwSnapshotAtk * dotData->wIncAtkPerc / 100;
+                            if (dotDmg < 1) dotDmg = 1;
+                            if (obj.dwHpCur > dotDmg) {
+                                obj.dwHpCur -= dotDmg;
+                            } else {
+                                obj.dwHpCur = 0;
+                            }
+                        }
+                    }
+                }
+            }
+            ++it;
+        }
+    }
+    if (isFeared || isBlinded) {
+        targetId = 0;
+        obj.dwTargetID = 0;
+    }
+    // 麻痹：不清仇恨但完全跳过本轮AI（不移动、不攻击、不搜敌）
+    if (isParalyzed) {
+        return;
+    }
+
+    if (!obj.bIsReturning && !isFeared && !isBlinded && ((obj.dwAttackPattern & 1) != 0 || targetId != 0)) {
         std::vector<PlayerData*> nearbyPlayers = GetPlayersInAOI(obj.wPosX, obj.wPosY);
         for (PlayerData* playerPtr : nearbyPlayers) {
             if (!playerPtr) continue;
@@ -485,8 +648,7 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                 ackBuf.push_back(targetId&0xFF); ackBuf.push_back((targetId>>8)&0xFF); ackBuf.push_back((targetId>>16)&0xFF); ackBuf.push_back(targetId>>24);
                 
                 auto pushDWord = [&](std::vector<BYTE>& buf, DWORD d) { buf.push_back(d&0xFF); buf.push_back((d>>8)&0xFF); buf.push_back((d>>16)&0xFF); buf.push_back(d>>24); };
-                
-                DWORD damage = obj.wWepAtk;
+            DWORD damage = obj.wWepAtk;
                 if (damage == 0) damage = 50;
                 
                 DWORD playerHpCur = 60000;
@@ -504,6 +666,21 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                     DWORD monsterHit = 50 + obj.wAtkRatio;
                     DWORD playerDodge = player.dwTotalDodge;
                     float hitChance = (float)monsterHit / (float)(monsterHit + playerDodge);
+
+                    // 降命中 debuff (bKind=20)：命中率乘以 wIncRatePerc/100
+                    for (const auto& bf : obj.activeBuffs) {
+                        if (bf.second.bIsDebuff) {
+                            sMugongTemplate* debuffTpl = MugongManager::GetInstance()->GetTemplate(bf.second.dwMugongID);
+                            if (debuffTpl && debuffTpl->bType == 4 && debuffTpl->bKind == 20) {
+                                sMugongList* debuffData = MugongManager::GetInstance()->GetMugongLevelData(bf.second.dwMugongID, bf.second.bLevel);
+                                if (debuffData && debuffData->wIncRatePerc > 0 && debuffData->wIncRatePerc < 100) {
+                                    hitChance *= (float)debuffData->wIncRatePerc / 100.0f;
+                                }
+                                break;
+                            }
+                        }
+                    }
+
                     float roll = (float)(rand() % 10000) / 10000.0f;
                     
                     if (playerDodge > 0 && roll > hitChance) {
@@ -543,6 +720,18 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                         } else {
                             damage = 1;
                         }
+
+                        // bType=4, bKind=5（狂魔毒功/神功）：受伤放大 nEtc1%
+                        for (auto& bf : player.activeBuffs) {
+                            sMugongTemplate* bfTpl = MugongManager::GetInstance()->GetTemplate(bf.second.dwMugongID);
+                            if (bfTpl && bfTpl->bType == 4 && bfTpl->bKind == 5) {
+                                sMugongList* bfData = MugongManager::GetInstance()->GetMugongLevelData(bf.second.dwMugongID, bf.second.bLevel);
+                                if (bfData && bfData->nEtc1 > 0) {
+                                    damage = damage * bfData->nEtc1 / 100;
+                                }
+                                break;
+                            }
+                        }
                     }
                     
                     if (bResult == 2) {
@@ -551,6 +740,32 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                     }
                     
                     player.dwHpCur = playerHpCur;
+
+                    // bType=4, bKind=1（天魔护体）：被命中时反弹伤害
+                    if (bResult == 2 && damage > 0) {
+                        for (auto& bf : player.activeBuffs) {
+                            sMugongTemplate* bfTpl = MugongManager::GetInstance()->GetTemplate(bf.second.dwMugongID);
+                            if (bfTpl && bfTpl->bType == 4 && bfTpl->bKind == 1) {
+                                sMugongList* bfData = MugongManager::GetInstance()->GetMugongLevelData(bf.second.dwMugongID, bf.second.bLevel);
+                                if (bfData && bfData->nEtc1 > 0) {
+                                    // 成功率判定
+                                    WORD successRate = bfData->wSuccessRatePerc;
+                                    if (successRate >= 100 || (WORD)(rand() % 100) < successRate) {
+                                        DWORD reflectDmg = damage * bfData->nEtc1 / 100;
+                                        if (reflectDmg > 0) {
+                                            if (obj.dwHpCur > reflectDmg) {
+                                                obj.dwHpCur -= reflectDmg;
+                                            } else {
+                                                obj.dwHpCur = 1; // 反弹不击杀，保底1HP
+                                            }
+                                            LOG("[MonsterAtk] Reflect: Player " + std::to_string(targetId) + " reflected " + std::to_string(reflectDmg) + " dmg to monster " + std::to_string(obj.dwObjectID) + " (nEtc1=" + std::to_string(bfData->nEtc1) + "%)");
+                                        }
+                                    }
+                                }
+                                break; // 只处理第一个反弹buff
+                            }
+                        }
+                    }
                 }
                 
                 ackBuf[0] = bResult; // Write final hit/miss result
@@ -567,7 +782,8 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                 BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, fullAck);
 
                 // Send 0x3B0D (CS_IF_CHARHP_ACK) to the attacked player to update their HP/IP bar
-                if (m_players.count(targetId)) {
+                // 分身没有真实 socket，跳过发包
+                if (m_players.count(targetId) && !m_players[targetId].bIsBunsin) {
                     PlayerData& targetPlayer = m_players[targetId];
                     DWORD charID = targetId - 400000000;
                     
@@ -594,6 +810,17 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                 }
 
                 if (playerHpCur == 0) {
+                    if (m_players.count(targetId) && m_players[targetId].bIsBunsin) {
+                        // 分身死亡：广播 DIE + 从地图和追踪表中清理
+                        DWORD ownerCharID = m_players[targetId].dwOwnerID;
+                        CleanupSingleBunsin(ownerCharID, targetId, m_dwMapID);
+                        RemovePlayer(targetId);
+                        obj.dwTargetID = 0;
+                        for (auto& mPair : m_monsters) {
+                            if (mPair.second.dwTargetID == targetId) mPair.second.dwTargetID = 0;
+                        }
+                        LOG("[BunsinDeath] Bunsin " + std::to_string(targetId) + " killed by monster.");
+                    } else {
                     // Mark player for deferred death broadcast (sent in next Update tick)
                     m_players[targetId].dwDeadTime = tick;
                     m_players[targetId].dwInvulnerableUntil = tick + 15000; // 15s death protection
@@ -607,11 +834,12 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                     }
                     
                     LOG("[PlayerDeath] Player " + std::to_string(targetId) + " HP=0, deferred death. Released all monster locks.");
+                    } // end else (real player death)
                 }
             }
             } // end invulnerability else
-        } else {
-            // Move Towards (CHASE)
+        } else if (!isRooted) {
+            // Move Towards (CHASE) —— 定身状态跳过移动
             float dx = (float)bestPlayer->wPosX - (float)obj.wPosX;
             float dy = (float)bestPlayer->wPosY - (float)obj.wPosY;
             float dirX = dx / minDist;

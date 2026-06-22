@@ -1,4 +1,5 @@
 #include "MugongHandler.h"
+#include "MugongAttackContext.h"
 #include "PartyHandler.h"
 
 #include "../GameObjects/MugongManager.h"
@@ -12,6 +13,7 @@
 #include "../MonsterAI.h"
 
 #include "../GameObjects/DropManager.h"
+#include "../DB/ItemDB.h"
 
 #include "../GameObjects/MapInstance.h"
 
@@ -22,11 +24,70 @@
 #include "../DB/CharacterDB.h"
 
 #include <cmath>
+#include <algorithm>
 
 
 
 extern std::map<DWORD, CMapInstance*> g_MapInstances;
 
+// === 分身系统（技能41）全局变量 & 函数 stub ===
+// 功能暂停开发，保留接口避免链接错误
+std::unordered_map<DWORD, std::vector<DWORD>> g_BunsinMap;
+
+int GetMaxBunsinCount(BYTE bMugongLevel) {
+    if (bMugongLevel >= 10) return 3;
+    if (bMugongLevel >= 7) return 2;
+    return 1;
+}
+
+void CleanupAllBunsins(DWORD ownerCharID, DWORD mapID) {
+    auto it = g_BunsinMap.find(ownerCharID);
+    if (it == g_BunsinMap.end()) return;
+
+    extern std::map<DWORD, CMapInstance*> g_MapInstances;
+    if (!g_MapInstances.count(mapID)) {
+        g_BunsinMap.erase(ownerCharID);
+        return;
+    }
+    CMapInstance* mapInst = g_MapInstances[mapID];
+    // 注意：调用方可能已经持有 mapInst 的锁，此处不再加锁
+
+    std::vector<DWORD> bunsins = it->second; // 拷贝，因为遍历中会修改
+    for (DWORD bunsinObjID : bunsins) {
+        // 广播 MAPLEAVE_ACK (0x3506) 让客户端销毁对象
+        std::vector<BYTE> leaveBuf(4);
+        leaveBuf.push_back(0); // bResult = 0
+        leaveBuf.push_back(bunsinObjID & 0xFF); leaveBuf.push_back((bunsinObjID >> 8) & 0xFF);
+        leaveBuf.push_back((bunsinObjID >> 16) & 0xFF); leaveBuf.push_back((bunsinObjID >> 24) & 0xFF);
+        leaveBuf.push_back(4); // bObjectType = PET
+        leaveBuf.push_back(mapID & 0xFF); leaveBuf.push_back((mapID >> 8) & 0xFF);
+        leaveBuf.push_back((mapID >> 16) & 0xFF); leaveBuf.push_back((mapID >> 24) & 0xFF);
+        leaveBuf.push_back(0); // bType = Normal leave
+        PACKET_HEADER* leaveHead = (PACKET_HEADER*)leaveBuf.data();
+        leaveHead->id = 0x3506;
+        leaveHead->payloadSize = leaveBuf.size() - sizeof(PACKET_HEADER);
+        EncryptPacket(leaveBuf.data(), 0x42);
+        BroadcastPacketToMap(mapID, leaveBuf);
+
+        // 从地图移除实体
+        mapInst->RemovePlayer(bunsinObjID);
+
+        LOG("[Bunsin] Cleaned up bunsin ObjID=" + std::to_string(bunsinObjID));
+    }
+
+    g_BunsinMap.erase(ownerCharID);
+}
+
+void CleanupSingleBunsin(DWORD ownerCharID, DWORD bunsinObjID, DWORD mapID) {
+    // TODO: 分身系统重做时实现
+    auto it = g_BunsinMap.find(ownerCharID);
+    if (it != g_BunsinMap.end()) {
+        auto& vec = it->second;
+        vec.erase(std::remove(vec.begin(), vec.end(), bunsinObjID), vec.end());
+        if (vec.empty()) g_BunsinMap.erase(it);
+    }
+    LOG("[Bunsin] CleanupSingleBunsin stub called for bunsin " + std::to_string(bunsinObjID));
+}
 
 
 void OnMugongListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
@@ -239,497 +300,7 @@ void OnMugongLearnReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
 
 
 
-void OnSelMugongReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
-
-    if (totalSize < 6) return;
-
-
-
-    BYTE bType = payload[0];
-
-    DWORD dwMugongID = *(DWORD*)(payload + 1);
-
-    BYTE bIndex = payload[5];
-
-
-
-    LOG("[MugongHandler] OnSelMugongReq: charID " + std::to_string(charID) + " set skill " + std::to_string(dwMugongID) + " as active S slot.");
-
-
-
-    std::vector<BYTE> ackBuf(4 + 7); // 4 for header, 7 for payload
-
-    BYTE* p = ackBuf.data() + 4;
-
-    p[0] = 0; // bResult = 0 (Success)
-
-    p[1] = bType;
-
-    p[2] = dwMugongID & 0xFF;
-
-    p[3] = (dwMugongID >> 8) & 0xFF;
-
-    p[4] = (dwMugongID >> 16) & 0xFF;
-
-    p[5] = (dwMugongID >> 24) & 0xFF;
-
-    p[6] = bIndex;
-
-
-
-    PACKET_HEADER* head = (PACKET_HEADER*)ackBuf.data();
-
-    head->id = 0x4018; // CS_BT_SELMUGONG_ACK
-
-    head->payloadSize = ackBuf.size() - 4;
-
-    EncryptPacket(ackBuf.data(), 0x42);
-
-    SafeSend(clientSocket, (const char*)ackBuf.data(), ackBuf.size(), 0);
-
-}
-
-
-
-void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
-
-    if (totalSize < 24) return;
-
-    
-
-    DWORD dwMugongID    = *(DWORD*)(payload);
-
-    BYTE bAttackType    = payload[4];
-
-    DWORD dwAttackID    = *(DWORD*)(payload + 5);
-
-    WORD wAttackPosX    = *(WORD*)(payload + 9);
-
-    WORD wAttackPosY    = *(WORD*)(payload + 11);
-
-    BYTE bAttackHeight  = payload[13];
-
-    BYTE bDefenseType   = payload[14];
-
-    DWORD dwDefenseID   = *(DWORD*)(payload + 15);
-
-    WORD wTargetPosX    = *(WORD*)(payload + 19);
-
-    WORD wTargetPosY    = *(WORD*)(payload + 21);
-
-    BYTE bTargetHeight  = payload[23];
-
-
-
-    LOG("[MugongHandler] OnMugongPreAttackReq: Skill " + std::to_string(dwMugongID) + " by " + std::to_string(dwAttackID) + " against " + std::to_string(dwDefenseID));
-
-
-
-    std::vector<BYTE> ackBuf(4 + 29);
-
-    BYTE* p = ackBuf.data() + 4;
-
-
-
-    // Find Mugong level
-
-    BYTE bMugongLevel = 1;
-
-    int currentLvl = MugongManager::GetInstance()->GetPlayerMugongLevel(charID, dwMugongID);
-
-    if(currentLvl > 0) bMugongLevel = currentLvl;
-
-
-
-    sMugongList* pd = MugongManager::GetInstance()->GetMugongLevelData(dwMugongID, bMugongLevel);
-
-    bool isBuff = (pd && pd->dwKeepUpTime > 0);
-
-    DWORD playerMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
-
-    // 检查五行必杀蓄气值
-    /*
-    if (dwMugongID >= 150 && dwMugongID <= 154) {
-        bool canCast = false;
-        if (g_MapInstances.count(playerMapID)) {
-            CMapInstance* mapInst = g_MapInstances[playerMapID];
-            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-            PlayerData* pObj = mapInst->GetPlayer(charID + 400000000);
-            if (pObj && pObj->dwFiveElmGauge >= 5000) {
-                canCast = true;
-            }
-        }
-        if (!canCast) {
-            LOG("[MugongHandler] 蓄气值不足5000，无法释放五行必杀技! ID=" + std::to_string(dwMugongID));
-            // 发送失败包 (bResult = 1, 代表内功/蓄力不足)
-            std::vector<BYTE> failBuf(4 + 29, 0);
-            failBuf[4] = 1; // bResult = 1
-            *(DWORD*)(failBuf.data() + 5) = dwMugongID;
-            PACKET_HEADER* head = (PACKET_HEADER*)failBuf.data();
-            head->id = 0x4014; // PKT_MUGONGPREATTACK_ACK
-            head->payloadSize = failBuf.size() - 4;
-            EncryptPacket(failBuf.data(), 0x42);
-            SafeSend(clientSocket, (const char*)failBuf.data(), failBuf.size(), 0);
-            return;
-        }
-    }
-    */
-    // �������� Debuff (����/����/ѣ��) ���ؼ�������
-    if (g_MapInstances.count(playerMapID)) {
-        CMapInstance* mapInst = g_MapInstances[playerMapID];
-        std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-        sServerObject* pObj = mapInst->GetPlayer(dwAttackID);
-        if (pObj) {
-            bool isCC = false;
-            for (const auto& bf : pObj->activeBuffs) {
-                if (bf.second.bIsDebuff) {
-                    DWORD mugID = bf.second.dwMugongID;
-                    if (mugID == 94 || mugID == 95 || mugID == 35 || mugID == 65 || mugID == 125) {
-                        isCC = true;
-                        break;
-                    }
-                }
-            }
-            if (isCC) {
-                std::vector<BYTE> buf; buf.resize(4, 0);
-                DWORD senderObjID = 0;
-                buf.push_back(senderObjID & 0xFF); buf.push_back((senderObjID >> 8) & 0xFF); buf.push_back((senderObjID >> 16) & 0xFF); buf.push_back(senderObjID >> 24);
-                buf.push_back(8); // CT_TIMEMESSAGE
-                std::string msg = "[Control] You are frozen, stunned or immobilized and cannot cast skills!";
-                WORD len = (WORD)msg.size();
-                buf.push_back(len & 0xFF); buf.push_back((len >> 8) & 0xFF);
-                buf.insert(buf.end(), msg.begin(), msg.end());
-                WORD packetID = 0x3E02; // CS_CH_CHAT_ACK
-                WORD payloadSize = (WORD)(buf.size() - 4);
-                memcpy(&buf[0], &packetID, 2);
-                memcpy(&buf[2], &payloadSize, 2);
-                EncryptPacket(buf.data(), 0x42);
-                SafeSend(clientSocket, (const char*)buf.data(), (int)buf.size(), 0);
-                return;
-            }
-        }
-    }
-    // �������� Debuff (����/����/ѣ��) ���ؼ�������
-    if (g_MapInstances.count(playerMapID)) {
-        CMapInstance* mapInst = g_MapInstances[playerMapID];
-        std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-        sServerObject* pObj = mapInst->GetPlayer(dwAttackID);
-        if (pObj) {
-            bool isCC = false;
-            for (const auto& bf : pObj->activeBuffs) {
-                if (bf.second.bIsDebuff) {
-                    DWORD mugID = bf.second.dwMugongID;
-                    if (mugID == 94 || mugID == 95 || mugID == 35 || mugID == 65 || mugID == 125) {
-                        isCC = true;
-                        break;
-                    }
-                }
-            }
-            if (isCC) {
-                std::vector<BYTE> buf; buf.resize(4, 0);
-                DWORD senderObjID = 0;
-                buf.push_back(senderObjID & 0xFF); buf.push_back((senderObjID >> 8) & 0xFF); buf.push_back((senderObjID >> 16) & 0xFF); buf.push_back(senderObjID >> 24);
-                buf.push_back(8); // CT_TIMEMESSAGE
-                std::string msg = "[Control] You are frozen, stunned or immobilized and cannot cast skills!";
-                WORD len = (WORD)msg.size();
-                buf.push_back(len & 0xFF); buf.push_back((len >> 8) & 0xFF);
-                buf.insert(buf.end(), msg.begin(), msg.end());
-                WORD packetID = 0x3E02; // CS_CH_CHAT_ACK
-                WORD payloadSize = (WORD)(buf.size() - 4);
-                memcpy(&buf[0], &packetID, 2);
-                memcpy(&buf[2], &payloadSize, 2);
-                EncryptPacket(buf.data(), 0x42);
-                SafeSend(clientSocket, (const char*)buf.data(), (int)buf.size(), 0);
-                return;
-            }
-        }
-    }
-
-
-
-    if (isBuff) {
-
-        if (g_MapInstances.count(playerMapID)) {
-
-            CMapInstance* mapInst = g_MapInstances[playerMapID];
-
-            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-
-            sServerObject* pObj = mapInst->GetPlayer(dwAttackID);
-
-            if (pObj) {
-
-                // Verify IP cost
-
-                if (pObj->wIpCur < pd->dwCostMp) {
-
-                    LOG("[MugongHandler] Buff " + std::to_string(dwMugongID) + " blocked: IP " 
-
-                        + std::to_string(pObj->wIpCur) + " < cost " + std::to_string(pd->dwCostMp));
-
-                    // Send 0x4016 with bResult=3 (IP insufficient) so client shows error message
-
-                    std::vector<BYTE> failBuf(4 + 38, 0);
-
-                    BYTE* fp = failBuf.data() + 4;
-
-                    fp[0] = 3; // bResult = 3 (IDS_SHORT_INLIFE)
-
-                    *(DWORD*)(fp + 1) = dwMugongID;
-
-                    fp[5] = bMugongLevel;
-
-                    fp[6] = 1; 
-
-                    *(DWORD*)(fp + 7) = dwAttackID;
-
-                    *(WORD*)(fp + 11) = wAttackPosX;
-
-                    *(WORD*)(fp + 13) = wAttackPosY;
-
-                    fp[15] = bAttackHeight;
-
-                    fp[16] = 1; // bDefType = OBJTYPE_PC
-
-                    *(DWORD*)(fp + 17) = dwAttackID; 
-
-                    PACKET_HEADER* fh = (PACKET_HEADER*)failBuf.data();
-
-                    fh->id = 0x4016;
-
-                    fh->payloadSize = 38;
-
-                    EncryptPacket(failBuf.data(), 0x42);
-
-                    SafeSend(clientSocket, (const char*)failBuf.data(), failBuf.size(), 0);
-
-                    return;
-
-                }
-
-                
-
-                // Deduct IP
-
-                pObj->wIpCur -= pd->dwCostMp;
-
-                
-
-                // Send 0x3B0D to update client HP/IP bars
-
-                std::vector<BYTE> hpBuf(4);
-
-                auto push4 = [&](DWORD d) { hpBuf.push_back(d&0xFF); hpBuf.push_back((d>>8)&0xFF); hpBuf.push_back((d>>16)&0xFF); hpBuf.push_back((d>>24)&0xFF); };
-
-                auto push2 = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
-
-                push4(pObj->dwHpMax);
-
-                push4(pObj->dwHpCur);
-
-                push4(pObj->wIpMax);
-
-                push4(pObj->wIpCur);
-
-                hpBuf.push_back(0); // bType
-
-                PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
-
-                hpHead->id = 0x3B0D;
-
-                hpHead->payloadSize = hpBuf.size() - 4;
-
-                EncryptPacket(hpBuf.data(), 0x42);
-
-                SafeSend(clientSocket, (const char*)hpBuf.data(), hpBuf.size(), 0);
-
-
-
-                // Add or update buff
-
-                sServerObject::sActiveBuff newBuff;
-
-                newBuff.dwMugongID = dwMugongID;
-
-                newBuff.bLevel = bMugongLevel;
-
-                newBuff.dwEndTime = GetTickCount() + pd->dwKeepUpTime * 1000;
-
-                newBuff.bIsDebuff = false;
-
-                pObj->activeBuffs[dwMugongID] = newBuff;
-
-            }
-
-        }
-
-
-
-        // Broadcast 0x402C KeepUpMugongStartAck
-
-        std::vector<BYTE> buffAck(4 + 11);
-
-        BYTE* bp = buffAck.data() + 4;
-
-        bp[0] = 0; // bResult
-
-        *(DWORD*)(bp + 1) = dwAttackID;
-
-        bp[5] = 1; // bObjectType (Player)
-
-        *(DWORD*)(bp + 6) = dwMugongID;
-
-        bp[10] = bMugongLevel;
-
-        
-
-        PACKET_HEADER* headB = (PACKET_HEADER*)buffAck.data();
-
-        headB->id = 0x402C;
-
-        headB->payloadSize = 11;
-
-        EncryptPacket(buffAck.data(), 0x42);
-
-        BroadcastPacketToMap(playerMapID, buffAck);
-
-
-
-        LOG("[MugongHandler] Applied BUFF " + std::to_string(dwMugongID) + " to player " + std::to_string(dwAttackID) + " in PreAttackReq");
-
-
-
-        // Immediately recalculate stats so buff bonuses take effect (do NOT send 0x4414 to prevent clearing client visuals)
-
-        PlayerManager::GetInstance().RecalculateStats(charID, false);
-
-    } else {
-
-        // �� Buff ������������������쨦�訦�� 178
-
-        if (g_MapInstances.count(playerMapID)) {
-
-            CMapInstance* mapInst = g_MapInstances[playerMapID];
-
-            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-
-            sServerObject* pObj = mapInst->GetPlayer(dwAttackID);
-
-            if (pObj && pObj->activeBuffs.count(178) > 0) {
-
-                pObj->activeBuffs[178].dwEndTime = 0; // Mark for instant expiry
-
-                LOG("[MugongHandler] Player " + std::to_string(dwAttackID) + " pre-attacked with damage skill " + std::to_string(dwMugongID) + ". Expiring Stealth.");
-
-            }
-
-        }
-
-    }
-
-
-
-    // bResult (Always 0 to allow buff refreshing)
-
-    p[0] = 0; 
-
-    
-
-    // Pack dwMugongID
-
-    *(DWORD*)(p + 1) = dwMugongID;
-
-    
-
-    // Pack remaining bytes
-
-    p[5] = bMugongLevel;
-
-    // Determine if this is a buff skill - buff skills are intercepted by our client-side
-
-    // patch in XiahGame_Handler_BT_Rcv.cpp to skip animation and combat sequence locks.
-
-    // To ensure the client-side patch is reached, we must always set p[6] = 1 (OBJTYPE_PC)
-
-    // so that FindXiahObject successfully locates the player character.
-
-    p[6] = 1;
-
-    *(DWORD*)(p + 7) = dwAttackID;
-
-    *(WORD*)(p + 11) = wAttackPosX;
-
-    *(WORD*)(p + 13) = wAttackPosY;
-
-    p[15] = bAttackHeight;
-
-    // For self-buff/no-target skills, set defender to self with OBJTYPE_PC
-
-    if (dwDefenseID == 0) {
-
-        dwDefenseID = dwAttackID;
-
-        bDefenseType = 1; // OBJTYPE_PC
-
-    }
-
-    p[16] = bDefenseType;
-
-    *(DWORD*)(p + 17) = dwDefenseID;
-
-    *(WORD*)(p + 21) = wTargetPosX;
-
-    *(WORD*)(p + 23) = wTargetPosY;
-
-    p[25] = bTargetHeight;
-
-    *(WORD*)(p + 26) = 0; // wLifeTime
-
-    p[28] = 0; // bAttackMode
-
-
-
-    PACKET_HEADER* head = (PACKET_HEADER*)ackBuf.data();
-
-    head->id = 0x4014; // CS_BT_MUGONGPREATTACK_ACK
-
-    head->payloadSize = 29;
-
-    EncryptPacket(ackBuf.data(), 0x42);
-
-    
-
-    // Broadcast to map so everyone sees the pre-attack animation
-
-    BroadcastPacketToMap(playerMapID, ackBuf);
-
-}
-
-
-
-bool IsAoeSkill(DWORD dwMugongID, sMugongTemplate* tpl) {
-
-    if (!tpl) return false;
-
-    // 1. ����������� (bKind 80-84) ����
-
-    if (tpl->bKind >= 80 && tpl->bKind <= 84) return true;
-
-    
-
-    // 2. ������ 80~120 ���㨦����
-
-    // ������� (bType = 3) ����������� (bKind = 0) ���
-
-    if (tpl->bType == 3 && tpl->bKind == 0) return true;
-
-    
-
-    return false;
-
-}
-
-
+// OnSelMugongReq + OnMugongPreAttackReq + IsAoeSkill -> MugongPreAttack.cpp
 
 void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
 
@@ -763,37 +334,8 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
     LOG("[MugongHandler] OnMugongAttackReq: Skill " + std::to_string(dwMugongID) + " by " + std::to_string(dwAttackID) + " against " + std::to_string(dwDefenseID));
 
-    // 如果是五行必杀技，校验蓄力值并扣除
-    /*
-    if (dwMugongID >= 150 && dwMugongID <= 154) {
-        bool canCast = false;
-        DWORD playerMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
-        PlayerData* pAttacker = nullptr;
-        if (g_MapInstances.count(playerMapID)) {
-            CMapInstance* mapInst = g_MapInstances[playerMapID];
-            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-            pAttacker = mapInst->GetPlayer(charID + 400000000);
-            if (pAttacker && pAttacker->dwFiveElmGauge >= 5000) {
-                pAttacker->dwFiveElmGauge -= 5000;
-                canCast = true;
-            }
-        }
-        if (!canCast) {
-            LOG("[MugongHandler] OnMugongAttackReq 校验失败：蓄气不足5000，拦截释放! ID=" + std::to_string(dwMugongID));
-            return;
-        }
-
-        // 异步扣除落盘并同步给客户端进度条
-        if (pAttacker) {
-            CharacterDB::ExpData expData;
-            if (CharacterDB::GetInstance().GetExpData(charID, expData)) {
-                CharacterDB::GetInstance().UpdateFiveElm(charID, expData.wFiveElmPoint, expData.wFiveElmPointCnt, expData.dwFiveElmPower, pAttacker->dwFiveElmGauge,
-                                                         expData.wFireExp, expData.wWaterExp, expData.wWoodExp, expData.wMetalExp, expData.wEarthExp);
-            }
-            SyncFiveElmStatus(clientSocket, charID, pAttacker);
-        }
-    }
-    */
+    // 五行必杀技蓄气校验已搬迁至 MugongSkill_FiveElm.cpp::HandleFiveElmUltimate
+    // 通过上方 bType/bKind 路由自动分发
 
 
 
@@ -810,18 +352,20 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
 
     if (g_MapInstances.count(playerMapID)) {
-
         CMapInstance* mapInst = g_MapInstances[playerMapID];
-
         std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-
         sServerObject* pObj = mapInst->GetPlayer(dwAttackID);
+
+        // === CC 状态检查（基于 bType/bKind 数据驱动） ===
+        // bType=4 + bKind=16(致盲)/17(麻痹) = 无法施法的 CC 状态
+        // 注意：bKind=18(定身/擒拿) 只限制移动，不限制施法和攻击
         if (pObj) {
             bool isCC = false;
             for (const auto& bf : pObj->activeBuffs) {
                 if (bf.second.bIsDebuff) {
-                    DWORD mugID = bf.second.dwMugongID;
-                    if (mugID == 94 || mugID == 95 || mugID == 35 || mugID == 65 || mugID == 125) {
+                    sMugongTemplate* debuffTpl = MugongManager::GetInstance()->GetTemplate(bf.second.dwMugongID);
+                    if (debuffTpl && debuffTpl->bType == 4 &&
+                        (debuffTpl->bKind == 16 || debuffTpl->bKind == 17)) {
                         isCC = true;
                         break;
                     }
@@ -836,7 +380,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                 WORD len = (WORD)msg.size();
                 buf.push_back(len & 0xFF); buf.push_back((len >> 8) & 0xFF);
                 buf.insert(buf.end(), msg.begin(), msg.end());
-                WORD packetID = 0x3E02; // CS_CH_CHAT_ACK
+                WORD packetID = 0x3E02;
                 WORD payloadSize = (WORD)(buf.size() - 4);
                 memcpy(&buf[0], &packetID, 2);
                 memcpy(&buf[2], &payloadSize, 2);
@@ -845,73 +389,102 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                 return;
             }
         }
+
+        // === 龟息解除（bType=4, bKind=4）===
         if (pObj) {
-            bool isCC = false;
-            for (const auto& bf : pObj->activeBuffs) {
-                if (bf.second.bIsDebuff) {
-                    DWORD mugID = bf.second.dwMugongID;
-                    if (mugID == 94 || mugID == 95 || mugID == 35 || mugID == 65 || mugID == 125) {
-                        isCC = true;
-                        break;
-                    }
+            for (auto& bf : pObj->activeBuffs) {
+                sMugongTemplate* bfTpl = MugongManager::GetInstance()->GetTemplate(bf.second.dwMugongID);
+                if (bfTpl && bfTpl->bType == 4 && bfTpl->bKind == 4) {
+                    bf.second.dwEndTime = 0;
+                    LOG("[MugongHandler] Player " + std::to_string(dwAttackID) + " used skill " + std::to_string(dwMugongID) + ". Expiring Turtle Breath (bKind=4).");
+                    break;
                 }
             }
-            if (isCC) {
-                std::vector<BYTE> buf; buf.resize(4, 0);
-                DWORD senderObjID = 0;
-                buf.push_back(senderObjID & 0xFF); buf.push_back((senderObjID >> 8) & 0xFF); buf.push_back((senderObjID >> 16) & 0xFF); buf.push_back(senderObjID >> 24);
-                buf.push_back(8); // CT_TIMEMESSAGE
-                std::string msg = "[Control] You are frozen, stunned or immobilized and cannot cast skills!";
-                WORD len = (WORD)msg.size();
-                buf.push_back(len & 0xFF); buf.push_back((len >> 8) & 0xFF);
-                buf.insert(buf.end(), msg.begin(), msg.end());
-                WORD packetID = 0x3E02; // CS_CH_CHAT_ACK
-                WORD payloadSize = (WORD)(buf.size() - 4);
-                memcpy(&buf[0], &packetID, 2);
-                memcpy(&buf[2], &payloadSize, 2);
-                EncryptPacket(buf.data(), 0x42);
-                SafeSend(clientSocket, (const char*)buf.data(), (int)buf.size(), 0);
-                return;
-            }
         }
 
-        if (pObj && pObj->activeBuffs.count(130) > 0) {
-
-            pObj->activeBuffs[130].dwEndTime = 0; // Mark for instant expiry in MonsterAI loop
-
-            LOG("[MugongHandler] Player " + std::to_string(dwAttackID) + " used skill " + std::to_string(dwMugongID) + ". Expiring Turtle Breath.");
-
-        }
-
+        // === 隐身解除（bType=4, bKind=70）===
         sMugongList* tempPd = MugongManager::GetInstance()->GetMugongLevelData(dwMugongID, bMugongLevel);
-
         bool tempIsBuff = (tempPd && tempPd->dwKeepUpTime > 0);
-
-        if (!tempIsBuff && pObj && pObj->activeBuffs.count(178) > 0) {
-
-            pObj->activeBuffs[178].dwEndTime = 0; // Mark for instant expiry in MonsterAI loop
-
-            LOG("[MugongHandler] Player " + std::to_string(dwAttackID) + " used damage skill " + std::to_string(dwMugongID) + ". Expiring Stealth.");
-
+        if (!tempIsBuff && pObj) {
+            for (auto& bf : pObj->activeBuffs) {
+                sMugongTemplate* bfTpl = MugongManager::GetInstance()->GetTemplate(bf.second.dwMugongID);
+                if (bfTpl && bfTpl->bType == 4 && bfTpl->bKind == 70) {
+                    bf.second.dwEndTime = 0;
+                    LOG("[MugongHandler] Player " + std::to_string(dwAttackID) + " used damage skill " + std::to_string(dwMugongID) + ". Expiring Stealth (bKind=70).");
+                    break;
+                }
+            }
         }
-
     }
 
-
-
     // 1. Get the skill data
-
     sMugongList* pMugongData = MugongManager::GetInstance()->GetMugongLevelData(dwMugongID, bMugongLevel);
 
-    
-
-    // 2. Determine if it's a buff or heal
-
+    // 2. Determine if it's a buff or heal（基于 bType 数据驱动）
+    sMugongTemplate* tpl = MugongManager::GetInstance()->GetTemplate(dwMugongID);
     bool isBuff = (pMugongData && pMugongData->dwKeepUpTime > 0);
+    // bType=1 即为治疗技能，不再硬编码排除具体技能 ID
+    bool isHeal = (!isBuff && tpl && tpl->bType == 1);
 
-    bool isHeal = (!isBuff && pMugongData && (pMugongData->wIncHpCur > 0 || pMugongData->wIncHpCurPerc > 0 || pMugongData->wIncIpCur > 0 || pMugongData->wIncIpCurPerc > 0) && dwMugongID != 37 && dwMugongID != 70);
+    // === 特殊技能数据驱动路由（基于 bType/bKind） ===
+    MugongAttackContext ctx;
+    ctx.clientSocket = clientSocket;
+    ctx.charID = charID + 400000000;
+    ctx.dwMugongID = dwMugongID;
+    ctx.bAttackType = bAttackType;
+    ctx.dwAttackID = dwAttackID;
+    ctx.wAttackPosX = wAttackPosX;
+    ctx.wAttackPosY = wAttackPosY;
+    ctx.bAttackHeight = bAttackHeight;
+    ctx.bDefenseType = bDefenseType;
+    ctx.dwDefenseID = dwDefenseID;
+    ctx.wTargetPosX = wTargetPosX;
+    ctx.wTargetPosY = wTargetPosY;
+    ctx.bTargetHeight = bTargetHeight;
+    ctx.bMugongLevel = bMugongLevel;
+    ctx.playerMapID = playerMapID;
+    ctx.pMugongData = pMugongData;
+    ctx.pTemplate = tpl;
+    ctx.isBuff = isBuff;
+    ctx.isHeal = isHeal;
 
+    if (tpl) {
+        // 召唤/分身类 (bType=4, bKind=9)
+        if (tpl->bType == 4 && tpl->bKind == 9) {
+            HandleSummonSkill(ctx);
+            return;
+        }
+        // 五行被动技 (bType=0, bKind=80~84): 蓄气校验
+        if (tpl->bType == 0 && tpl->bKind >= 80 && tpl->bKind <= 84) {
+            if (!HandleFiveElmUltimate(ctx)) {
+                return;
+            }
+        }
+    }
 
+    // 2.4. 攻击破状态：主动释放攻击技能时清除龟息(130)/隐身(178)
+    if (!isBuff && !isHeal && g_MapInstances.count(playerMapID)) {
+        CMapInstance* mapInst = g_MapInstances[playerMapID];
+        std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+        sServerObject* pObj = mapInst->GetPlayer(dwAttackID);
+        if (pObj) {
+            bool stateCleared = false;
+            if (pObj->activeBuffs.count(130) > 0) {
+                pObj->activeBuffs.erase(130);
+                stateCleared = true;
+                LOG("[MugongHandler] Player " + std::to_string(dwAttackID) + " attacked, Turtle Breath (130) removed.");
+            }
+            if (pObj->activeBuffs.count(178) > 0) {
+                pObj->activeBuffs.erase(178);
+                stateCleared = true;
+                LOG("[MugongHandler] Player " + std::to_string(dwAttackID) + " attacked, Stealth (178) removed.");
+            }
+            if (stateCleared) {
+                // 重算属性使面板同步
+                PlayerManager::GetInstance().RecalculateStats(dwAttackID - 400000000, false);
+            }
+        }
+    }
 
     // 2.5. Perform early IP cost validation and deduction for all non-healing skills
 
@@ -1023,330 +596,764 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
 
 
-    // 3. Class 4: Healing / HP & IP Recovery Skills
-
-    if (isHeal || dwMugongID == 63) {
-
+    // === bType=3, bKind=19（御剑术）：CD 检查 + 武器耐久消耗 ===
+    if (tpl && tpl->bType == 3 && tpl->bKind == 19 && pMugongData) {
+        DWORD dwCharID = SessionMgr::GetInstance().GetCharID(clientSocket);
+        DWORD playerMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+        DWORD dwObjectID = (dwCharID < 800000000) ? (dwCharID + 400000000) : dwCharID;
+        sServerObject* pObj = nullptr;
         if (g_MapInstances.count(playerMapID)) {
-
             CMapInstance* mapInst = g_MapInstances[playerMapID];
-
             std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-
-            sServerObject* pObj = mapInst->GetPlayer(dwAttackID); // ��
-
-            if (pObj) {
-
-                // 1. IP Cost deduction first from caster (pObj)
-
-                DWORD cost = pMugongData ? pMugongData->dwCostMp : 0;
-
-                if (pObj->wIpCur < cost) {
-
-                    LOG("[MugongHandler] Heal Skill " + std::to_string(dwMugongID) + " blocked: IP " 
-
-                        + std::to_string(pObj->wIpCur) + " < cost " + std::to_string(cost));
-
+            pObj = mapInst->GetPlayer(dwObjectID);
+        }
+        if (pObj) {
+            // CD 检查
+            DWORD cdMs = (DWORD)pMugongData->nEtc2;
+            if (cdMs > 0 && pObj->mugongLastCastTime.count(dwMugongID)) {
+                DWORD elapsed = GetTickCount() - pObj->mugongLastCastTime[dwMugongID];
+                if (elapsed < cdMs) {
+                    LOG("[MugongHandler] Skill " + std::to_string(dwMugongID) + " on cooldown (" + std::to_string(elapsed) + "/" + std::to_string(cdMs) + "ms)");
                     return;
-
                 }
-
-                pObj->wIpCur -= cost;
-
-
-
-                // 2. �� (������ bKind=0 �� bKind=1/2 )
-
-                sServerObject* pTarget = nullptr;
-
-                SOCKET targetSocket = clientSocket;
-
-                
-
-                sMugongTemplate* pTpl = MugongManager::GetInstance()->GetTemplate(dwMugongID);
-
-                BYTE bKind = pTpl ? pTpl->bKind : 0;
-
-
-
-                // �쨨(bKind==12������㨨)����
-
-                if (bKind == 1 || bKind == 2) {
-
-                    if (bDefenseType == 1 && dwDefenseID > 0 && dwDefenseID != dwAttackID) {
-
-                        sServerObject* pPotentialTarget = mapInst->GetPlayer(dwDefenseID);
-
-                        if (pPotentialTarget) {
-
-                            // ������ (���� wAttackRange  > 0)
-
-                            float dx = (float)pObj->wPosX - (float)pPotentialTarget->wPosX;
-
-                            float dy = (float)pObj->wPosY - (float)pPotentialTarget->wPosY;
-
-                            float dist = sqrtf(dx * dx + dy * dy);
-
-                            
-
-                            if (pMugongData && pMugongData->wAttackRange > 0 && dist > (float)pMugongData->wAttackRange) {
-
-                                LOG("[MugongHandler] Heal Skill " + std::to_string(dwMugongID) + " target out of range: " 
-
-                                    + std::to_string((int)dist) + " > " + std::to_string(pMugongData->wAttackRange));
-
-                                return; // ������
-
-                            }
-
-                            
-
-                            pTarget = pPotentialTarget;
-
-                            targetSocket = SessionMgr::GetInstance().GetSocketByCharID(dwDefenseID - 400000000);
-
-                        }
-
-                    }
-
-                }
-
-                
-
-                // �����쨨����������(bKind==0)������������
-
-                if (!pTarget) {
-
-                    pTarget = pObj;
-
-                    targetSocket = clientSocket;
-
-                }
-
-
-
-                // 3. Calculate Heal Amounts
-
-                DWORD hpHeal = 0;
-
-                if (pMugongData) {
-
-                    hpHeal = pMugongData->wIncHpCur;
-
-                    if (pMugongData->wIncHpCurPerc > 0) {
-
-                        hpHeal += (pTarget->dwHpMax * pMugongData->wIncHpCurPerc / 100);
-
-                    }
-
-                }
-
-                if (dwMugongID == 63 && hpHeal == 0) {
-
-                    hpHeal = 200 + bMugongLevel * 100; // Fallback for level-based heal
-
-                }
-
-
-
-                DWORD ipHeal = 0;
-
-                if (pMugongData) {
-
-                    ipHeal = pMugongData->wIncIpCur;
-
-                    if (pMugongData->wIncIpCurPerc > 0) {
-
-                        ipHeal += (pTarget->wIpMax * pMugongData->wIncIpCurPerc / 100);
-
-                    }
-
-                }
-
-
-
-                // 4. Apply Heals to target player (Self or Coterie Member)
-
-                pTarget->dwHpCur = (std::min)(pTarget->dwHpMax, pTarget->dwHpCur + hpHeal);
-
-                pTarget->wIpCur  = (std::min)(pTarget->wIpMax, (DWORD)(pTarget->wIpCur + ipHeal));
-
-
-
-                // 5. Send 0x3B0D (HP/IP status sync) to the healed player character
-
-                std::vector<BYTE> hpBuf(4);
-
-                auto push4 = [&](DWORD d) { hpBuf.push_back(d&0xFF); hpBuf.push_back((d>>8)&0xFF); hpBuf.push_back((d>>16)&0xFF); hpBuf.push_back((d>>24)&0xFF); };
-
-                auto push2 = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
-
-                push4(pTarget->dwHpMax);
-
-                push4(pTarget->dwHpCur);
-
-                push4(pTarget->wIpMax);
-
-                push4(pTarget->wIpCur);
-
-                hpBuf.push_back(0); // bType = 0
-
-                PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
-
-                hpHead->id = 0x3B0D;
-
-                hpHead->payloadSize = hpBuf.size() - 4;
-
-                EncryptPacket(hpBuf.data(), 0x42);
-
-                SafeSend(targetSocket, (const char*)hpBuf.data(), hpBuf.size(), 0);
-
-
-
-                // 6. ���������������訨���� 0x3B0D �㨨��
-
-                if (pTarget != pObj && cost > 0) {
-
-                    std::vector<BYTE> selfIpBuf(4);
-
-                    selfIpBuf.push_back(pObj->dwHpMax & 0xFF); selfIpBuf.push_back((pObj->dwHpMax >> 8) & 0xFF); selfIpBuf.push_back((pObj->dwHpMax >> 16) & 0xFF); selfIpBuf.push_back(pObj->dwHpMax >> 24);
-
-                    selfIpBuf.push_back(pObj->dwHpCur & 0xFF); selfIpBuf.push_back((pObj->dwHpCur >> 8) & 0xFF); selfIpBuf.push_back((pObj->dwHpCur >> 16) & 0xFF); selfIpBuf.push_back(pObj->dwHpCur >> 24);
-
-                    selfIpBuf.push_back(pObj->wIpMax & 0xFF); selfIpBuf.push_back((pObj->wIpMax >> 8) & 0xFF); selfIpBuf.push_back((pObj->wIpMax >> 16) & 0xFF); selfIpBuf.push_back(pObj->wIpMax >> 24);
-
-                    selfIpBuf.push_back(pObj->wIpCur & 0xFF); selfIpBuf.push_back((pObj->wIpCur >> 8) & 0xFF); selfIpBuf.push_back((pObj->wIpCur >> 16) & 0xFF); selfIpBuf.push_back(pObj->wIpCur >> 24);
-
-                    selfIpBuf.push_back(0);
-
-                    PACKET_HEADER* selfHead = (PACKET_HEADER*)selfIpBuf.data();
-
-                    selfHead->id = 0x3B0D;
-
-                    selfHead->payloadSize = selfIpBuf.size() - 4;
-
-                    EncryptPacket(selfIpBuf.data(), 0x42);
-
-                    SafeSend(clientSocket, (const char*)selfIpBuf.data(), selfIpBuf.size(), 0);
-
-                }
-
-
-
-                LOG("[MugongHandler] Heal Skill " + std::to_string(dwMugongID) + " healed Target " + std::to_string(pTarget->dwObjectID) 
-
-                    + " HP: +" + std::to_string(hpHeal) + " (Cur: " + std::to_string(pTarget->dwHpCur) + "/" + std::to_string(pTarget->dwHpMax) + ")");
-
             }
-
+            // 武器耐久消耗（bSackPos=0 = 武器栏）
+            // nEtc1 = 最大耐久的百分比，实际扣除 = maxDur * nEtc1 / 100
+            int durPercent = pMugongData->nEtc1;
+            if (durPercent > 0) {
+                DWORD dwWeaponItemID = ItemDB::GetInstance().GetItemAtSackPos(dwCharID, 0);
+                if (dwWeaponItemID == 0) {
+                    LOG("[MugongHandler] Skill " + std::to_string(dwMugongID) + " blocked: no weapon equipped");
+                    return;
+                }
+                ItemDB::ItemDataRow itemData;
+                bool hasData = ItemDB::GetInstance().GetItemData(dwWeaponItemID, itemData);
+                int curDur = hasData ? itemData.nData[1] : -9999; // nData2 = 当前耐久
+                int maxDur = hasData ? itemData.nData[2] : -9999; // nData3 = 最大耐久
+                if (maxDur == -9999 || maxDur <= 0) maxDur = 100; // 未初始化时默认100
+                if (curDur == -9999) curDur = maxDur;              // 未初始化时视为满耐久
+                int durCost = maxDur * durPercent / 100;
+                if (durCost < 1) durCost = 1;
+                if (curDur < durCost) {
+                    LOG("[MugongHandler] Skill " + std::to_string(dwMugongID) + " blocked: weapon durability " + std::to_string(curDur) + " < cost " + std::to_string(durCost) + " (" + std::to_string(durPercent) + "% of " + std::to_string(maxDur) + ")");
+                    return;
+                }
+                int newDur = curDur - durCost;
+                ItemDB::GetInstance().UpdateItemData(dwWeaponItemID, 2, newDur);
+                // 发送 DURABILITY_ACK (0x4236) 同步客户端耐久显示
+                std::vector<BYTE> durBuf(4);
+                auto pushDW = [&](DWORD d) { durBuf.push_back(d&0xFF); durBuf.push_back((d>>8)&0xFF); durBuf.push_back((d>>16)&0xFF); durBuf.push_back((d>>24)&0xFF); };
+                pushDW(dwWeaponItemID);        // dwItemID
+                durBuf.push_back(1);           // bItemType (武器)
+                durBuf.push_back(0);           // bSackID
+                durBuf.push_back(0);           // bSackPos (装备栏0)
+                durBuf.push_back((BYTE)(newDur & 0xFF)); durBuf.push_back((BYTE)((newDur >> 8) & 0xFF)); // wCurDur
+                PACKET_HEADER* durHead = (PACKET_HEADER*)durBuf.data();
+                durHead->id = 0x4236;
+                durHead->payloadSize = durBuf.size() - 4;
+                EncryptPacket(durBuf.data(), 0x42);
+                SafeSend(clientSocket, (const char*)durBuf.data(), durBuf.size(), 0);
+                LOG("[MugongHandler] Skill " + std::to_string(dwMugongID) + " consumed " + std::to_string(durCost) + " weapon durability (" + std::to_string(curDur) + " -> " + std::to_string(newDur) + ", " + std::to_string(durPercent) + "% of maxDur " + std::to_string(maxDur) + ")");
+            }
+            // 记录 CD 时间
+            pObj->mugongLastCastTime[dwMugongID] = GetTickCount();
         }
-
-
-
-        // 7. Broadcast AttackAck (0x4016) so everyone sees the visual healing flashing effect
-
-        std::vector<BYTE> ackBuf(4 + 38);
-
-        BYTE* p = ackBuf.data() + 4;
-
-        p[0] = 0; // SUCCESS
-
-        *(DWORD*)(p + 1) = dwMugongID;
-
-        p[5] = bMugongLevel;
-
-        p[6] = 1; // bAtkType = OBJTYPE_PC
-
-        *(DWORD*)(p + 7) = dwAttackID;
-
-        *(WORD*)(p + 11) = wAttackPosX;
-
-        *(WORD*)(p + 13) = wAttackPosY;
-
-        p[15] = bAttackHeight;
-
-        
-
-        // ���������쨨�쨨����
-
-        CMapInstance* mapInst2 = g_MapInstances.count(playerMapID) ? g_MapInstances[playerMapID] : nullptr;
-
-        if (mapInst2) {
-
-            std::lock_guard<std::mutex> lock(mapInst2->GetMutex());
-
-            sServerObject* pObj = mapInst2->GetPlayer(dwAttackID);
-
-            sServerObject* pTarget = nullptr;
-
-            if (bDefenseType == 1 && dwDefenseID > 0 && dwDefenseID != dwAttackID) {
-
-                pTarget = mapInst2->GetPlayer(dwDefenseID);
-
-            }
-
-            if (!pTarget) pTarget = pObj;
-
-
-
-            if (pTarget) {
-
-                p[16] = pTarget->bObjectType; // ���� (�� 1=PC)
-
-                *(DWORD*)(p + 17) = pTarget->dwObjectID;
-
-                *(DWORD*)(p + 21) = pTarget->dwHpMax;
-
-                *(DWORD*)(p + 25) = pTarget->dwHpCur;
-
-            } else {
-
-                p[16] = 1;
-
-                *(DWORD*)(p + 17) = dwAttackID;
-
-                *(DWORD*)(p + 21) = 0;
-
-                *(DWORD*)(p + 25) = 0;
-
-            }
-
-        } else {
-
-            p[16] = 1;
-
-            *(DWORD*)(p + 17) = dwAttackID;
-
-            *(DWORD*)(p + 21) = 0;
-
-            *(DWORD*)(p + 25) = 0;
-
-        }
-
-        
-
-        *(DWORD*)(p + 29) = 0; // finalDmg = 0
-
-        *(DWORD*)(p + 33) = 0; // deadExp = 0
-
-        p[37] = 0; // bCritHit = 0
-
-
-
-        PACKET_HEADER* head = (PACKET_HEADER*)ackBuf.data();
-
-        head->id = 0x4016; // CS_BT_MUGONGATTACK_ACK
-
-        head->payloadSize = 38;
-
-        EncryptPacket(ackBuf.data(), 0x42);
-
-        BroadcastPacketToMap(playerMapID, ackBuf);
-
-        return; // Early return for healing skills
-
     }
 
+
+
+    // === Heal / Recovery Skills ===
+#include "MugongSkill_Buff.inl"
+
+
+
+    // === bType=4, bKind=3（万毒不侵）：范围即时恢复 ===
+    if (tpl && tpl->bType == 4 && tpl->bKind == 3 && pMugongData) {
+        DWORD healAmount = (pMugongData->nEtc1 > 0) ? (DWORD)pMugongData->nEtc1 : 0;
+        float healRange = (pMugongData->wAttackRange > 0) ? (float)pMugongData->wAttackRange : 15.0f;
+
+        if (healAmount > 0 && g_MapInstances.count(playerMapID)) {
+            CMapInstance* mapInst = g_MapInstances[playerMapID];
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            PlayerData* pCaster = mapInst->GetPlayer(dwAttackID);
+            if (pCaster) {
+                WORD cx = pCaster->wPosX, cy = pCaster->wPosY;
+                // 遍历 AOI 内玩家，距离筛选后回血
+                std::vector<PlayerData*> aoiPlayers = mapInst->GetPlayersInAOI(cx, cy);
+                for (PlayerData* pTarget : aoiPlayers) {
+                    if (!pTarget || pTarget->dwHpCur == 0) continue;
+                    float dx = (float)pTarget->wPosX - (float)cx;
+                    float dy = (float)pTarget->wPosY - (float)cy;
+                    float dist = sqrtf(dx * dx + dy * dy);
+                    if (dist > healRange && pTarget->dwObjectID != dwAttackID) continue; // 自己必中
+
+                    DWORD oldHp = pTarget->dwHpCur;
+                    pTarget->dwHpCur = (std::min)(pTarget->dwHpMax, pTarget->dwHpCur + healAmount);
+                    DWORD healed = pTarget->dwHpCur - oldHp;
+
+                    // 发送 0x3B0D 更新被治疗者的 HP/IP 面板
+                    if (healed > 0 && !pTarget->bIsBunsin) {
+                        DWORD tCharID = pTarget->dwObjectID - 400000000;
+                        SOCKET tSock = SessionMgr::GetInstance().GetSocketByCharID(tCharID);
+                        if (tSock != INVALID_SOCKET) {
+                            std::vector<BYTE> hpBuf(4);
+                            auto p4 = [&](DWORD d) { hpBuf.push_back(d&0xFF); hpBuf.push_back((d>>8)&0xFF); hpBuf.push_back((d>>16)&0xFF); hpBuf.push_back(d>>24); };
+                            p4(pTarget->dwHpMax); p4(pTarget->dwHpCur); p4(pTarget->wIpMax); p4(pTarget->wIpCur);
+                            hpBuf.push_back(0);
+                            PACKET_HEADER* hh = (PACKET_HEADER*)hpBuf.data();
+                            hh->id = 0x3B0D; hh->payloadSize = hpBuf.size() - 4;
+                            EncryptPacket(hpBuf.data(), 0x42);
+                            SafeSend(tSock, (const char*)hpBuf.data(), hpBuf.size(), 0);
+                        }
+                    }
+                    LOG("[MugongHandler] AOE Heal Skill " + std::to_string(dwMugongID) + " healed " + std::to_string(pTarget->dwObjectID) + " +" + std::to_string(healed) + " HP");
+                }
+            }
+        }
+
+        // 广播 0x4016 播放地面特效
+        std::vector<BYTE> ackBuf(4 + 38);
+        BYTE* p = ackBuf.data() + 4;
+        p[0] = 0;
+        *(DWORD*)(p + 1) = dwMugongID;
+        p[5] = bMugongLevel;
+        p[6] = 1; // bAtkType = PC
+        *(DWORD*)(p + 7) = dwAttackID;
+        *(WORD*)(p + 11) = wAttackPosX;
+        *(WORD*)(p + 13) = wAttackPosY;
+        p[15] = bAttackHeight;
+        p[16] = 1; // bDefType = PC (self)
+        *(DWORD*)(p + 17) = dwAttackID;
+        *(DWORD*)(p + 21) = 0; *(DWORD*)(p + 25) = 0;
+        *(DWORD*)(p + 29) = 0; *(DWORD*)(p + 33) = 0;
+        p[37] = 0;
+        PACKET_HEADER* head = (PACKET_HEADER*)ackBuf.data();
+        head->id = 0x4016; head->payloadSize = 38;
+        EncryptPacket(ackBuf.data(), 0x42);
+        BroadcastPacketToMap(playerMapID, ackBuf);
+        return;
+    }
+
+
+
+    // === bType=4, bKind=8（狮子吼）：范围恐惧 ===
+    if (tpl && tpl->bType == 4 && tpl->bKind == 8 && pMugongData) {
+        float fearRange = (pMugongData->wAttackRange > 0) ? (float)pMugongData->wAttackRange : 30.0f;
+        WORD successRate = pMugongData->wSuccessRatePerc;
+        DWORD fearDuration = pMugongData->dwKeepUpTime * 1000; // 秒→毫秒
+
+        if (g_MapInstances.count(playerMapID)) {
+            CMapInstance* mapInst = g_MapInstances[playerMapID];
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            PlayerData* pCaster = mapInst->GetPlayer(dwAttackID);
+            if (pCaster) {
+                WORD cx = pCaster->wPosX, cy = pCaster->wPosY;
+                std::vector<MonsterData*> aoiMonsters = mapInst->GetMonstersInAOI(cx, cy);
+                int fearedCount = 0;
+                for (MonsterData* pMon : aoiMonsters) {
+                    if (!pMon || pMon->dwHpCur == 0) continue;
+                    float dx = (float)pMon->wPosX - (float)cx;
+                    float dy = (float)pMon->wPosY - (float)cy;
+                    if (sqrtf(dx * dx + dy * dy) > fearRange) continue;
+
+                    // 成功率判定
+                    if (successRate < 100 && (WORD)(rand() % 100) >= successRate) {
+                        LOG("[MugongHandler] Fear MISS on monster " + std::to_string(pMon->dwObjectID) + " (rate=" + std::to_string(successRate) + "%)");
+                        continue;
+                    }
+
+                    // 挂恐惧 debuff
+                    PlayerData::sActiveBuff fearBuff;
+                    fearBuff.dwMugongID = dwMugongID;
+                    fearBuff.bLevel = bMugongLevel;
+                    fearBuff.dwEndTime = GetTickCount() + fearDuration;
+                    fearBuff.bIsDebuff = true;
+                    pMon->activeBuffs[dwMugongID] = fearBuff;
+                    pMon->dwTargetID = 0; // 立即脱战
+
+                    // 广播 0x402C 给怪物身上显示恐惧特效
+                    std::vector<BYTE> fearAck(4 + 11);
+                    BYTE* fp = fearAck.data() + 4;
+                    fp[0] = 0;
+                    *(DWORD*)(fp + 1) = pMon->dwObjectID;
+                    fp[5] = pMon->bObjectType; // 3=Monster
+                    *(DWORD*)(fp + 6) = dwMugongID;
+                    fp[10] = bMugongLevel;
+                    PACKET_HEADER* fh = (PACKET_HEADER*)fearAck.data();
+                    fh->id = 0x402C; fh->payloadSize = 11;
+                    EncryptPacket(fearAck.data(), 0x42);
+                    BroadcastPacketToMap(playerMapID, fearAck);
+
+                    fearedCount++;
+                    LOG("[MugongHandler] Fear SUCCESS on monster " + std::to_string(pMon->dwObjectID) + " duration=" + std::to_string(pMugongData->dwKeepUpTime) + "s");
+                }
+                LOG("[MugongHandler] Fear Skill " + std::to_string(dwMugongID) + " feared " + std::to_string(fearedCount) + " monsters in range " + std::to_string((int)fearRange));
+            }
+        }
+
+        // 广播 0x4016 播放施法者特效
+        std::vector<BYTE> ackBuf(4 + 38);
+        BYTE* p = ackBuf.data() + 4;
+        p[0] = 0;
+        *(DWORD*)(p + 1) = dwMugongID;
+        p[5] = bMugongLevel;
+        p[6] = 1;
+        *(DWORD*)(p + 7) = dwAttackID;
+        *(WORD*)(p + 11) = wAttackPosX;
+        *(WORD*)(p + 13) = wAttackPosY;
+        p[15] = bAttackHeight;
+        p[16] = 1;
+        *(DWORD*)(p + 17) = dwAttackID;
+        *(DWORD*)(p + 21) = 0; *(DWORD*)(p + 25) = 0;
+        *(DWORD*)(p + 29) = 0; *(DWORD*)(p + 33) = 0;
+        p[37] = 0;
+        PACKET_HEADER* head2 = (PACKET_HEADER*)ackBuf.data();
+        head2->id = 0x4016; head2->payloadSize = 38;
+        EncryptPacket(ackBuf.data(), 0x42);
+        BroadcastPacketToMap(playerMapID, ackBuf);
+        return;
+    }
+
+
+    // === bType=4, bKind=16（迷踪拳 96）：范围致盲 ===
+    // 致盲效果：被致盲怪物命中率大幅降低（攻击大概率MISS）
+    // 与恐惧区别：不脱战不清仇恨，怪物仍然攻击但打不中
+    if (tpl && tpl->bType == 4 && tpl->bKind == 16 && pMugongData) {
+        float blindRange = (pMugongData->wAttackRange > 0) ? (float)pMugongData->wAttackRange : 30.0f;
+        WORD successRate = pMugongData->wSuccessRatePerc;
+        DWORD blindDuration = pMugongData->dwKeepUpTime * 1000; // 秒→毫秒
+
+        if (g_MapInstances.count(playerMapID)) {
+            CMapInstance* mapInst = g_MapInstances[playerMapID];
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            PlayerData* pCaster = mapInst->GetPlayer(dwAttackID);
+            if (pCaster) {
+                WORD cx = pCaster->wPosX, cy = pCaster->wPosY;
+                std::vector<MonsterData*> aoiMonsters = mapInst->GetMonstersInAOI(cx, cy);
+                int blindedCount = 0;
+                for (MonsterData* pMon : aoiMonsters) {
+                    if (!pMon || pMon->dwHpCur == 0) continue;
+                    float dx = (float)pMon->wPosX - (float)cx;
+                    float dy = (float)pMon->wPosY - (float)cy;
+                    if (sqrtf(dx * dx + dy * dy) > blindRange) continue;
+
+                    // 成功率判定
+                    if (successRate < 100 && (WORD)(rand() % 100) >= successRate) {
+                        LOG("[MugongHandler] Blind MISS on monster " + std::to_string(pMon->dwObjectID) + " (rate=" + std::to_string(successRate) + "%)");
+                        continue;
+                    }
+
+                    // 挂致盲 debuff（不清仇恨，怪物继续攻击但MISS）
+                    PlayerData::sActiveBuff blindBuff;
+                    blindBuff.dwMugongID = dwMugongID;
+                    blindBuff.bLevel = bMugongLevel;
+                    blindBuff.dwEndTime = GetTickCount() + blindDuration;
+                    blindBuff.bIsDebuff = true;
+                    pMon->activeBuffs[dwMugongID] = blindBuff;
+                    // 注意：不设置 dwTargetID=0，怪物照常锁定目标
+
+                    // 广播 0x402C 给怪物身上显示致盲特效
+                    std::vector<BYTE> blindAck(4 + 11);
+                    BYTE* bp = blindAck.data() + 4;
+                    bp[0] = 0;
+                    *(DWORD*)(bp + 1) = pMon->dwObjectID;
+                    bp[5] = pMon->bObjectType; // 3=Monster
+                    *(DWORD*)(bp + 6) = dwMugongID;
+                    bp[10] = bMugongLevel;
+                    PACKET_HEADER* bh = (PACKET_HEADER*)blindAck.data();
+                    bh->id = 0x402C; bh->payloadSize = 11;
+                    EncryptPacket(blindAck.data(), 0x42);
+                    BroadcastPacketToMap(playerMapID, blindAck);
+
+                    blindedCount++;
+                    LOG("[MugongHandler] Blind SUCCESS on monster " + std::to_string(pMon->dwObjectID) + " duration=" + std::to_string(pMugongData->dwKeepUpTime) + "s");
+                }
+                LOG("[MugongHandler] Blind Skill " + std::to_string(dwMugongID) + " blinded " + std::to_string(blindedCount) + " monsters in range " + std::to_string((int)blindRange));
+            }
+        }
+
+        // 广播 0x4016 施法动画
+        std::vector<BYTE> ackBuf(4 + 38);
+        BYTE* p = ackBuf.data() + 4;
+        p[0] = 0;
+        *(DWORD*)(p + 1) = dwMugongID;
+        p[5] = bMugongLevel;
+        p[6] = 1;
+        *(DWORD*)(p + 7) = dwAttackID;
+        *(WORD*)(p + 11) = wAttackPosX;
+        *(WORD*)(p + 13) = wAttackPosY;
+        p[15] = bAttackHeight;
+        p[16] = 1;
+        *(DWORD*)(p + 17) = dwAttackID;
+        *(DWORD*)(p + 21) = 0; *(DWORD*)(p + 25) = 0;
+        *(DWORD*)(p + 29) = 0; *(DWORD*)(p + 33) = 0;
+        p[37] = 0;
+        PACKET_HEADER* head3 = (PACKET_HEADER*)ackBuf.data();
+        head3->id = 0x4016; head3->payloadSize = 38;
+        EncryptPacket(ackBuf.data(), 0x42);
+        BroadcastPacketToMap(playerMapID, ackBuf);
+        return;
+    }
+
+
+    // === bType=4, bKind=17（锁骨术 98）：单体麻痹 ===
+    // 麻痹效果：目标不可移动、不可攻击、不可施法，直到持续时间结束
+    if (tpl && tpl->bType == 4 && tpl->bKind == 17 && pMugongData) {
+        WORD successRate = pMugongData->wSuccessRatePerc;
+        DWORD paraDuration = pMugongData->dwKeepUpTime * 1000;
+
+        if (g_MapInstances.count(playerMapID) && dwDefenseID != 0) {
+            CMapInstance* mapInst = g_MapInstances[playerMapID];
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+
+            // 单体技能：对目标怪物释放
+            MonsterData* pTarget = mapInst->GetMonster(dwDefenseID);
+            if (pTarget && pTarget->dwHpCur > 0) {
+                // 距离校验
+                PlayerData* pCaster = mapInst->GetPlayer(dwAttackID);
+                bool inRange = true;
+                if (pCaster && pMugongData->wAttackRange > 0) {
+                    float dx = (float)pTarget->wPosX - (float)pCaster->wPosX;
+                    float dy = (float)pTarget->wPosY - (float)pCaster->wPosY;
+                    if (sqrtf(dx * dx + dy * dy) > (float)pMugongData->wAttackRange) {
+                        inRange = false;
+                    }
+                }
+
+                if (inRange) {
+                    // 成功率判定
+                    bool success = (successRate >= 100) || ((WORD)(rand() % 100) < successRate);
+                    if (success) {
+                        PlayerData::sActiveBuff paraBuff;
+                        paraBuff.dwMugongID = dwMugongID;
+                        paraBuff.bLevel = bMugongLevel;
+                        paraBuff.dwEndTime = GetTickCount() + paraDuration;
+                        paraBuff.bIsDebuff = true;
+                        pTarget->activeBuffs[dwMugongID] = paraBuff;
+
+                        // 广播 0x402C 显示麻痹特效
+                        std::vector<BYTE> paraAck(4 + 11);
+                        BYTE* pp = paraAck.data() + 4;
+                        pp[0] = 0;
+                        *(DWORD*)(pp + 1) = pTarget->dwObjectID;
+                        pp[5] = pTarget->bObjectType;
+                        *(DWORD*)(pp + 6) = dwMugongID;
+                        pp[10] = bMugongLevel;
+                        PACKET_HEADER* ph = (PACKET_HEADER*)paraAck.data();
+                        ph->id = 0x402C; ph->payloadSize = 11;
+                        EncryptPacket(paraAck.data(), 0x42);
+                        BroadcastPacketToMap(playerMapID, paraAck);
+
+                        LOG("[MugongHandler] Paralyze SUCCESS on monster " + std::to_string(pTarget->dwObjectID) + " duration=" + std::to_string(pMugongData->dwKeepUpTime) + "s");
+                    } else {
+                        LOG("[MugongHandler] Paralyze MISS on monster " + std::to_string(pTarget->dwObjectID) + " (rate=" + std::to_string(successRate) + "%)");
+                    }
+                }
+            }
+        }
+
+        // 广播 0x4016 施法动画
+        std::vector<BYTE> ackBuf(4 + 38, 0);
+        BYTE* p = ackBuf.data() + 4;
+        p[0] = 0;
+        *(DWORD*)(p + 1) = dwMugongID;
+        p[5] = bMugongLevel;
+        p[6] = 1;
+        *(DWORD*)(p + 7) = dwAttackID;
+        *(WORD*)(p + 11) = wAttackPosX;
+        *(WORD*)(p + 13) = wAttackPosY;
+        p[15] = bAttackHeight;
+        p[16] = bDefenseType;
+        *(DWORD*)(p + 17) = dwDefenseID;
+        *(DWORD*)(p + 21) = 0; *(DWORD*)(p + 25) = 0;
+        *(DWORD*)(p + 29) = 0; *(DWORD*)(p + 33) = 0;
+        p[37] = 0;
+        PACKET_HEADER* head4 = (PACKET_HEADER*)ackBuf.data();
+        head4->id = 0x4016; head4->payloadSize = 38;
+        EncryptPacket(ackBuf.data(), 0x42);
+        BroadcastPacketToMap(playerMapID, ackBuf);
+        return;
+    }
+
+    // === bType=4, bKind=18（大擒拿手/擒拿神功）：范围定身 ===
+    // 定身效果：目标不可移动，但可以原地攻击
+    if (tpl && tpl->bType == 4 && tpl->bKind == 18 && pMugongData) {
+        float rootRange = (pMugongData->wAttackRange > 0) ? (float)pMugongData->wAttackRange : 60.0f;
+        WORD successRate = pMugongData->wSuccessRatePerc;
+        DWORD rootDuration = pMugongData->dwKeepUpTime * 1000;
+
+        if (g_MapInstances.count(playerMapID)) {
+            CMapInstance* mapInst = g_MapInstances[playerMapID];
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            PlayerData* pCaster = mapInst->GetPlayer(dwAttackID);
+            if (pCaster) {
+                WORD cx = pCaster->wPosX, cy = pCaster->wPosY;
+                std::vector<MonsterData*> aoiMonsters = mapInst->GetMonstersInAOI(cx, cy);
+                int rootedCount = 0;
+                for (MonsterData* pMon : aoiMonsters) {
+                    if (!pMon || pMon->dwHpCur == 0) continue;
+                    float dx = (float)pMon->wPosX - (float)cx;
+                    float dy = (float)pMon->wPosY - (float)cy;
+                    if (sqrtf(dx * dx + dy * dy) > rootRange) continue;
+
+                    // 成功率判定
+                    if (successRate < 100 && (WORD)(rand() % 100) >= successRate) {
+                        LOG("[MugongHandler] Root MISS on monster " + std::to_string(pMon->dwObjectID) + " (rate=" + std::to_string(successRate) + "%)");
+                        continue;
+                    }
+
+                    // 挂定身 debuff（不清仇恨，怪物原地攻击但不可移动）
+                    PlayerData::sActiveBuff rootBuff;
+                    rootBuff.dwMugongID = dwMugongID;
+                    rootBuff.bLevel = bMugongLevel;
+                    rootBuff.dwEndTime = GetTickCount() + rootDuration;
+                    rootBuff.bIsDebuff = true;
+                    pMon->activeBuffs[dwMugongID] = rootBuff;
+
+                    // 广播 0x402C 特效
+                    std::vector<BYTE> rootAck(4 + 11);
+                    BYTE* rp = rootAck.data() + 4;
+                    rp[0] = 0;
+                    *(DWORD*)(rp + 1) = pMon->dwObjectID;
+                    rp[5] = pMon->bObjectType;
+                    *(DWORD*)(rp + 6) = dwMugongID;
+                    rp[10] = bMugongLevel;
+                    PACKET_HEADER* rh = (PACKET_HEADER*)rootAck.data();
+                    rh->id = 0x402C; rh->payloadSize = 11;
+                    EncryptPacket(rootAck.data(), 0x42);
+                    BroadcastPacketToMap(playerMapID, rootAck);
+
+                    rootedCount++;
+                    LOG("[MugongHandler] Root SUCCESS on monster " + std::to_string(pMon->dwObjectID) + " duration=" + std::to_string(pMugongData->dwKeepUpTime) + "s");
+                }
+                LOG("[MugongHandler] Root Skill " + std::to_string(dwMugongID) + " rooted " + std::to_string(rootedCount) + " monsters in range " + std::to_string((int)rootRange));
+            }
+        }
+
+        // 广播 0x4016 施法动画
+        std::vector<BYTE> ackBuf(4 + 38, 0);
+        BYTE* p = ackBuf.data() + 4;
+        p[0] = 0;
+        *(DWORD*)(p + 1) = dwMugongID;
+        p[5] = bMugongLevel;
+        p[6] = 1;
+        *(DWORD*)(p + 7) = dwAttackID;
+        *(WORD*)(p + 11) = wAttackPosX;
+        *(WORD*)(p + 13) = wAttackPosY;
+        p[15] = bAttackHeight;
+        p[16] = 1;
+        *(DWORD*)(p + 17) = dwAttackID;
+        *(DWORD*)(p + 21) = 0; *(DWORD*)(p + 25) = 0;
+        *(DWORD*)(p + 29) = 0; *(DWORD*)(p + 33) = 0;
+        p[37] = 0;
+        PACKET_HEADER* head5 = (PACKET_HEADER*)ackBuf.data();
+        head5->id = 0x4016; head5->payloadSize = 38;
+        EncryptPacket(ackBuf.data(), 0x42);
+        BroadcastPacketToMap(playerMapID, ackBuf);
+        return;
+    }
+
+
+    // === bType=4, bKind=48（引兽术 65 / 收神气强 175）：宠物增益 buff ===
+    // 提升宠物攻击(wIncAtkPerc)、防御(wIncDefPerc)、命中(wIncRatePerc)
+    // TODO: 宠物系统实现后，将 buff 实际应用到宠物实体的属性上
+    if (tpl && tpl->bType == 4 && tpl->bKind == 48 && pMugongData) {
+        LOG("[MugongHandler] PetBuff Skill " + std::to_string(dwMugongID) + " Lv" + std::to_string(bMugongLevel)
+            + " cast by " + std::to_string(dwAttackID)
+            + " atkPerc=" + std::to_string(pMugongData->wIncAtkPerc)
+            + " defPerc=" + std::to_string(pMugongData->wIncDefPerc)
+            + " ratePerc=" + std::to_string(pMugongData->wIncRatePerc)
+            + " duration=" + std::to_string(pMugongData->dwKeepUpTime) + "s"
+            + " (PetSystem not yet implemented, buff visual only)");
+
+        // 广播 0x402C buff 特效（挂在施放者身上，客户端显示光环）
+        std::vector<BYTE> buffAck(4 + 11);
+        BYTE* bp = buffAck.data() + 4;
+        bp[0] = 0;
+        *(DWORD*)(bp + 1) = dwAttackID;
+        bp[5] = 1; // bObjectType = PC
+        *(DWORD*)(bp + 6) = dwMugongID;
+        bp[10] = bMugongLevel;
+        PACKET_HEADER* bh = (PACKET_HEADER*)buffAck.data();
+        bh->id = 0x402C; bh->payloadSize = 11;
+        EncryptPacket(buffAck.data(), 0x42);
+        BroadcastPacketToMap(playerMapID, buffAck);
+
+        // 广播 0x4016 施法动画
+        std::vector<BYTE> ackBuf(4 + 38, 0);
+        BYTE* p = ackBuf.data() + 4;
+        p[0] = 0; *(DWORD*)(p + 1) = dwMugongID; p[5] = bMugongLevel; p[6] = 1;
+        *(DWORD*)(p + 7) = dwAttackID; *(WORD*)(p + 11) = wAttackPosX; *(WORD*)(p + 13) = wAttackPosY;
+        p[15] = bAttackHeight; p[16] = 1; *(DWORD*)(p + 17) = dwAttackID;
+        *(DWORD*)(p + 21) = 0; *(DWORD*)(p + 25) = 0; *(DWORD*)(p + 29) = 0; *(DWORD*)(p + 33) = 0; p[37] = 0;
+        PACKET_HEADER* head11 = (PACKET_HEADER*)ackBuf.data();
+        head11->id = 0x4016; head11->payloadSize = 38;
+        EncryptPacket(ackBuf.data(), 0x42);
+        BroadcastPacketToMap(playerMapID, ackBuf);
+        return;
+    }
+
+    // === bType=4, bKind=24（寸草不生 127）：地面持续 AoE DoT ===
+    // 在施放者脚下布置毒雾，每 nEtc2 ms 对 nEtc1 半径内怪物造成 攻击×wIncAtkPerc% 伤害
+    if (tpl && tpl->bType == 4 && tpl->bKind == 24 && pMugongData) {
+        DWORD dotDuration = pMugongData->dwKeepUpTime * 1000;
+        float aoeRadius = (pMugongData->nEtc1 > 0) ? (float)pMugongData->nEtc1 : 20.0f;
+        DWORD tickInterval = (pMugongData->nEtc2 > 0) ? (DWORD)pMugongData->nEtc2 : 2000;
+        WORD atkPerc = pMugongData->wIncAtkPerc;
+
+        DWORD casterAtk = 50;
+        WORD castX = wAttackPosX, castY = wAttackPosY;
+
+        if (g_MapInstances.count(playerMapID)) {
+            CMapInstance* mapInst = g_MapInstances[playerMapID];
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            PlayerData* pCaster = mapInst->GetPlayer(dwAttackID);
+            if (pCaster) {
+                casterAtk = pCaster->dwTotalAtk;
+                castX = pCaster->wPosX;
+                castY = pCaster->wPosY;
+            }
+
+            // 创建地面特效
+            CMapInstance::sGroundEffect ge;
+            ge.dwMugongID = dwMugongID;
+            ge.bLevel = bMugongLevel;
+            ge.dwCasterID = dwAttackID;
+            ge.wPosX = castX;
+            ge.wPosY = castY;
+            ge.fRadius = aoeRadius;
+            ge.dwTickInterval = tickInterval;
+            ge.wAtkPerc = atkPerc;
+            ge.dwSnapshotAtk = casterAtk;
+            ge.dwEndTime = GetTickCount() + dotDuration;
+            ge.dwLastTickTime = GetTickCount();
+            ge.dwMapID = playerMapID;
+            mapInst->AddGroundEffect(ge);
+        }
+
+        // 广播 0x402C 通知客户端创建毒雾特效（挂在施放者身上）
+        std::vector<BYTE> buffAck(4 + 11);
+        BYTE* bp = buffAck.data() + 4;
+        bp[0] = 0;
+        *(DWORD*)(bp + 1) = dwAttackID;
+        bp[5] = 1; // bObjectType = PC
+        *(DWORD*)(bp + 6) = dwMugongID;
+        bp[10] = bMugongLevel;
+        PACKET_HEADER* bh = (PACKET_HEADER*)buffAck.data();
+        bh->id = 0x402C; bh->payloadSize = 11;
+        EncryptPacket(buffAck.data(), 0x42);
+        BroadcastPacketToMap(playerMapID, buffAck);
+
+        // 广播 0x4016 施法动画
+        std::vector<BYTE> ackBuf(4 + 38, 0);
+        BYTE* p = ackBuf.data() + 4;
+        p[0] = 0; *(DWORD*)(p + 1) = dwMugongID; p[5] = bMugongLevel; p[6] = 1;
+        *(DWORD*)(p + 7) = dwAttackID; *(WORD*)(p + 11) = castX; *(WORD*)(p + 13) = castY;
+        p[15] = bAttackHeight; p[16] = 1; *(DWORD*)(p + 17) = dwAttackID;
+        *(DWORD*)(p + 21) = 0; *(DWORD*)(p + 25) = 0; *(DWORD*)(p + 29) = 0; *(DWORD*)(p + 33) = 0; p[37] = 0;
+        PACKET_HEADER* head10 = (PACKET_HEADER*)ackBuf.data();
+        head10->id = 0x4016; head10->payloadSize = 38;
+        EncryptPacket(ackBuf.data(), 0x42);
+        BroadcastPacketToMap(playerMapID, ackBuf);
+        return;
+    }
+
+    // === bType=4, bKind=19（化骨功 126 / 毒烟神功 198）：单体 DoT 持续掉血 ===
+    // nEtc1=每tick固定伤害, nEtc2=tick间隔(毫秒), dwKeepUpTime=总持续时间
+    if (tpl && tpl->bType == 4 && tpl->bKind == 19 && pMugongData && dwDefenseID != 0) {
+        WORD successRate = pMugongData->wSuccessRatePerc;
+        DWORD dotDuration = pMugongData->dwKeepUpTime * 1000;
+
+        if (g_MapInstances.count(playerMapID)) {
+            CMapInstance* mapInst = g_MapInstances[playerMapID];
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            MonsterData* pMon = mapInst->GetMonster(dwDefenseID);
+            if (pMon && pMon->dwHpCur > 0) {
+                bool success = (successRate >= 100) || ((WORD)(rand() % 100) < successRate);
+                if (success) {
+                    PlayerData::sActiveBuff dotBuff;
+                    dotBuff.dwMugongID = dwMugongID;
+                    dotBuff.bLevel = bMugongLevel;
+                    dotBuff.dwEndTime = GetTickCount() + dotDuration;
+                    dotBuff.bIsDebuff = true;
+                    dotBuff.dwLastTickTime = GetTickCount();
+                    pMon->activeBuffs[dwMugongID] = dotBuff;
+
+                    std::vector<BYTE> dotAck(4 + 11);
+                    BYTE* dp = dotAck.data() + 4;
+                    dp[0] = 0;
+                    *(DWORD*)(dp + 1) = pMon->dwObjectID;
+                    dp[5] = pMon->bObjectType;
+                    *(DWORD*)(dp + 6) = dwMugongID;
+                    dp[10] = bMugongLevel;
+                    PACKET_HEADER* dh = (PACKET_HEADER*)dotAck.data();
+                    dh->id = 0x402C; dh->payloadSize = 11;
+                    EncryptPacket(dotAck.data(), 0x42);
+                    BroadcastPacketToMap(playerMapID, dotAck);
+                    LOG("[MugongHandler] DoT applied on monster " + std::to_string(pMon->dwObjectID)
+                        + " dmg/tick=" + std::to_string(pMugongData->nEtc1) + " interval=" + std::to_string(pMugongData->nEtc2)
+                        + "ms duration=" + std::to_string(pMugongData->dwKeepUpTime) + "s");
+                }
+            }
+        }
+
+        std::vector<BYTE> ackBuf(4 + 38, 0);
+        BYTE* p = ackBuf.data() + 4;
+        p[0] = 0; *(DWORD*)(p + 1) = dwMugongID; p[5] = bMugongLevel; p[6] = 1;
+        *(DWORD*)(p + 7) = dwAttackID; *(WORD*)(p + 11) = wAttackPosX; *(WORD*)(p + 13) = wAttackPosY;
+        p[15] = bAttackHeight; p[16] = bDefenseType; *(DWORD*)(p + 17) = dwDefenseID;
+        *(DWORD*)(p + 21) = 0; *(DWORD*)(p + 25) = 0; *(DWORD*)(p + 29) = 0; *(DWORD*)(p + 33) = 0; p[37] = 0;
+        PACKET_HEADER* head6 = (PACKET_HEADER*)ackBuf.data();
+        head6->id = 0x4016; head6->payloadSize = 38;
+        EncryptPacket(ackBuf.data(), 0x42);
+        BroadcastPacketToMap(playerMapID, ackBuf);
+        return;
+    }
+
+    // === bType=4, bKind=20（气烟逆流 95 / 魔灵神功 196）：单体降命中 debuff ===
+    if (tpl && tpl->bType == 4 && tpl->bKind == 20 && pMugongData && dwDefenseID != 0) {
+        WORD successRate = pMugongData->wSuccessRatePerc;
+        DWORD debuffDuration = pMugongData->dwKeepUpTime * 1000;
+
+        if (g_MapInstances.count(playerMapID)) {
+            CMapInstance* mapInst = g_MapInstances[playerMapID];
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            MonsterData* pMon = mapInst->GetMonster(dwDefenseID);
+            if (pMon && pMon->dwHpCur > 0) {
+                bool success = (successRate >= 100) || ((WORD)(rand() % 100) < successRate);
+                if (success) {
+                    PlayerData::sActiveBuff hitDebuff;
+                    hitDebuff.dwMugongID = dwMugongID;
+                    hitDebuff.bLevel = bMugongLevel;
+                    hitDebuff.dwEndTime = GetTickCount() + debuffDuration;
+                    hitDebuff.bIsDebuff = true;
+                    pMon->activeBuffs[dwMugongID] = hitDebuff;
+
+                    std::vector<BYTE> dAck(4 + 11);
+                    BYTE* dp = dAck.data() + 4;
+                    dp[0] = 0; *(DWORD*)(dp + 1) = pMon->dwObjectID; dp[5] = pMon->bObjectType;
+                    *(DWORD*)(dp + 6) = dwMugongID; dp[10] = bMugongLevel;
+                    PACKET_HEADER* dh = (PACKET_HEADER*)dAck.data();
+                    dh->id = 0x402C; dh->payloadSize = 11;
+                    EncryptPacket(dAck.data(), 0x42);
+                    BroadcastPacketToMap(playerMapID, dAck);
+                    LOG("[MugongHandler] HitDebuff on monster " + std::to_string(pMon->dwObjectID)
+                        + " hitRate=" + std::to_string(pMugongData->wIncRatePerc) + "% duration=" + std::to_string(pMugongData->dwKeepUpTime) + "s");
+                }
+            }
+        }
+
+        std::vector<BYTE> ackBuf(4 + 38, 0);
+        BYTE* p = ackBuf.data() + 4;
+        p[0] = 0; *(DWORD*)(p + 1) = dwMugongID; p[5] = bMugongLevel; p[6] = 1;
+        *(DWORD*)(p + 7) = dwAttackID; *(WORD*)(p + 11) = wAttackPosX; *(WORD*)(p + 13) = wAttackPosY;
+        p[15] = bAttackHeight; p[16] = bDefenseType; *(DWORD*)(p + 17) = dwDefenseID;
+        *(DWORD*)(p + 21) = 0; *(DWORD*)(p + 25) = 0; *(DWORD*)(p + 29) = 0; *(DWORD*)(p + 33) = 0; p[37] = 0;
+        PACKET_HEADER* head7 = (PACKET_HEADER*)ackBuf.data();
+        head7->id = 0x4016; head7->payloadSize = 38;
+        EncryptPacket(ackBuf.data(), 0x42);
+        BroadcastPacketToMap(playerMapID, ackBuf);
+        return;
+    }
+
+    // === bType=4, bKind=21（五毒针 122）：单体攻击倍率 DoT ===
+    if (tpl && tpl->bType == 4 && tpl->bKind == 21 && pMugongData && dwDefenseID != 0) {
+        WORD successRate = pMugongData->wSuccessRatePerc;
+        DWORD dotDuration = pMugongData->dwKeepUpTime * 1000;
+
+        if (g_MapInstances.count(playerMapID)) {
+            CMapInstance* mapInst = g_MapInstances[playerMapID];
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            PlayerData* pCaster = mapInst->GetPlayer(dwAttackID);
+            MonsterData* pMon = mapInst->GetMonster(dwDefenseID);
+            DWORD casterAtk = (pCaster) ? pCaster->dwTotalAtk : 50;
+            if (pMon && pMon->dwHpCur > 0) {
+                bool success = (successRate >= 100) || ((WORD)(rand() % 100) < successRate);
+                if (success) {
+                    PlayerData::sActiveBuff dotBuff;
+                    dotBuff.dwMugongID = dwMugongID;
+                    dotBuff.bLevel = bMugongLevel;
+                    dotBuff.dwEndTime = GetTickCount() + dotDuration;
+                    dotBuff.bIsDebuff = true;
+                    dotBuff.dwLastTickTime = GetTickCount();
+                    dotBuff.dwSnapshotAtk = casterAtk;
+                    pMon->activeBuffs[dwMugongID] = dotBuff;
+
+                    std::vector<BYTE> dotAck(4 + 11);
+                    BYTE* dp = dotAck.data() + 4;
+                    dp[0] = 0; *(DWORD*)(dp + 1) = pMon->dwObjectID; dp[5] = pMon->bObjectType;
+                    *(DWORD*)(dp + 6) = dwMugongID; dp[10] = bMugongLevel;
+                    PACKET_HEADER* dh = (PACKET_HEADER*)dotAck.data();
+                    dh->id = 0x402C; dh->payloadSize = 11;
+                    EncryptPacket(dotAck.data(), 0x42);
+                    BroadcastPacketToMap(playerMapID, dotAck);
+                    DWORD tickDmg = casterAtk * pMugongData->wIncAtkPerc / 100;
+                    LOG("[MugongHandler] AtkDoT on monster " + std::to_string(pMon->dwObjectID)
+                        + " atk=" + std::to_string(casterAtk) + " dmg/tick=" + std::to_string(tickDmg)
+                        + " duration=" + std::to_string(pMugongData->dwKeepUpTime) + "s");
+                }
+            }
+        }
+
+        std::vector<BYTE> ackBuf(4 + 38, 0);
+        BYTE* p = ackBuf.data() + 4;
+        p[0] = 0; *(DWORD*)(p + 1) = dwMugongID; p[5] = bMugongLevel; p[6] = 1;
+        *(DWORD*)(p + 7) = dwAttackID; *(WORD*)(p + 11) = wAttackPosX; *(WORD*)(p + 13) = wAttackPosY;
+        p[15] = bAttackHeight; p[16] = bDefenseType; *(DWORD*)(p + 17) = dwDefenseID;
+        *(DWORD*)(p + 21) = 0; *(DWORD*)(p + 25) = 0; *(DWORD*)(p + 29) = 0; *(DWORD*)(p + 33) = 0; p[37] = 0;
+        PACKET_HEADER* head8 = (PACKET_HEADER*)ackBuf.data();
+        head8->id = 0x4016; head8->payloadSize = 38;
+        EncryptPacket(ackBuf.data(), 0x42);
+        BroadcastPacketToMap(playerMapID, ackBuf);
+        return;
+    }
+
+    // === bType=4, bKind=22（化功术 125）：单体减蓝 DoT ===
+    if (tpl && tpl->bType == 4 && tpl->bKind == 22 && pMugongData && dwDefenseID != 0) {
+        WORD successRate = pMugongData->wSuccessRatePerc;
+        DWORD dotDuration = pMugongData->dwKeepUpTime * 1000;
+
+        if (g_MapInstances.count(playerMapID)) {
+            CMapInstance* mapInst = g_MapInstances[playerMapID];
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            MonsterData* pMon = mapInst->GetMonster(dwDefenseID);
+            if (pMon && pMon->dwHpCur > 0) {
+                bool success = (successRate >= 100) || ((WORD)(rand() % 100) < successRate);
+                if (success) {
+                    PlayerData::sActiveBuff mpDot;
+                    mpDot.dwMugongID = dwMugongID;
+                    mpDot.bLevel = bMugongLevel;
+                    mpDot.dwEndTime = GetTickCount() + dotDuration;
+                    mpDot.bIsDebuff = true;
+                    mpDot.dwLastTickTime = GetTickCount();
+                    pMon->activeBuffs[dwMugongID] = mpDot;
+
+                    std::vector<BYTE> dotAck(4 + 11);
+                    BYTE* dp = dotAck.data() + 4;
+                    dp[0] = 0; *(DWORD*)(dp + 1) = pMon->dwObjectID; dp[5] = pMon->bObjectType;
+                    *(DWORD*)(dp + 6) = dwMugongID; dp[10] = bMugongLevel;
+                    PACKET_HEADER* dh = (PACKET_HEADER*)dotAck.data();
+                    dh->id = 0x402C; dh->payloadSize = 11;
+                    EncryptPacket(dotAck.data(), 0x42);
+                    BroadcastPacketToMap(playerMapID, dotAck);
+                    LOG("[MugongHandler] MpDot on monster " + std::to_string(pMon->dwObjectID)
+                        + " drain=" + std::to_string(pMugongData->nEtc1) + "/tick");
+                }
+            }
+        }
+
+        std::vector<BYTE> ackBuf(4 + 38, 0);
+        BYTE* p = ackBuf.data() + 4;
+        p[0] = 0; *(DWORD*)(p + 1) = dwMugongID; p[5] = bMugongLevel; p[6] = 1;
+        *(DWORD*)(p + 7) = dwAttackID; *(WORD*)(p + 11) = wAttackPosX; *(WORD*)(p + 13) = wAttackPosY;
+        p[15] = bAttackHeight; p[16] = bDefenseType; *(DWORD*)(p + 17) = dwDefenseID;
+        *(DWORD*)(p + 21) = 0; *(DWORD*)(p + 25) = 0; *(DWORD*)(p + 29) = 0; *(DWORD*)(p + 33) = 0; p[37] = 0;
+        PACKET_HEADER* head9 = (PACKET_HEADER*)ackBuf.data();
+        head9->id = 0x4016; head9->payloadSize = 38;
+        EncryptPacket(ackBuf.data(), 0x42);
+        BroadcastPacketToMap(playerMapID, ackBuf);
+        return;
+    }
 
 
     // 1.5. Distance validation (only for targeted skills with wDistance > 0)
@@ -1373,11 +1380,11 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
     
 
-    // 3. If it's a buff skill (e.g. 64) or a special dragon skill (IDs 164-171), broadcast KeepUpMugongStartAck (0x402C)
+    // 3. Buff/龙技能路由（基于 bType 数据驱动）
+    // bType=5 即龙技能，isBuff 覆盖所有 dwKeepUpTime > 0 的技能（含经功等）
+    bool isDragonSkill = (tpl && tpl->bType == 5);
 
-    bool isDragonSkill = (dwMugongID >= 164 && dwMugongID <= 171);
-
-    if (isBuff || dwMugongID == 64 || isDragonSkill) {
+    if (isBuff || isDragonSkill) {
 
         bool isDuplicate = false;
 
@@ -1474,6 +1481,51 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
         DWORD buffCharID = dwAttackID - 400000000;
 
         PlayerManager::GetInstance().RecalculateStats(buffCharID, false);
+
+        // bType=4, bKind=7（九天凤舞/元气神功）：范围内友方也挂同样buff
+        if (tpl && tpl->bType == 4 && tpl->bKind == 7 && pMugongData && g_MapInstances.count(playerMapID)) {
+            CMapInstance* mapInst = g_MapInstances[playerMapID];
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            PlayerData* pCaster = mapInst->GetPlayer(dwAttackID);
+            if (pCaster) {
+                float buffRange = (pMugongData->wAttackRange > 0) ? (float)pMugongData->wAttackRange : 50.0f;
+                WORD cx = pCaster->wPosX, cy = pCaster->wPosY;
+                DWORD endTime = GetTickCount() + pMugongData->dwKeepUpTime * 1000;
+
+                std::vector<PlayerData*> aoiPlayers = mapInst->GetPlayersInAOI(cx, cy);
+                for (PlayerData* pAlly : aoiPlayers) {
+                    if (!pAlly || pAlly->dwObjectID == dwAttackID || pAlly->dwHpCur == 0) continue;
+                    float dx = (float)pAlly->wPosX - (float)cx;
+                    float dy = (float)pAlly->wPosY - (float)cy;
+                    if (sqrtf(dx * dx + dy * dy) > buffRange) continue;
+
+                    // 挂buff
+                    PlayerData::sActiveBuff allyBuff;
+                    allyBuff.dwMugongID = dwMugongID;
+                    allyBuff.bLevel = bMugongLevel;
+                    allyBuff.dwEndTime = endTime;
+                    allyBuff.bIsDebuff = false;
+                    pAlly->activeBuffs[dwMugongID] = allyBuff;
+
+                    // 广播 0x402C 给队友
+                    std::vector<BYTE> allyAck(4 + 11);
+                    BYTE* abp = allyAck.data() + 4;
+                    abp[0] = 0;
+                    *(DWORD*)(abp + 1) = pAlly->dwObjectID;
+                    abp[5] = 1;
+                    *(DWORD*)(abp + 6) = dwMugongID;
+                    abp[10] = bMugongLevel;
+                    PACKET_HEADER* ah = (PACKET_HEADER*)allyAck.data();
+                    ah->id = 0x402C; ah->payloadSize = 11;
+                    EncryptPacket(allyAck.data(), 0x42);
+                    BroadcastPacketToMap(playerMapID, allyAck);
+
+                    // 重算队友属性
+                    PlayerManager::GetInstance().RecalculateStats(pAlly->dwObjectID - 400000000, false);
+                    LOG("[MugongHandler] AOE Buff " + std::to_string(dwMugongID) + " applied to ally " + std::to_string(pAlly->dwObjectID));
+                }
+            }
+        }
 
     }
 
@@ -1583,1216 +1635,11 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
     std::vector<std::vector<BYTE>> deferredSplashBroadcasts;
 
 
-    if (!isBuff && dwMugongID != 64 && bDefenseType == 3) {
-
-        if (g_MapInstances.count(playerMapID)) {
-
-            CMapInstance* mapInst = g_MapInstances[playerMapID];
-
-            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-
-            MonsterData* pTarget = mapInst->GetMonster(dwDefenseID);
-
-            if (pTarget && pTarget->dwHpCur > 0) {
-
-                bool sIsReturning = pTarget->bIsReturning;
-
-                // Use template defense since MonsterData doesn't store wWepDef
-
-                DWORD monsterDef = g_NpcTemplates.count(pTarget->bPropType) ? g_NpcTemplates[pTarget->bPropType].dwDefInit : 0;
-
-                
-
-                // �����㨦 Debuff ����
-
-                for (auto& bf : pTarget->activeBuffs) {
-
-                    sMugongList* bd = MugongManager::GetInstance()->GetMugongLevelData(bf.second.dwMugongID, bf.second.bLevel);
-
-                    if (bd) {
-
-                        if (bd->wIncDefPerc > 0) {
-
-                            monsterDef = monsterDef * bd->wIncDefPerc / 100;
-
-                        }
-
-                        if (bd->wIncDef > 0) {
-
-                            if (monsterDef > bd->wIncDef) monsterDef -= bd->wIncDef; else monsterDef = 0;
-
-                        }
-
-                    }
-
-                }
-
-
-
-                WORD monsterAvoid = pTarget->wAvoidRatio;
-
-
-
-                PlayerData* pAttacker = mapInst->GetPlayer(dwAttackID);
-
-                
-
-                // Sacrifice Cost Logic (Class 5 skills)
-
-                DWORD hpSacrificed = 0;
-
-                bool isSacrifice = (dwMugongID == 37 || (pMugongData && pMugongData->wIncHpCurPerc > 0 && pMugongData->wIncHpCurPerc < 100));
-
-                if (isSacrifice && pAttacker) {
-
-                    BYTE pct = pMugongData ? pMugongData->wIncHpCurPerc : 20;
-
-                    hpSacrificed = pAttacker->dwHpCur * pct / 100;
-
-                    if (hpSacrificed > 0) {
-
-                        pAttacker->dwHpCur = (std::max)(1UL, pAttacker->dwHpCur - hpSacrificed);
-
-                        LOG("[MugongHandler] Sacrifice Skill " + std::to_string(dwMugongID) + " consumed " 
-
-                            + std::to_string(hpSacrificed) + " HP (New HP: " + std::to_string(pAttacker->dwHpCur) + ")");
-
-                        
-
-                        // Send 0x3B0D to update client HP/IP bars
-
-                        std::vector<BYTE> hpBuf(4);
-
-                        auto push4 = [&](DWORD d) { hpBuf.push_back(d&0xFF); hpBuf.push_back((d>>8)&0xFF); hpBuf.push_back((d>>16)&0xFF); hpBuf.push_back((d>>24)&0xFF); };
-
-                        auto push2 = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
-
-                        push4(pAttacker->dwHpMax);
-
-                        push4(pAttacker->dwHpCur);
-
-                        push4(pAttacker->wIpMax);
-
-                        push4(pAttacker->wIpCur);
-
-                        hpBuf.push_back(0); // bType
-
-                        PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
-
-                        hpHead->id = 0x3B0D;
-
-                        hpHead->payloadSize = hpBuf.size() - 4;
-
-                        EncryptPacket(hpBuf.data(), 0x42);
-
-                        SafeSend(clientSocket, (const char*)hpBuf.data(), hpBuf.size(), 0);
-
-                    }
-
-                }
-
-
-
-                // Dodge Logic
-
-                DWORD playerAtkRating = 50; 
-
-                if (pAttacker) {
-
-                    playerAtkRating += pAttacker->dwTotalHit;
-
-                }
-
-                
-
-                float hitChance = (float)playerAtkRating / (float)(playerAtkRating + monsterAvoid);
-
-                float dodgeRoll = (float)(rand() % 10000) / 10000.0f;
-
-                
-
-                if (sIsReturning || (monsterAvoid > 0 && dodgeRoll > hitChance)) {
-
-                    p[0] = 1; // 1 = MISS
-
-                    finalDmg = 0;
-
-                } else {
-
-                    p[0] = 2; // 2 = HIT
-
-                    
-
-                    DWORD playerAtk = 50; // Default fallback
-
-                    if (pAttacker) {
-
-                        playerAtk = pAttacker->dwTotalAtk;
-
-                    }
-
-
-
-                    DWORD skillFlatDmg = pMugongData ? pMugongData->dwDamageMul : 0; // Loaded from wIncAtk
-
-                    DWORD skillPerc = pMugongData ? pMugongData->wIncAtkPerc : 0; 
-
-
-
-                    // final = (playerAtk * ((100 + skillPerc) / 100.0f)) + skillFlatDmg
-
-                    float rawDmg = (playerAtk * ((100.0f + skillPerc) / 100.0f)) + skillFlatDmg;
-
-                    
-
-                    // Add sacrifice HP bonus
-
-                    if (hpSacrificed > 0) {
-
-                        rawDmg += hpSacrificed * 2.0f; // 2x HP sacrificed added as flat bonus damage!
-
-                    }
-
-
-
-                    // Random float 90% ~ 110%
-
-                    float roll = 0.9f + ((float)(rand() % 2000) / 10000.0f); // 0.9 + (0 ~ 0.2) = 0.9 ~ 1.1
-
-                    rawDmg *= roll;
-
-
-
-                    // Critical Hit (uses player wCritical stat, fallback 5%)
-
-                    WORD critRate = (pAttacker && pAttacker->wCritical > 0) ? pAttacker->wCritical : 5;
-
-                    if ((WORD)(rand() % 100) < critRate) {
-
-                        rawDmg *= 1.5f;
-
-                        bCritHit = 1; // Critical hit!
-
-                    }
-
-
-
-                    if (rawDmg > monsterDef) rawDmg -= monsterDef;
-
-                    else rawDmg = 1; // Minimum 1 damage
-
-                    
-
-                    finalDmg = (DWORD)rawDmg;
-
-                    // 武功命中蓄力（普通武功技能命中怪物）：施法者处于五行激活状态
-                    if (pAttacker && pAttacker->bCurFiveElm > 0 && (dwMugongID < 150 || dwMugongID > 154)) {
-                        pAttacker->dwFiveElmGauge += 5;
-                        if (pAttacker->dwFiveElmGauge > 5000) pAttacker->dwFiveElmGauge = 5000;
-                        SyncFiveElmStatus(clientSocket, pAttacker->dwObjectID - 400000000, pAttacker);
-                    }
-
-                    
-
-                    if (pTarget->dwHpCur > finalDmg) {
-
-                        pTarget->dwHpCur -= finalDmg;
-
-                    } else {
-
-                        finalDmg = pTarget->dwHpCur;
-
-                        pTarget->dwHpCur = 0;
-
-                        isDead = true;
-
-                        pTarget->dwDeadTime = GetTickCount();
-
-                        pTarget->dwTargetID = 0;
-
-                        deadExp = pTarget->dwExp; // Use computed Init+Inc value
-
-                        DWORD targetFiveElmExp = g_NpcTemplates.count(pTarget->bPropType) ? g_NpcTemplates[pTarget->bPropType].wFiveElmExp : 0;
-                        targetFiveElmExp += pTarget->wIncFiveElmExp;
-
-                        deadEntities.push_back({dwDefenseID, deadExp, g_NpcTemplates[pTarget->bPropType].szName, targetFiveElmExp});
-
-                        DropManager::GetInstance()->GenerateDrops(dwAttackID, *pTarget);
-
-                        LOG("[MugongHandler] Monster " + g_NpcTemplates[pTarget->bPropType].szName + " died from skill " + std::to_string(dwMugongID) + "!");
-
-                    }
-
-                }
-
-                
-
-                // Debuff  (���訨����)
-
-                if (pMugongData && pMugongData->dwKeepUpTime > 0 && p[0] == 2) {
-
-                    PlayerData::sActiveBuff debuff;
-
-                    debuff.dwMugongID = dwMugongID;
-
-                    debuff.bLevel = bMugongLevel;
-
-                    debuff.dwEndTime = GetTickCount() + pMugongData->dwKeepUpTime * 1000;
-
-                    debuff.bIsDebuff = true;
-
-                    pTarget->activeBuffs[dwMugongID] = debuff;
-
-                    LOG("[MugongHandler] Applied debuff skill " + std::to_string(dwMugongID) + " to monster " + std::to_string(dwDefenseID));
-
-                }
-
-                
-
-                // AOE / Splash Damage Logic (Class 6 skills) - �� Debuff 
-
-                sMugongTemplate* sTpl = MugongManager::GetInstance()->GetTemplate(dwMugongID);
-
-                if (IsAoeSkill(dwMugongID, sTpl)) {
-
-                    // �����������������訨��
-
-                    WORD wAoeCenterX = pAttacker ? pAttacker->wPosX : wAttackPosX;
-
-                    WORD wAoeCenterY = pAttacker ? pAttacker->wPosY : wAttackPosY;
-
-                    float splashRange = (pMugongData && pMugongData->wAttackRange > 0) ? (float)pMugongData->wAttackRange : 20.0f;
-
-                    
-
-                    LOG("[MugongHandler] [AOE-Monster] Skill ID: " + std::to_string(dwMugongID) + " Attacker OID: " + std::to_string(dwAttackID) + " Pos: (" + std::to_string(wAoeCenterX) + "," + std::to_string(wAoeCenterY) + ")");
-
-
-
-                    // 1. ��
-
-                    std::vector<MonsterData*> aoiMonsters = mapInst->GetMonstersInAOI(wAoeCenterX, wAoeCenterY);
-
-                    std::vector<MonsterData*> splashMonsters;
-
-                    
-
-                    LOG("[MugongHandler] [AOE-Monster] Scanned " + std::to_string(aoiMonsters.size()) + " potential monsters in AOI");
-
-                    for (MonsterData* pMon : aoiMonsters) {
-
-                        if (!pMon || pMon->dwObjectID == dwDefenseID || pMon->dwHpCur == 0 || pMon->bIsReturning) continue;
-
-                        float dx = (float)pMon->wPosX - (float)wAoeCenterX;
-
-                        float dy = (float)pMon->wPosY - (float)wAoeCenterY;
-
-                        float dist = sqrtf(dx * dx + dy * dy);
-
-                        
-
-                        LOG("[MugongHandler] [AOE-Monster] -> Mon OID: " + std::to_string(pMon->dwObjectID) + " Pos: (" + std::to_string(pMon->wPosX) + "," + std::to_string(pMon->wPosY) + ") Dist: " + std::to_string(dist));
-
-                        if (dist <= splashRange) {
-
-                            splashMonsters.push_back(pMon);
-
-                            if (splashMonsters.size() >= 5) break; // ���5
-
-                        }
-
-                    }
-
-                    LOG("[MugongHandler] [AOE-Monster] -> Splash monsters count selected: " + std::to_string(splashMonsters.size()));
-
-
-
-                    for (MonsterData* pSplashMon : splashMonsters) {
-
-                        DWORD sMonDef = g_NpcTemplates.count(pSplashMon->bPropType) ? g_NpcTemplates[pSplashMon->bPropType].dwDefInit : 0;
-
-                        
-
-                        // ���������� Debuff 
-
-                        for (auto& bf : pSplashMon->activeBuffs) {
-
-                            sMugongList* bd = MugongManager::GetInstance()->GetMugongLevelData(bf.second.dwMugongID, bf.second.bLevel);
-
-                            if (bd) {
-
-                                if (bd->wIncDefPerc > 0) sMonDef = sMonDef * bd->wIncDefPerc / 100;
-
-                                if (bd->wIncDef > 0) {
-
-                                    if (sMonDef > bd->wIncDef) sMonDef -= bd->wIncDef; else sMonDef = 0;
-
-                                }
-
-                            }
-
-                        }
-
-
-
-                        WORD sMonAvoid = pSplashMon->wAvoidRatio;
-
-                        DWORD sPlayerAtkRating = 50 + (pAttacker ? pAttacker->dwTotalHit : 0);
-
-                        float sHitChance = (float)sPlayerAtkRating / (float)(sPlayerAtkRating + sMonAvoid);
-
-                        float sRoll = (float)(rand() % 10000) / 10000.0f;
-
-                        
-
-                        BYTE sCritHit = 0;
-
-                        DWORD sFinalDmg = 0;
-
-                        BYTE sResult = 2; // HIT
-
-                        
-
-                        if (sMonAvoid > 0 && sRoll > sHitChance) {
-
-                            sResult = 1; // MISS
-
-                            sFinalDmg = 0;
-
-                        } else {
-
-                            DWORD pAtk = pAttacker ? pAttacker->dwTotalAtk : 50;
-
-                            DWORD skillFlatDmg = pMugongData ? pMugongData->dwDamageMul : 0;
-
-                            DWORD skillPerc = pMugongData ? pMugongData->wIncAtkPerc : 0;
-
-                            
-
-                            // �����㨦�� 70%
-
-                            float rawDmg = ((pAtk * ((100.0f + skillPerc) / 100.0f)) + skillFlatDmg) * 0.7f;
-
-                            float var = 0.9f + ((float)(rand() % 2000) / 10000.0f);
-
-                            rawDmg *= var;
-
-                            
-
-                            WORD critRate = (pAttacker && pAttacker->wCritical > 0) ? pAttacker->wCritical : 5;
-
-                            if ((WORD)(rand() % 100) < critRate) {
-
-                                rawDmg *= 1.5f;
-
-                                sCritHit = 1;
-
-                            }
-
-                            
-
-                            if (rawDmg > sMonDef) rawDmg -= sMonDef;
-
-                            else rawDmg = 1;
-
-                            
-
-                            sFinalDmg = (DWORD)rawDmg;
-
-                            
-
-                            if (pSplashMon->dwHpCur > sFinalDmg) {
-
-                                pSplashMon->dwHpCur -= sFinalDmg;
-
-                            } else {
-
-                                sFinalDmg = pSplashMon->dwHpCur;
-
-                                pSplashMon->dwHpCur = 0;
-
-                                pSplashMon->dwDeadTime = GetTickCount();
-
-                                pSplashMon->dwTargetID = 0;
-
-                                
-
-                                DWORD splashFiveElmExp = g_NpcTemplates.count(pSplashMon->bPropType) ? g_NpcTemplates[pSplashMon->bPropType].wFiveElmExp : 0;
-                                splashFiveElmExp += pSplashMon->wIncFiveElmExp;
-
-                                deadEntities.push_back({pSplashMon->dwObjectID, pSplashMon->dwExp, g_NpcTemplates[pSplashMon->bPropType].szName, splashFiveElmExp});
-
-                                DropManager::GetInstance()->GenerateDrops(dwAttackID, *pSplashMon);
-
-                                LOG("[MugongHandler] Splash target " + g_NpcTemplates[pSplashMon->bPropType].szName + " died from skill " + std::to_string(dwMugongID) + "!");
-
-                            }
-
-                        }
-
-
-
-                        // Debuff �����������
-
-                        if (pMugongData && pMugongData->dwKeepUpTime > 0 && sResult == 2) {
-
-                            PlayerData::sActiveBuff debuff;
-
-                            debuff.dwMugongID = dwMugongID;
-
-                            debuff.bLevel = bMugongLevel;
-
-                            debuff.dwEndTime = GetTickCount() + pMugongData->dwKeepUpTime * 1000;
-
-                            debuff.bIsDebuff = true;
-
-                            pSplashMon->activeBuffs[dwMugongID] = debuff;
-
-                            LOG("[MugongHandler] Applied splash debuff skill " + std::to_string(dwMugongID) + " to monster " + std::to_string(pSplashMon->dwObjectID));
-
-                        }
-
-                        
-
-                        if (pSplashMon->dwAttackPattern != 0 && pSplashMon->dwHpCur > 0) {
-
-                            pSplashMon->dwTargetID = dwAttackID;
-
-                        }
-
-                        
-
-                        // ���� 0x4016 �衧
-
-                        std::vector<BYTE> splashAckBuf(4 + 38);
-
-                        BYTE* sp = splashAckBuf.data() + 4;
-
-                        sp[0] = sResult; 
-
-                        *(DWORD*)(sp + 1) = dwMugongID;
-
-                        sp[5] = bMugongLevel;
-
-                        sp[6] = 1; 
-
-                        *(DWORD*)(sp + 7) = dwAttackID;
-
-                        *(WORD*)(sp + 11) = wAttackPosX;
-
-                        *(WORD*)(sp + 13) = wAttackPosY;
-
-                        sp[15] = bAttackHeight;
-
-                        sp[16] = 3; 
-
-                        *(DWORD*)(sp + 17) = pSplashMon->dwObjectID;
-
-                        *(DWORD*)(sp + 21) = pSplashMon->dwHpMax;
-
-                        *(DWORD*)(sp + 25) = pSplashMon->dwHpCur;
-
-                        *(DWORD*)(sp + 29) = sFinalDmg;
-
-                        *(DWORD*)(sp + 33) = 0; 
-
-                        sp[37] = sCritHit;
-
-                        
-
-                        PACKET_HEADER* sHead = (PACKET_HEADER*)splashAckBuf.data();
-
-                        sHead->id = 0x4016;
-
-                        sHead->payloadSize = 38;
-
-                        EncryptPacket(splashAckBuf.data(), 0x42);
-
-                        deferredSplashBroadcasts.push_back(splashAckBuf); // [修复死锁] 延迟广播，避免在 mapMutex 内获取 SessionMgr::m_mutex
-
-                    }
-
-
-
-                    // 2. �� PC  (PVP)
-                    // 2. AOE PC 溅射 (PVP) — 仅在攻击者处于自由PK模式(bSafeMode==2)时才扫描玩家
-                    // bSafeMode: 0=保护所有角色, 1=保护本门派, 2=自由PK
-                    if (pAttacker && pAttacker->bSafeMode == 2) {
-                        std::vector<PlayerData*> aoiPlayers = mapInst->GetPlayersInAOI(wAoeCenterX, wAoeCenterY);
-                        std::vector<PlayerData*> splashPlayers;
-                        LOG("[MugongHandler] [AOE-Monster] Scanned " + std::to_string(aoiPlayers.size()) + " potential players in AOI");
-                        for (PlayerData* pPl : aoiPlayers) {
-                            if (!pPl || pPl->dwObjectID == dwAttackID || pPl->dwObjectID == dwDefenseID || pPl->dwHpCur == 0 || pPl->dwInvulnerableUntil > GetTickCount()) continue;
-                            // 组队保护：同队玩家不受AOE伤害
-                            DWORD pID1 = PartyManager::GetInstance().GetPartyID(dwAttackID - 400000000);
-                            DWORD pID2 = PartyManager::GetInstance().GetPartyID(pPl->dwObjectID - 400000000);
-                            if (pID1 != 0 && pID1 == pID2) continue;
-                            float dx = (float)pPl->wPosX - (float)wAoeCenterX;
-                            float dy = (float)pPl->wPosY - (float)wAoeCenterY;
-                            float dist = sqrtf(dx * dx + dy * dy);
-                            if (dist <= splashRange) {
-                                splashPlayers.push_back(pPl);
-                                if (splashPlayers.size() >= 5) break;
-                            }
-                        }
-                        LOG("[MugongHandler] [AOE-Monster] -> Splash players: " + std::to_string(splashPlayers.size()));
-                        for (PlayerData* pSplashPlayer : splashPlayers) {
-                            DWORD sPlDef = pSplashPlayer->dwTotalDef;
-                            WORD sPlDodge = pSplashPlayer->dwTotalDodge;
-                            DWORD sPlayerAtkRating = 50 + (pAttacker ? pAttacker->dwTotalHit : 0);
-                            float sHitChance = (float)sPlayerAtkRating / (float)(sPlayerAtkRating + sPlDodge);
-                            float sRoll = (float)(rand() % 10000) / 10000.0f;
-                            BYTE sCritHit = 0; DWORD sFinalDmg = 0; BYTE sResult = 2;
-                            if (sPlDodge > 0 && sRoll > sHitChance) { sResult = 1; sFinalDmg = 0; }
-                            else {
-                                DWORD pAtk = pAttacker ? pAttacker->dwTotalAtk : 50;
-                                DWORD skillFlatDmg = pMugongData ? pMugongData->dwDamageMul : 0;
-                                DWORD skillPerc = pMugongData ? pMugongData->wIncAtkPerc : 0;
-                                float rawDmg = ((pAtk * ((100.0f + skillPerc) / 100.0f)) + skillFlatDmg) * 0.7f;
-                                float var = 0.9f + ((float)(rand() % 2000) / 10000.0f); rawDmg *= var;
-                                WORD critRate = (pAttacker && pAttacker->wCritical > 0) ? pAttacker->wCritical : 5;
-                                if ((WORD)(rand() % 100) < critRate) { rawDmg *= 1.5f; sCritHit = 1; }
-                                if (rawDmg > sPlDef) rawDmg -= sPlDef; else rawDmg = 1;
-                                sFinalDmg = (DWORD)rawDmg;
-                                if (pSplashPlayer->dwHpCur > sFinalDmg) { pSplashPlayer->dwHpCur -= sFinalDmg; }
-                                else { sFinalDmg = pSplashPlayer->dwHpCur; pSplashPlayer->dwHpCur = 0; pSplashPlayer->dwDeadTime = GetTickCount(); }
-                            }
-                            if (pMugongData && pMugongData->dwKeepUpTime > 0 && sResult == 2) {
-                                sServerObject::sActiveBuff debuff;
-                                debuff.dwMugongID = dwMugongID; debuff.bLevel = bMugongLevel;
-                                debuff.dwEndTime = GetTickCount() + pMugongData->dwKeepUpTime * 1000; debuff.bIsDebuff = true;
-                                pSplashPlayer->activeBuffs[dwMugongID] = debuff;
-                            }
-                            std::vector<BYTE> splashAckBuf(4 + 38);
-                            BYTE* sp = splashAckBuf.data() + 4;
-                            sp[0] = sResult; *(DWORD*)(sp + 1) = dwMugongID; sp[5] = bMugongLevel; sp[6] = 1;
-                            *(DWORD*)(sp + 7) = dwAttackID; *(WORD*)(sp + 11) = wAttackPosX; *(WORD*)(sp + 13) = wAttackPosY; sp[15] = bAttackHeight;
-                            sp[16] = 1; *(DWORD*)(sp + 17) = pSplashPlayer->dwObjectID;
-                            *(DWORD*)(sp + 21) = pSplashPlayer->dwHpMax; *(DWORD*)(sp + 25) = pSplashPlayer->dwHpCur;
-                            *(DWORD*)(sp + 29) = sFinalDmg; *(DWORD*)(sp + 33) = 0; sp[37] = sCritHit;
-                            PACKET_HEADER* sHead = (PACKET_HEADER*)splashAckBuf.data();
-                            sHead->id = 0x4016; sHead->payloadSize = 38;
-                            EncryptPacket(splashAckBuf.data(), 0x42);
-                            deferredSplashBroadcasts.push_back(splashAckBuf); // [修复死锁] 延迟广播
-                            splashPlayerSnapshots.push_back({pSplashPlayer->dwObjectID - 400000000, pSplashPlayer->dwHpMax, pSplashPlayer->dwHpCur, pSplashPlayer->wIpMax, pSplashPlayer->wIpCur});
-                        }
-                    }
-
-                }
-
-                
-
-                if (pTarget->dwAttackPattern != 0 && pTarget->dwHpCur > 0 && !pTarget->bIsReturning) {
-
-                    pTarget->dwTargetID = dwAttackID;
-
-                }
-
-                dwDefHpMax = pTarget->dwHpMax;
-
-                dwDefHpCur = pTarget->dwHpCur;
-
-            }
-
-        }
-
-    }
-
-    else if (!isBuff && dwMugongID != 64 && bDefenseType == 1 && !bNoRealTarget) {
-
-        // PvP (Player vs Player) ���
-
-        if (g_MapInstances.count(playerMapID)) {
-
-            CMapInstance* mapInst = g_MapInstances[playerMapID];
-
-            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-
-            sServerObject* pTarget = mapInst->GetPlayer(dwDefenseID);
-
-            if (pTarget) {
-
-                PlayerData* pAttacker = mapInst->GetPlayer(dwAttackID);
-
-
-
-                // ��ֹȺ����ɱ����Ŀ�����Լ���������Ŀ���˺�����ִ�� AOE ����
-
-                if (dwDefenseID == dwAttackID) goto pvp_aoe_only;
-
-                
-
-                // �������
-
-                DWORD hpSacrificed = 0;
-
-                bool isSacrifice = (dwMugongID == 37 || (pMugongData && pMugongData->wIncHpCurPerc > 0 && pMugongData->wIncHpCurPerc < 100));
-
-                if (isSacrifice && pAttacker) {
-
-                    BYTE pct = pMugongData ? pMugongData->wIncHpCurPerc : 20;
-
-                    hpSacrificed = pAttacker->dwHpCur * pct / 100;
-
-                    if (hpSacrificed > 0) {
-
-                        pAttacker->dwHpCur = (std::max)(1UL, pAttacker->dwHpCur - hpSacrificed);
-
-                        LOG("[MugongHandler] PvP Sacrifice Skill " + std::to_string(dwMugongID) + " consumed " 
-
-                            + std::to_string(hpSacrificed) + " HP");
-
-                        
-
-                        // ���㨨����
-
-                        std::vector<BYTE> hpBuf(4);
-
-                        auto push4 = [&](DWORD d) { hpBuf.push_back(d&0xFF); hpBuf.push_back((d>>8)&0xFF); hpBuf.push_back((d>>16)&0xFF); hpBuf.push_back((d>>24)&0xFF); };
-
-                        auto push2 = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
-
-                        push4(pAttacker->dwHpMax);
-
-                        push4(pAttacker->dwHpCur);
-
-                        push4(pAttacker->wIpMax);
-
-                        push4(pAttacker->wIpCur);
-
-                        hpBuf.push_back(0); 
-
-                        PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
-
-                        hpHead->id = 0x3B0D;
-
-                        hpHead->payloadSize = hpBuf.size() - 4;
-
-                        EncryptPacket(hpBuf.data(), 0x42);
-
-                        SafeSend(clientSocket, (const char*)hpBuf.data(), hpBuf.size(), 0);
-
-                    }
-
-                }
-
-
-
-                // PvP �訦������
-
-                DWORD playerAtkRating = 50; 
-
-                if (pAttacker) {
-
-                    playerAtkRating += pAttacker->dwTotalHit;
-
-                }
-
-                DWORD targetDodge = pTarget->dwTotalDodge;
-
-                
-
-                float hitChance = (float)playerAtkRating / (float)(playerAtkRating + targetDodge);
-
-                float dodgeRoll = (float)(rand() % 10000) / 10000.0f;
-
-                
-
-                if (targetDodge > 0 && dodgeRoll > hitChance) {
-
-                    p[0] = 1; // MISS
-
-                    finalDmg = 0;
-
-                } else if (pTarget->activeBuffs.count(130) > 0) {
-
-                    // 130 ����� PVP ����
-
-                    p[0] = 1; // MISS (��)
-
-                    finalDmg = 0;
-
-                    LOG("[MugongPvp] Player " + pTarget->szName + " protected by Turtle Breath. Zero Damage.");
-
-                } else {
-
-                    // ������ 178 ��
-
-                    if (pTarget->activeBuffs.count(178) > 0) {
-
-                        pTarget->activeBuffs[178].dwEndTime = 0; // �訦
-
-                        LOG("[MugongPvp] Player " + pTarget->szName + " hit while stealth. Expiring Stealth.");
-
-                    }
-
-                    p[0] = 2; // HIT
-
-                    
-
-                    DWORD playerAtk = 50;
-
-                    if (pAttacker) {
-
-                        playerAtk = pAttacker->dwTotalAtk;
-
-                    }
-
-
-
-                    DWORD skillFlatDmg = pMugongData ? pMugongData->dwDamageMul : 0;
-
-                    DWORD skillPerc = pMugongData ? pMugongData->wIncAtkPerc : 0; 
-
-
-
-                    float rawDmg = (playerAtk * ((100.0f + skillPerc) / 100.0f)) + skillFlatDmg;
-
-                    if (hpSacrificed > 0) {
-
-                        rawDmg += hpSacrificed * 2.0f; // ��
-
-                    }
-
-
-
-                    float roll = 0.9f + ((float)(rand() % 2000) / 10000.0f);
-
-                    rawDmg *= roll;
-
-
-
-                    WORD critRate = (pAttacker && pAttacker->wCritical > 0) ? pAttacker->wCritical : 5;
-
-                    if ((WORD)(rand() % 100) < critRate) {
-
-                        rawDmg *= 1.5f;
-
-                        bCritHit = 1; // 
-
-                    }
-
-
-
-                    // ���訦��
-
-                    DWORD targetDef = pTarget->dwTotalDef;
-
-                    if (rawDmg > targetDef) rawDmg -= targetDef;
-
-                    else rawDmg = 1;
-
-                    
-
-                    finalDmg = (DWORD)rawDmg;
-
-                    // 武功PvP命中蓄力与受创蓄力
-                    if (pAttacker && pAttacker->bCurFiveElm > 0 && (dwMugongID < 150 || dwMugongID > 154) && p[0] == 2) {
-                        pAttacker->dwFiveElmGauge += 5;
-                        if (pAttacker->dwFiveElmGauge > 5000) pAttacker->dwFiveElmGauge = 5000;
-                        SyncFiveElmStatus(clientSocket, pAttacker->dwObjectID - 400000000, pAttacker);
-                    }
-                    if (pTarget && pTarget->bCurFiveElm > 0 && p[0] == 2) {
-                        pTarget->dwFiveElmGauge += 10;
-                        if (pTarget->dwFiveElmGauge > 5000) pTarget->dwFiveElmGauge = 5000;
-                        SOCKET targetSock = SessionMgr::GetInstance().GetSocketByCharID(pTarget->dwObjectID - 400000000);
-                        if (targetSock != INVALID_SOCKET) {
-                            SyncFiveElmStatus(targetSock, pTarget->dwObjectID - 400000000, pTarget);
-                        }
-                    }
-
-                    
-
-                    if (pTarget->dwHpCur > finalDmg) {
-
-                        pTarget->dwHpCur -= finalDmg;
-
-                    } else {
-
-                        finalDmg = pTarget->dwHpCur;
-
-                        pTarget->dwHpCur = 0;
-
-                        isDead = true;
-
-                        pTarget->dwDeadTime = GetTickCount();
-
-                        LOG("[MugongHandler] PvP Player " + pTarget->szName + " died from skill " + std::to_string(dwMugongID));
-
-                    }
-
-                }
-
-                
-
-                // Debuff  (���訨����)
-
-                if (pMugongData && pMugongData->dwKeepUpTime > 0 && p[0] == 2) {
-
-                    sServerObject::sActiveBuff debuff;
-
-                    debuff.dwMugongID = dwMugongID;
-
-                    debuff.bLevel = bMugongLevel;
-
-                    debuff.dwEndTime = GetTickCount() + pMugongData->dwKeepUpTime * 1000;
-
-                    debuff.bIsDebuff = true;
-
-                    pTarget->activeBuffs[dwMugongID] = debuff;
-
-                    LOG("[MugongHandler] PvP Debuff Applied skill " + std::to_string(dwMugongID) + " to target player " + std::to_string(dwDefenseID));
-
-                }
-
-
-
-                pvp_aoe_only:
-
-                // AOE / Splash Damage Logic (Class 6 skills) - PVP Target AOE (�� Debuff )
-
-                sMugongTemplate* sTpl = MugongManager::GetInstance()->GetTemplate(dwMugongID);
-
-                if (IsAoeSkill(dwMugongID, sTpl)) {
-
-                    // ������������������PC/����
-
-                    WORD wAoeCenterX = pAttacker ? pAttacker->wPosX : wAttackPosX;
-
-                    WORD wAoeCenterY = pAttacker ? pAttacker->wPosY : wAttackPosY;
-
-                    float splashRange = (pMugongData && pMugongData->wAttackRange > 0) ? (float)pMugongData->wAttackRange : 20.0f;
-
-                    
-
-                    LOG("[MugongHandler] [AOE-PvP] Skill ID: " + std::to_string(dwMugongID) + " Attacker OID: " + std::to_string(dwAttackID) + " Pos: (" + std::to_string(wAoeCenterX) + "," + std::to_string(wAoeCenterY) + ")");
-
-
-
-                    // 1. ��
-
-                    std::vector<MonsterData*> aoiMonsters = mapInst->GetMonstersInAOI(wAoeCenterX, wAoeCenterY);
-
-                    std::vector<MonsterData*> splashMonsters;
-
-                    
-
-                    LOG("[MugongHandler] [AOE-PvP] Scanned " + std::to_string(aoiMonsters.size()) + " potential monsters in AOI");
-
-                    for (MonsterData* pMon : aoiMonsters) {
-
-                        if (!pMon || pMon->dwObjectID == dwDefenseID || pMon->dwHpCur == 0 || pMon->bIsReturning) continue;
-
-                        float dx = (float)pMon->wPosX - (float)wAoeCenterX;
-
-                        float dy = (float)pMon->wPosY - (float)wAoeCenterY;
-
-                        float dist = sqrtf(dx * dx + dy * dy);
-
-                        
-
-                        LOG("[MugongHandler] [AOE-PvP] -> Mon OID: " + std::to_string(pMon->dwObjectID) + " Pos: (" + std::to_string(pMon->wPosX) + "," + std::to_string(pMon->wPosY) + ") Dist: " + std::to_string(dist));
-
-                        if (dist <= splashRange) {
-
-                            splashMonsters.push_back(pMon);
-
-                            if (splashMonsters.size() >= 5) break;
-
-                        }
-
-                    }
-
-                    LOG("[MugongHandler] [AOE-PvP] -> Splash monsters count selected: " + std::to_string(splashMonsters.size()));
-
-
-
-                    for (MonsterData* pSplashMon : splashMonsters) {
-
-                        DWORD sMonDef = g_NpcTemplates.count(pSplashMon->bPropType) ? g_NpcTemplates[pSplashMon->bPropType].dwDefInit : 0;
-
-                        
-
-                        // ���� Debuff ��
-
-                        for (auto& bf : pSplashMon->activeBuffs) {
-
-                            sMugongList* bd = MugongManager::GetInstance()->GetMugongLevelData(bf.second.dwMugongID, bf.second.bLevel);
-
-                            if (bd) {
-
-                                if (bd->wIncDefPerc > 0) sMonDef = sMonDef * bd->wIncDefPerc / 100;
-
-                                if (bd->wIncDef > 0) {
-
-                                    if (sMonDef > bd->wIncDef) sMonDef -= bd->wIncDef; else sMonDef = 0;
-
-                                }
-
-                            }
-
-                        }
-
-
-
-                        WORD sMonAvoid = pSplashMon->wAvoidRatio;
-
-                        DWORD sPlayerAtkRating = 50 + (pAttacker ? pAttacker->dwTotalHit : 0);
-
-                        float sHitChance = (float)sPlayerAtkRating / (float)(sPlayerAtkRating + sMonAvoid);
-
-                        float sRoll = (float)(rand() % 10000) / 10000.0f;
-
-                        
-
-                        BYTE sCritHit = 0;
-
-                        DWORD sFinalDmg = 0;
-
-                        BYTE sResult = 2; // HIT
-
-                        
-
-                        if (sMonAvoid > 0 && sRoll > sHitChance) {
-
-                            sResult = 1; // MISS
-
-                            sFinalDmg = 0;
-
-                        } else {
-
-                            DWORD pAtk = pAttacker ? pAttacker->dwTotalAtk : 50;
-
-                            DWORD skillFlatDmg = pMugongData ? pMugongData->dwDamageMul : 0;
-
-                            DWORD skillPerc = pMugongData ? pMugongData->wIncAtkPerc : 0;
-
-                            
-
-                            float rawDmg = ((pAtk * ((100.0f + skillPerc) / 100.0f)) + skillFlatDmg) * 0.7f;
-
-                            float var = 0.9f + ((float)(rand() % 2000) / 10000.0f);
-
-                            rawDmg *= var;
-
-                            
-
-                            WORD critRate = (pAttacker && pAttacker->wCritical > 0) ? pAttacker->wCritical : 5;
-
-                            if ((WORD)(rand() % 100) < critRate) {
-
-                                rawDmg *= 1.5f;
-
-                                sCritHit = 1;
-
-                            }
-
-                            
-
-                            if (rawDmg > sMonDef) rawDmg -= sMonDef;
-
-                            else rawDmg = 1;
-
-                            
-
-                            sFinalDmg = (DWORD)rawDmg;
-
-                            
-
-                            if (pSplashMon->dwHpCur > sFinalDmg) {
-
-                                pSplashMon->dwHpCur -= sFinalDmg;
-
-                            } else {
-
-                                sFinalDmg = pSplashMon->dwHpCur;
-
-                                pSplashMon->dwHpCur = 0;
-
-                                pSplashMon->dwDeadTime = GetTickCount();
-
-                                pSplashMon->dwTargetID = 0;
-
-                                
-
-                                DWORD splashFiveElmExp2 = g_NpcTemplates.count(pSplashMon->bPropType) ? g_NpcTemplates[pSplashMon->bPropType].wFiveElmExp : 0;
-                                splashFiveElmExp2 += pSplashMon->wIncFiveElmExp;
-
-                                deadEntities.push_back({pSplashMon->dwObjectID, pSplashMon->dwExp, g_NpcTemplates[pSplashMon->bPropType].szName, splashFiveElmExp2});
-
-                                DropManager::GetInstance()->GenerateDrops(dwAttackID, *pSplashMon);
-
-                                LOG("[MugongHandler] Splash target " + g_NpcTemplates[pSplashMon->bPropType].szName + " died from skill " + std::to_string(dwMugongID) + "!");
-
-                            }
-
-                        }
-
-
-
-                        // Debuff ������������
-
-                        if (pMugongData && pMugongData->dwKeepUpTime > 0 && sResult == 2) {
-
-                            PlayerData::sActiveBuff debuff;
-
-                            debuff.dwMugongID = dwMugongID;
-
-                            debuff.bLevel = bMugongLevel;
-
-                            debuff.dwEndTime = GetTickCount() + pMugongData->dwKeepUpTime * 1000;
-
-                            debuff.bIsDebuff = true;
-
-                            pSplashMon->activeBuffs[dwMugongID] = debuff;
-
-                            LOG("[MugongHandler] Applied splash debuff skill " + std::to_string(dwMugongID) + " to monster " + std::to_string(pSplashMon->dwObjectID));
-
-                        }
-
-                        
-
-                        if (pSplashMon->dwAttackPattern != 0 && pSplashMon->dwHpCur > 0) {
-
-                            pSplashMon->dwTargetID = dwAttackID;
-
-                        }
-
-                        
-
-                        //  0x4016 �衧
-
-                        std::vector<BYTE> splashAckBuf(4 + 38);
-
-                        BYTE* sp = splashAckBuf.data() + 4;
-
-                        sp[0] = sResult; 
-
-                        *(DWORD*)(sp + 1) = dwMugongID;
-
-                        sp[5] = bMugongLevel;
-
-                        sp[6] = 1; 
-
-                        *(DWORD*)(sp + 7) = dwAttackID;
-
-                        *(WORD*)(sp + 11) = wAttackPosX;
-
-                        *(WORD*)(sp + 13) = wAttackPosY;
-
-                        sp[15] = bAttackHeight;
-
-                        sp[16] = 3; 
-
-                        *(DWORD*)(sp + 17) = pSplashMon->dwObjectID;
-
-                        *(DWORD*)(sp + 21) = pSplashMon->dwHpMax;
-
-                        *(DWORD*)(sp + 25) = pSplashMon->dwHpCur;
-
-                        *(DWORD*)(sp + 29) = sFinalDmg;
-
-                        *(DWORD*)(sp + 33) = 0; 
-
-                        sp[37] = sCritHit;
-
-                        
-
-                        PACKET_HEADER* sHead = (PACKET_HEADER*)splashAckBuf.data();
-
-                        sHead->id = 0x4016;
-
-                        sHead->payloadSize = 38;
-
-                        EncryptPacket(splashAckBuf.data(), 0x42);
-
-                        deferredSplashBroadcasts.push_back(splashAckBuf); // [修复死锁] 延迟广播，避免在 mapMutex 内获取 SessionMgr::m_mutex
-
-                    }
-
-
-
-                    // 2. �� PC  (PVP)
-                    // 2. AOE PC 溅射 (PVP) — 仅在攻击者处于自由PK模式(bSafeMode==2)时才扫描玩家
-                    // bSafeMode: 0=保护所有角色, 1=保护本门派, 2=自由PK
-                    if (pAttacker && pAttacker->bSafeMode == 2) {
-                        std::vector<PlayerData*> aoiPlayers = mapInst->GetPlayersInAOI(wAoeCenterX, wAoeCenterY);
-                        std::vector<PlayerData*> splashPlayers;
-                        LOG("[MugongHandler] [AOE-PvP] Scanned " + std::to_string(aoiPlayers.size()) + " potential players in AOI");
-                        for (PlayerData* pPl : aoiPlayers) {
-                            if (!pPl || pPl->dwObjectID == dwAttackID || pPl->dwObjectID == dwDefenseID || pPl->dwHpCur == 0 || pPl->dwInvulnerableUntil > GetTickCount()) continue;
-                            // 组队保护：同队玩家不受AOE伤害
-                            DWORD pID1 = PartyManager::GetInstance().GetPartyID(dwAttackID - 400000000);
-                            DWORD pID2 = PartyManager::GetInstance().GetPartyID(pPl->dwObjectID - 400000000);
-                            if (pID1 != 0 && pID1 == pID2) continue;
-                            float dx = (float)pPl->wPosX - (float)wAoeCenterX;
-                            float dy = (float)pPl->wPosY - (float)wAoeCenterY;
-                            float dist = sqrtf(dx * dx + dy * dy);
-                            if (dist <= splashRange) {
-                                splashPlayers.push_back(pPl);
-                                if (splashPlayers.size() >= 5) break;
-                            }
-                        }
-                        LOG("[MugongHandler] [AOE-PvP] -> Splash players: " + std::to_string(splashPlayers.size()));
-                        for (PlayerData* pSplashPlayer : splashPlayers) {
-                            DWORD sPlDef = pSplashPlayer->dwTotalDef;
-                            WORD sPlDodge = pSplashPlayer->dwTotalDodge;
-                            DWORD sPlayerAtkRating = 50 + (pAttacker ? pAttacker->dwTotalHit : 0);
-                            float sHitChance = (float)sPlayerAtkRating / (float)(sPlayerAtkRating + sPlDodge);
-                            float sRoll = (float)(rand() % 10000) / 10000.0f;
-                            BYTE sCritHit = 0; DWORD sFinalDmg = 0; BYTE sResult = 2;
-                            if (sPlDodge > 0 && sRoll > sHitChance) { sResult = 1; sFinalDmg = 0; }
-                            else {
-                                DWORD pAtk = pAttacker ? pAttacker->dwTotalAtk : 50;
-                                DWORD skillFlatDmg = pMugongData ? pMugongData->dwDamageMul : 0;
-                                DWORD skillPerc = pMugongData ? pMugongData->wIncAtkPerc : 0;
-                                float rawDmg = ((pAtk * ((100.0f + skillPerc) / 100.0f)) + skillFlatDmg) * 0.7f;
-                                float var = 0.9f + ((float)(rand() % 2000) / 10000.0f); rawDmg *= var;
-                                WORD critRate = (pAttacker && pAttacker->wCritical > 0) ? pAttacker->wCritical : 5;
-                                if ((WORD)(rand() % 100) < critRate) { rawDmg *= 1.5f; sCritHit = 1; }
-                                if (rawDmg > sPlDef) rawDmg -= sPlDef; else rawDmg = 1;
-                                sFinalDmg = (DWORD)rawDmg;
-                                if (pSplashPlayer->dwHpCur > sFinalDmg) { pSplashPlayer->dwHpCur -= sFinalDmg; }
-                                else { sFinalDmg = pSplashPlayer->dwHpCur; pSplashPlayer->dwHpCur = 0; pSplashPlayer->dwDeadTime = GetTickCount(); }
-                            }
-                            if (pMugongData && pMugongData->dwKeepUpTime > 0 && sResult == 2) {
-                                sServerObject::sActiveBuff debuff;
-                                debuff.dwMugongID = dwMugongID; debuff.bLevel = bMugongLevel;
-                                debuff.dwEndTime = GetTickCount() + pMugongData->dwKeepUpTime * 1000; debuff.bIsDebuff = true;
-                                pSplashPlayer->activeBuffs[dwMugongID] = debuff;
-                            }
-                            std::vector<BYTE> splashAckBuf(4 + 38);
-                            BYTE* sp = splashAckBuf.data() + 4;
-                            sp[0] = sResult; *(DWORD*)(sp + 1) = dwMugongID; sp[5] = bMugongLevel; sp[6] = 1;
-                            *(DWORD*)(sp + 7) = dwAttackID; *(WORD*)(sp + 11) = wAttackPosX; *(WORD*)(sp + 13) = wAttackPosY; sp[15] = bAttackHeight;
-                            sp[16] = 1; *(DWORD*)(sp + 17) = pSplashPlayer->dwObjectID;
-                            *(DWORD*)(sp + 21) = pSplashPlayer->dwHpMax; *(DWORD*)(sp + 25) = pSplashPlayer->dwHpCur;
-                            *(DWORD*)(sp + 29) = sFinalDmg; *(DWORD*)(sp + 33) = 0; sp[37] = sCritHit;
-                            PACKET_HEADER* sHead = (PACKET_HEADER*)splashAckBuf.data();
-                            sHead->id = 0x4016; sHead->payloadSize = 38;
-                            EncryptPacket(splashAckBuf.data(), 0x42);
-                            deferredSplashBroadcasts.push_back(splashAckBuf); // [修复死锁] 延迟广播
-                            splashPlayerSnapshots.push_back({pSplashPlayer->dwObjectID - 400000000, pSplashPlayer->dwHpMax, pSplashPlayer->dwHpCur, pSplashPlayer->wIpMax, pSplashPlayer->wIpCur});
-                        }
-                    }
-
-                }
-
-
-
-                dwDefHpMax = pTarget->dwHpMax;
-
-                dwDefHpCur = pTarget->dwHpCur;
-
-                dwDefIpMax = pTarget->wIpMax;
-
-                dwDefIpCur = pTarget->wIpCur;
-
-            }
-
-        }
-
-    }
+    // === PvE Attack Monster ===
+#include "MugongAttack_PvE.inl"
+
+    // === PvP Attack Player ===
+#include "MugongAttack_PvP.inl"
 
     // [修复死锁] 在 mapMutex 锁外统一广播 AOE 溅射数据包（0x4016），避免 AB-BA 死锁
     for (const auto& pkt : deferredSplashBroadcasts) {

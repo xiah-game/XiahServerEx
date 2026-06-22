@@ -381,9 +381,9 @@ void GameDataDB::LoadMugongTemplates(std::map<DWORD, sMugongTemplate>& out) {
 
 void GameDataDB::LoadMugongList(std::map<DWORD, std::map<BYTE, sMugongList>>& out) {
     out.clear();
-    DBHelper::GetInstance().ExecuteQuery("SELECT dwMugongID, bLevel, bLimitLevel, bReadOnlyBook, wNeedTP, wIncAtk, wDistance, wReduceIP, dwKeepUpTime, wIncAtkPerc, wIncDef, wIncDefPerc, wIncRate, wIncRatePerc, wIncHpMax, wIncHpCur, wIncHpCurPerc, wRecoverHp, wRecoverHpPerc, wIncIpMax, wIncIpCur, wIncIpCurPerc, wRecoverIp, wRecoverIpPerc, wIncCritical, wIncCriticalPerc FROM MUGONG_LIST", [&](SQLHSTMT hStmt) {
-        int vals[26]={0}; SQLLEN c[26];
-        for (int i=0;i<26;i++) { SQLGetData(hStmt,i+1,SQL_C_SLONG,&vals[i],0,&c[i]); if(c[i]==SQL_NULL_DATA) vals[i]=0; }
+    DBHelper::GetInstance().ExecuteQuery("SELECT dwMugongID, bLevel, bLimitLevel, bReadOnlyBook, wNeedTP, wIncAtk, wDistance, wReduceIP, dwKeepUpTime, wIncAtkPerc, wIncDef, wIncDefPerc, wIncRate, wIncRatePerc, wIncHpMax, wIncHpCur, wIncHpCurPerc, wRecoverHp, wRecoverHpPerc, wIncIpMax, wIncIpCur, wIncIpCurPerc, wRecoverIp, wRecoverIpPerc, wIncCritical, wIncCriticalPerc, nEtc1, nEtc2, wSuccessRatePerc FROM MUGONG_LIST", [&](SQLHSTMT hStmt) {
+        int vals[29]={0}; SQLLEN c[29];
+        for (int i=0;i<29;i++) { SQLGetData(hStmt,i+1,SQL_C_SLONG,&vals[i],0,&c[i]); if(c[i]==SQL_NULL_DATA) vals[i]=0; }
         sMugongList lst;
         lst.dwMugongID=vals[0]; lst.bLevel=(BYTE)vals[1]; lst.bLimitLevel=(BYTE)vals[2]; lst.bReadOnlyBook=(BYTE)vals[3];
         lst.dwNeedPoint=(DWORD)vals[4]; lst.dwNeedMoney=0; lst.dwDamageMul=(DWORD)vals[5]; lst.wAttackRange=(WORD)vals[6];
@@ -394,6 +394,7 @@ void GameDataDB::LoadMugongList(std::map<DWORD, std::map<BYTE, sMugongList>>& ou
         lst.wRecoverHpPerc=(WORD)vals[18]; lst.wIncIpMax=(WORD)vals[19]; lst.wIncIpCur=(WORD)vals[20];
         lst.wIncIpCurPerc=(WORD)vals[21]; lst.wRecoverIp=(WORD)vals[22]; lst.wRecoverIpPerc=(WORD)vals[23];
         lst.wIncCritical=(WORD)vals[24]; lst.wIncCriticalPerc=(WORD)vals[25];
+        lst.nEtc1=vals[26]; lst.nEtc2=vals[27]; lst.wSuccessRatePerc=(WORD)vals[28];
         out[lst.dwMugongID][lst.bLevel] = lst;
     });
 }

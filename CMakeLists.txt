@@ -35,6 +35,9 @@ set(SOURCES
     Handlers/CombatHandler.cpp
     Handlers/NpcHandler.cpp
     Handlers/MugongHandler.cpp
+    Handlers/MugongPreAttack.cpp
+    Handlers/MugongSkill_Summon.cpp
+    Handlers/MugongSkill_FiveElm.cpp
     Handlers/ChatHandler.cpp
     Handlers/PartyHandler.cpp
     Handlers/RebuildItemHandler.cpp

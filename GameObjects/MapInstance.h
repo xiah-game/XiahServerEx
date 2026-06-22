@@ -100,6 +100,25 @@ public:
         WORD wDirection;
         BYTE bSpeed;
     };
+    // 地面持续 AoE 特效（如寸草不生 bKind=24）
+    struct sGroundEffect {
+        DWORD dwMugongID = 0;
+        BYTE bLevel = 0;
+        DWORD dwCasterID = 0;     // 施放者 ObjectID（用于伤害归属）
+        WORD wPosX = 0, wPosY = 0; // 毒雾固定坐标
+        float fRadius = 20.0f;    // 打击半径（nEtc1）
+        DWORD dwTickInterval = 2000; // 打击周期 ms（nEtc2）
+        WORD wAtkPerc = 100;      // 伤害倍率（wIncAtkPerc）
+        DWORD dwSnapshotAtk = 0;  // 施放瞬间攻击力快照
+        DWORD dwEndTime = 0;      // 到期时间
+        DWORD dwLastTickTime = 0; // 上次 tick 时间
+        DWORD dwMapID = 0;        // 所在地图
+    };
+    std::vector<sGroundEffect> m_groundEffects;
+
+    // 公开接口：添加地面特效
+    void AddGroundEffect(const sGroundEffect& effect);
+
     std::vector<PendingSyncMove> m_pendingSyncs;
     DWORD m_lastSyncBroadcast = 0;
 };

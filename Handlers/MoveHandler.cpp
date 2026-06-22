@@ -214,6 +214,7 @@ void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize,
         }
         auto players = mapInst->GetPlayersInAOI(pX, pY);
         for (auto* o : players) {
+            if (o->dwObjectID >= 850000000) continue;
             if (o->dwObjectID != dwMoveID) {
                 int ox = o->wPosX - pX;
                 int oy = o->wPosY - pY;
@@ -247,6 +248,7 @@ void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize,
                 }
             }
             for (auto* o : players) {
+                if (o->dwObjectID >= 850000000) continue;
                 if (o->dwObjectID != dwMoveID) {
                     int ox = o->wPosX - pX;
                     int oy = o->wPosY - pY;

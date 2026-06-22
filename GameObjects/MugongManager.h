@@ -42,6 +42,9 @@ struct sMugongList {
     WORD wRecoverIpPerc;
     WORD wIncCritical;
     WORD wIncCriticalPerc;
+    int  nEtc1;              // 通用扩展字段（如牺牲技能的伤害百分比系数）
+    int  nEtc2;              // 通用扩展字段2（如技能CD毫秒）
+    WORD wSuccessRatePerc;   // 成功/触发概率百分比（如反弹成功率）
 };
 
 class MugongManager {

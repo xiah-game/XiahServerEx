@@ -272,7 +272,7 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                     deadExp = pTarget->dwExp;
                     LOG("[CombatHandler] Monster " + g_NpcTemplates[deadPropType].szName + " died!");
                     
-                    attackerCharID = attackerId - 400000000;
+                    attackerCharID = (attackerId >= 850000000 && pAttacker && pAttacker->dwOwnerID > 0) ? pAttacker->dwOwnerID : attackerId - 400000000;
                     
                     // 计算被击杀怪物提供的五行经验值
                     DWORD monsterFiveElmExp = 0;

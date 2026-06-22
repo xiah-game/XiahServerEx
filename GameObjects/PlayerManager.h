@@ -12,7 +12,7 @@ public:
 
     // Recalculates total stats by combining Base + Equip + Buffs
     // Sends the CS_IT_CHARSTATUSINFO_ACK packet optionally if `sendPacket` is true
-    void RecalculateStats(DWORD dwCharID, bool sendPacket = true);
+    void RecalculateStats(DWORD dwCharID, bool sendPacket = true, bool sendIFPacket = true);
 
     void SavePlayer(DWORD dwCharID);
 

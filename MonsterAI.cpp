@@ -7,6 +7,7 @@
 #include "GameObjects/ExpSystem.h"
 #include "GameObjects/DropManager.h"
 #include "GameObjects/MugongManager.h"
+#include "Handlers/MugongHandler.h"
 #include <cmath>
 #include <thread>
 #include <time.h>
@@ -84,8 +85,9 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
                         std::lock_guard<std::mutex> lock(pair.second->GetMutex());
                         auto& players = pair.second->GetPlayers();
                         for (auto& pp : players) {
-                            sServerObject& pl = pp.second;
+                            PlayerData& pl = pp.second;
                             if (pl.bObjectType != 1) continue; // only players
+                            if (pl.bIsBunsin) continue; // 分身不需要自然回血
                             if (pl.dwHpCur == 0) continue; // do not regen dead players
                             if (tick - pl.dwLastRegenTime < 5000) continue; // not yet 5 seconds
                             
@@ -278,6 +280,12 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
                                 EncryptPacket(endAck.data(), 0x42);
                                 // Broadcast to all players on same map
                                 SessionMgr::GetInstance().BroadcastToMap(mapID, endAck);
+                            }
+                        }
+                        // 1.5 分身 buff 过期，清理所有分身
+                        for (const auto& eb : expiredBuffs) {
+                            if (eb.dwMugongID == 41) {
+                                CleanupAllBunsins(eb.dwCharID, mapID);
                             }
                         }
                         // 2. Recalculate stats for affected players (outside all mutexes) (do NOT send 0x4414 to prevent clearing client visuals)

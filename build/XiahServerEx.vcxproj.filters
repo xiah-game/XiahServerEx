@@ -64,6 +64,15 @@
     <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\MugongHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\MugongPreAttack.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\MugongSkill_Summon.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\MugongSkill_FiveElm.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\ChatHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
