@@ -743,6 +743,8 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
 
                     // bType=4, bKind=1（天魔护体）：被命中时反弹伤害
                     if (bResult == 2 && damage > 0) {
+                        LOG("[MonsterAtk] HIT player " + std::to_string(targetId) + " for " + std::to_string(damage) + " dmg. activeBuffs count=" + std::to_string(player.activeBuffs.size()) + " has101=" + std::to_string(player.activeBuffs.count(101)));
+
                         for (auto& bf : player.activeBuffs) {
                             sMugongTemplate* bfTpl = MugongManager::GetInstance()->GetTemplate(bf.second.dwMugongID);
                             if (bfTpl && bfTpl->bType == 4 && bfTpl->bKind == 1) {
@@ -752,14 +754,37 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                                     WORD successRate = bfData->wSuccessRatePerc;
                                     if (successRate >= 100 || (WORD)(rand() % 100) < successRate) {
                                         DWORD reflectDmg = damage * bfData->nEtc1 / 100;
-                                        if (reflectDmg > 0) {
+                                        if (reflectDmg == 0) reflectDmg = 1; // 保底1点反伤
                                             if (obj.dwHpCur > reflectDmg) {
                                                 obj.dwHpCur -= reflectDmg;
                                             } else {
                                                 obj.dwHpCur = 1; // 反弹不击杀，保底1HP
                                             }
+
+                                            // 广播 0x4016 反弹特效包（客户端 case OUTGONGID_BANTANKANGKI 播放 eBantankangki_Hit）
+                                            std::vector<BYTE> reflectPkt(4 + 38, 0);
+                                            BYTE* rp = reflectPkt.data() + 4;
+                                            rp[0] = 2; // bResult = 2 (HIT)——客户端 case 0 什么都不做，必须用 2
+                                            *(DWORD*)(rp + 1) = bf.second.dwMugongID; // 101 = OUTGONGID_BANTANKANGKI
+                                            rp[5] = bf.second.bLevel;
+                                            rp[6] = 1; // bAtkType = PC
+                                            *(DWORD*)(rp + 7) = player.dwObjectID; // 反弹者 = 玩家
+                                            *(WORD*)(rp + 11) = player.wPosX;
+                                            *(WORD*)(rp + 13) = player.wPosY;
+                                            rp[15] = 0;
+                                            rp[16] = obj.bObjectType; // bDefType = 怪物
+                                            *(DWORD*)(rp + 17) = obj.dwObjectID;
+                                            *(DWORD*)(rp + 21) = obj.dwHpMax;
+                                            *(DWORD*)(rp + 25) = obj.dwHpCur;
+                                            *(DWORD*)(rp + 29) = reflectDmg;
+                                            *(DWORD*)(rp + 33) = 0;
+                                            rp[37] = 1; // bHitFlag
+                                            PACKET_HEADER* rh = (PACKET_HEADER*)reflectPkt.data();
+                                            rh->id = 0x4016; rh->payloadSize = 38;
+                                            EncryptPacket(reflectPkt.data(), 0x42);
+                                            BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, reflectPkt);
+
                                             LOG("[MonsterAtk] Reflect: Player " + std::to_string(targetId) + " reflected " + std::to_string(reflectDmg) + " dmg to monster " + std::to_string(obj.dwObjectID) + " (nEtc1=" + std::to_string(bfData->nEtc1) + "%)");
-                                        }
                                     }
                                 }
                                 break; // 只处理第一个反弹buff

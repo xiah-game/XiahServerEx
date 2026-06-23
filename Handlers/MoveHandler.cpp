@@ -200,6 +200,73 @@ void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize,
         
         WORD wNumObject = 0;
         std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+        
+        // 1. 处理离开我的视野 (在旧视野 lastUX, lastUY，但不在新视野 pX, pY) 的怪物、功能 NPC 和其他玩家
+        if (lastUX > 0 && lastUY > 0) {
+            auto oldMonsters = mapInst->GetMonstersInAOI(lastUX, lastUY);
+            for (auto* o : oldMonsters) {
+                if (o->dwObjectID != dwMoveID) {
+                    int ox = o->wPosX - pX;
+                    int oy = o->wPosY - pY;
+                    if (ox * ox + oy * oy > 150 * 150) {
+                        std::vector<BYTE> leaveBuf; leaveBuf.resize(4);
+                        leaveBuf.push_back(0); // bResult
+                        DWORD oid = o->dwObjectID;
+                        leaveBuf.push_back(oid & 0xFF); leaveBuf.push_back((oid >> 8) & 0xFF); leaveBuf.push_back((oid >> 16) & 0xFF); leaveBuf.push_back(oid >> 24);
+                        leaveBuf.push_back(o->bObjectType); // 3=Monster, 5=FuncNPC
+                        leaveBuf.push_back(pMapID & 0xFF); leaveBuf.push_back((pMapID >> 8) & 0xFF); leaveBuf.push_back((pMapID >> 16) & 0xFF); leaveBuf.push_back(pMapID >> 24);
+                        leaveBuf.push_back(0); // bType
+                        
+                        PACKET_HEADER* leaveHead = (PACKET_HEADER*)leaveBuf.data();
+                        leaveHead->id = 0x3506; leaveHead->payloadSize = leaveBuf.size() - sizeof(PACKET_HEADER);
+                        EncryptPacket(leaveBuf.data(), 0x42);
+                        SafeSend(clientSocket, (const char*)leaveBuf.data(), leaveBuf.size(), 0);
+                    }
+                }
+            }
+            
+            auto oldPlayers = mapInst->GetPlayersInAOI(lastUX, lastUY);
+            for (auto* o : oldPlayers) {
+                if (o->dwObjectID != dwMoveID && o->dwObjectID < 850000000) {
+                    int ox = o->wPosX - pX;
+                    int oy = o->wPosY - pY;
+                    if (ox * ox + oy * oy > 150 * 150) {
+                        // 我看不见 o 了，向我发送删除 o 的消息
+                        std::vector<BYTE> leaveBuf; leaveBuf.resize(4);
+                        leaveBuf.push_back(0);
+                        DWORD oid = o->dwObjectID;
+                        leaveBuf.push_back(oid & 0xFF); leaveBuf.push_back((oid >> 8) & 0xFF); leaveBuf.push_back((oid >> 16) & 0xFF); leaveBuf.push_back(oid >> 24);
+                        leaveBuf.push_back(o->bObjectType); // 1=Player
+                        leaveBuf.push_back(pMapID & 0xFF); leaveBuf.push_back((pMapID >> 8) & 0xFF); leaveBuf.push_back((pMapID >> 16) & 0xFF); leaveBuf.push_back(pMapID >> 24);
+                        leaveBuf.push_back(0);
+                        
+                        PACKET_HEADER* leaveHead = (PACKET_HEADER*)leaveBuf.data();
+                        leaveHead->id = 0x3506; leaveHead->payloadSize = leaveBuf.size() - sizeof(PACKET_HEADER);
+                        EncryptPacket(leaveBuf.data(), 0x42);
+                        SafeSend(clientSocket, (const char*)leaveBuf.data(), leaveBuf.size(), 0);
+                        
+                        // o 也看不见我了，向 o 发送删除我的消息
+                        DWORD otherCharID = o->dwObjectID - 400000000;
+                        SOCKET otherSock = SessionMgr::GetInstance().GetSocketByCharID(otherCharID);
+                        if (otherSock != INVALID_SOCKET) {
+                            std::vector<BYTE> otherLeave; otherLeave.resize(4);
+                            otherLeave.push_back(0);
+                            DWORD myid = dwMoveID;
+                            otherLeave.push_back(myid & 0xFF); otherLeave.push_back((myid >> 8) & 0xFF); otherLeave.push_back((myid >> 16) & 0xFF); otherLeave.push_back(myid >> 24);
+                            otherLeave.push_back(1); // Player
+                            otherLeave.push_back(pMapID & 0xFF); otherLeave.push_back((pMapID >> 8) & 0xFF); otherLeave.push_back((pMapID >> 16) & 0xFF); otherLeave.push_back(pMapID >> 24);
+                            otherLeave.push_back(0);
+                            
+                            PACKET_HEADER* otherHead = (PACKET_HEADER*)otherLeave.data();
+                            otherHead->id = 0x3506; otherHead->payloadSize = otherLeave.size() - sizeof(PACKET_HEADER);
+                            EncryptPacket(otherLeave.data(), 0x42);
+                            SafeSend(otherSock, (const char*)otherLeave.data(), otherLeave.size(), 0);
+                        }
+                    }
+                }
+            }
+        }
+
         auto monsters = mapInst->GetMonstersInAOI(pX, pY);
         for (auto* o : monsters) {
             if (o->dwObjectID != dwMoveID) {

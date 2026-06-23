@@ -21,6 +21,61 @@ void OnItemListInBankReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD 
 // 外部声明，用于 Remove+Add 模式刷新客户端物品数据（定义在 RebuildItemHandler.cpp）
 void SendItemRefresh(SOCKET clientSocket, DWORD dwItemID, BYTE bSackID, BYTE bSackPos);
 
+#include <unordered_map>
+#include <mutex>
+
+class PetLevelExpManager {
+public:
+    static PetLevelExpManager& GetInstance() {
+        static PetLevelExpManager instance;
+        return instance;
+    }
+
+    bool LoadFromDB() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_levelMap.clear();
+
+        std::string query = "SELECT wLevel, i64NeedExp FROM PET_LEVEL_EXP";
+        bool success = DBHelper::GetInstance().ExecuteQuery(query, [&](SQLHSTMT hStmt) {
+            int level = 0;
+            long long needExp = 0;
+            SQLGetData(hStmt, 1, SQL_INTEGER, &level, 0, NULL);
+            SQLGetData(hStmt, 2, SQL_C_SBIGINT, &needExp, 0, NULL);
+            m_levelMap[level] = needExp;
+        });
+
+        LOG("[PetLevelExpManager] Loaded " + std::to_string(m_levelMap.size()) + " levels data from DB.");
+        return success;
+    }
+
+    long long GetNeedExp(int level) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_levelMap.find(level);
+        return (it != m_levelMap.end()) ? it->second : 0;
+    }
+
+    long long GetLevelStartExp(int level) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        long long sum = 0;
+        for (int i = 1; i < level; ++i) {
+            auto it = m_levelMap.find(i);
+            if (it != m_levelMap.end()) {
+                sum += it->second;
+            }
+        }
+        return sum;
+    }
+
+private:
+    std::unordered_map<int, long long> m_levelMap;
+    std::mutex m_mutex;
+    PetLevelExpManager() = default;
+};
+
+bool LoadPetLevelExp() {
+    return PetLevelExpManager::GetInstance().LoadFromDB();
+}
+
 void SendCharPremiumList(SOCKET clientSocket, DWORD charID) {
     if (charID == 0) return;
     
@@ -1337,9 +1392,11 @@ void OnPetBongOutReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tota
     pushByte(pet.bAtkType);
     pushDWord(pet.dwRefNpcID);
     pushByte(pet.bCurJob);
+    long long i64LevelExp = PetLevelExpManager::GetInstance().GetLevelStartExp(pet.wLevel);
+    long long i64NextLevelUpExp = i64LevelExp + PetLevelExpManager::GetInstance().GetNeedExp(pet.wLevel);
     pushInt64(pet.biExp);
-    pushInt64(0); // i64LevelExp (临时填0，由客户端自行算)
-    pushInt64(0); // i64NextLevelUpExp (临时填0)
+    pushInt64(i64LevelExp);
+    pushInt64(i64NextLevelUpExp);
     pushByte(pet.bRevolutionStep);
     pushByte(pet.bWildRate);
     for (int i = 0; i < 6; i++) pushWord(0); // wVisualID[6]
@@ -1459,9 +1516,11 @@ void SendPetListAck(SOCKET clientSocket, DWORD charID) {
         pushByte(pet.bAtkType);
         pushDWord(pet.dwRefNpcID);
         pushByte(pet.bCurJob);
+        long long i64LevelExp = PetLevelExpManager::GetInstance().GetLevelStartExp(pet.wLevel);
+        long long i64NextLevelUpExp = i64LevelExp + PetLevelExpManager::GetInstance().GetNeedExp(pet.wLevel);
         pushInt64(pet.biExp);
-        pushInt64(0); // i64LevelExp
-        pushInt64(0); // i64NextLevelUpExp
+        pushInt64(i64LevelExp);
+        pushInt64(i64NextLevelUpExp);
         pushByte(pet.bRevolutionStep);
         pushByte(pet.bWildRate);
         for (int i = 0; i < 6; i++) pushWord(0); // wVisualID[6]

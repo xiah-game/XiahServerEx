@@ -108,7 +108,16 @@ void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
 
     sMugongList* pd = MugongManager::GetInstance()->GetMugongLevelData(dwMugongID, bMugongLevel);
 
-    bool isBuff = (pd && pd->dwKeepUpTime > 0 && dwMugongID != 41);
+    // debuff类技能(bKind=8/16/17/18/19/20/21/22)对怪物施加，不在施法者自身挂buff
+    sMugongTemplate* pTpl = MugongManager::GetInstance()->GetTemplate(dwMugongID);
+    bool isDebuffOnTarget = false;
+    if (pTpl && pTpl->bType == 4) {
+        BYTE bk = pTpl->bKind;
+        if (bk == 8 || bk == 16 || bk == 17 || bk == 18 || bk == 19 || bk == 20 || bk == 21 || bk == 22) {
+            isDebuffOnTarget = true;
+        }
+    }
+    bool isBuff = (pd && pd->dwKeepUpTime > 0 && dwMugongID != 41 && !isDebuffOnTarget);
 
     DWORD playerMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
 

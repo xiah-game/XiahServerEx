@@ -24,6 +24,7 @@
 #include "MugongAttackContext.h"
 
 void InitPacketHandlers() {
+    LoadPetLevelExp();
     RegisterHandler(0x3B70, [](SOCKET s, BYTE* p, WORD size) {
         DWORD charID = SessionMgr::GetInstance().GetCharID(s);
         if (charID) OnExecFiveElmReq(s, charID, p, size);

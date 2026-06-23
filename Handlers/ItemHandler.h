@@ -19,3 +19,5 @@ void SendPetListAck(SOCKET clientSocket, DWORD charID);
 void OnRemarkItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize); // 0x4249 遁身符记录坐标
 void OnRebirthReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize); // 0x426F 觉醒请求
 
+bool LoadPetLevelExp();
+
