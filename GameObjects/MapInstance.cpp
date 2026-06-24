@@ -34,6 +34,14 @@ void CMapInstance::AddPlayer(const PlayerData& player) {
 void CMapInstance::RemovePlayer(DWORD dwObjectID) {
     auto it = m_players.find(dwObjectID);
     if (it != m_players.end()) {
+        // [业务设计意图]
+        // 玩家因下线、切图等原因移出地图时，必须同步清理其召唤的所有分身，杜绝分身作为孤儿残留地图导致怪物转火。
+        // [潜在风险]
+        // CleanupAllBunsins 会调用 RemovePlayer。对于分身 ID（>= 850000000），此处过滤了防重入，因此不会无限递归。
+        if (dwObjectID >= 400000000 && dwObjectID < 850000000) {
+            extern void CleanupAllBunsins(DWORD ownerCharID, DWORD mapID);
+            CleanupAllBunsins(dwObjectID - 400000000, m_dwMapID);
+        }
         int idx = GetGridIndex(it->second.wPosX, it->second.wPosY);
         if (idx >= 0) RemoveFromGrid(m_playerGrid, idx, dwObjectID);
         m_players.erase(it);
@@ -846,10 +854,22 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                         }
                         LOG("[BunsinDeath] Bunsin " + std::to_string(targetId) + " killed by monster.");
                     } else {
-                    // Mark player for deferred death broadcast (sent in next Update tick)
-                    m_players[targetId].dwDeadTime = tick;
-                    m_players[targetId].dwInvulnerableUntil = tick + 15000; // 15s death protection
-                    obj.dwTargetID = 0;
+                        // [业务设计意图]
+                        // 真正的玩家遭受怪物物理攻击死亡时，必须立刻在服务端清理其召唤的所有分身，防止分身残留。
+                        // [潜在风险]
+                        // 此时处于地图锁内，直接调用 CleanupAllBunsins 是线程安全的，不会死锁。
+                        extern void CleanupAllBunsins(DWORD ownerCharID, DWORD mapID);
+                        CleanupAllBunsins(targetId - 400000000, m_dwMapID);
+
+                        if (m_players.count(targetId) > 0) {
+                            extern void ClearPlayerBuffsOnDeath(PlayerData& player, DWORD mapID);
+                            ClearPlayerBuffsOnDeath(m_players[targetId], m_dwMapID);
+                        }
+
+                        // Mark player for deferred death broadcast (sent in next Update tick)
+                        m_players[targetId].dwDeadTime = tick;
+                        m_players[targetId].dwInvulnerableUntil = tick + 15000; // 15s death protection
+                        obj.dwTargetID = 0;
                     
                     // Release ALL monsters that were targeting this dead player
                     for (auto& mPair : m_monsters) {

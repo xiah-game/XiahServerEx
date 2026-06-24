@@ -87,7 +87,11 @@ bool HandleSummonSkill(MugongAttackContext& ctx)
         bunsin.dwMapID = ctx.playerMapID;
         bunsin.bIsBunsin = true;
         bunsin.dwOwnerID = ownerCharID;
-        bunsin.bNpcType = 251;                // 客户端 NpcType 251 = 剑影分身
+        if (ctx.dwMugongID == 71) {
+            bunsin.bNpcType = 250;                // 客户端 NpcType 250 = 幻兽
+        } else {
+            bunsin.bNpcType = 251;                // 客户端 NpcType 251 = 剑影分身
+        }
         bunsin.dwBunsinEndTime = GetTickCount() + pMugongData->dwKeepUpTime * 1000;
 
         // 位置：主人身旁偏移，多个分身错开
@@ -165,7 +169,7 @@ bool HandleSummonSkill(MugongAttackContext& ctx)
     {
         std::vector<BYTE> ackBuf(4 + 38, 0);
         BYTE* p = ackBuf.data() + 4;
-        p[0] = 2; // bResult = HIT
+        p[0] = 0; // bResult = SUCCESS (0)
         *(DWORD*)(p + 1) = ctx.dwMugongID;
         p[5] = ctx.bMugongLevel;
         p[6] = 1; // bAtkType = PC
@@ -226,7 +230,11 @@ void OnPetInfoReq(SOCKET clientSocket, BYTE* payload, WORD payloadSize)
     pushWord(pBunsin->wPosY);            // wPosY
     pushByte(pBunsin->bHeight);          // bHeight
     pushWord(0);                         // wDirection
-    pushString("Clone");                 // szName (sString: WORD len + data)
+    if (pBunsin->bNpcType == 250) {
+        pushString("\xbb\xc3\xca\xde");   // "幻兽" 的 GBK 编码
+    } else {
+        pushString("Clone");             // szName (sString: WORD len + data)
+    }
     pushByte(0);                         // bStatus = Stand
     pushWord(pBunsin->wPosX);            // wDesPosX (同位置)
     pushWord(pBunsin->wPosY);            // wDesPosY

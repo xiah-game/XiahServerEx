@@ -423,7 +423,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
     // 2. Determine if it's a buff or heal（基于 bType 数据驱动）
     sMugongTemplate* tpl = MugongManager::GetInstance()->GetTemplate(dwMugongID);
     // debuff(bKind=8/16/17/18/19/20/21/22) -> not self-buff
-    bool isTargetDebuff = (tpl && tpl->bType == 4 && (tpl->bKind == 8 || tpl->bKind == 16 || tpl->bKind == 17 || tpl->bKind == 18 || tpl->bKind == 19 || tpl->bKind == 20 || tpl->bKind == 21 || tpl->bKind == 22));
+    bool isTargetDebuff = (tpl && tpl->bType == 4 && (tpl->bKind == 8 || tpl->bKind == 9 || tpl->bKind == 16 || tpl->bKind == 17 || tpl->bKind == 18 || tpl->bKind == 19 || tpl->bKind == 20 || tpl->bKind == 21 || tpl->bKind == 22));
     bool isBuff = (pMugongData && pMugongData->dwKeepUpTime > 0 && !isTargetDebuff);
     // bType=1 即为治疗技能，不再硬编码排除具体技能 ID
     bool isHeal = (!isBuff && tpl && tpl->bType == 1);

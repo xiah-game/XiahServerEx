@@ -25,3 +25,5 @@ private:
 void SendCharStatusInfoAck(SOCKET clientSocket, DWORD dwCharID, WORD opCode);
 void UpdatePlayerStatsAndSend(SOCKET clientSocket, DWORD dwCharID);
 void BroadcastPacketToMap(DWORD mapID, const std::vector<BYTE>& packet);
+void ClearPlayerBuffsOnDeath(PlayerData& player, DWORD mapID);
+

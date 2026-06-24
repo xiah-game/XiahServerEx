@@ -126,6 +126,27 @@ void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize,
     
     std::vector<BYTE> ackBuf; ackBuf.resize(4); 
     ackBuf.push_back(0); // bResult
+
+    // 业务设计意图：提取对象的类型(1=Player, 3=Monster, 4=Pet, 5=FuncNPC)以对齐ACK包的结构。
+    BYTE bObjectType = 1;
+    if (mapInst) {
+        std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+        sServerObject* pObj = mapInst->GetPlayer(dwMoveID);
+        if (pObj) {
+            bObjectType = pObj->bObjectType;
+        }
+    }
+
+    // 业务设计意图：定义协议对齐组装器，用于将 bObjectType 插入到 dwObjectID 之后。
+    auto insertPayloadWithObjectType = [&](std::vector<BYTE>& dest, BYTE* src, WORD size) {
+        if (size >= 4) {
+            dest.insert(dest.end(), src, src + 4);
+            dest.push_back(bObjectType);
+            dest.insert(dest.end(), src + 4, src + size);
+        } else {
+            dest.insert(dest.end(), src, src + size);
+        }
+    };
     
     if (headerId == 0x430B) { // STARTMOVE
         if (totalSize >= 18) {
@@ -140,10 +161,10 @@ void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize,
             if (bSpeed == 0) bSpeed = 11;
             payload[17] = bSpeed; // Force correct speed, client often sends 0
         }
-        ackBuf.insert(ackBuf.end(), payload, payload + totalSize);
+        insertPayloadWithObjectType(ackBuf, payload, totalSize);
         ackBuf.push_back(0); // bFastMove
     } else if (headerId == 0x430D) { // SYNCMOVE
-        ackBuf.insert(ackBuf.end(), payload, payload + totalSize);
+        insertPayloadWithObjectType(ackBuf, payload, totalSize);
         
         DWORD currentTick = GetTickCount();
         WORD wDiffTime = 100; // default to 100ms
@@ -164,9 +185,9 @@ void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize,
         // REQ: dwObjectID (4) + wPosX (2) + wPosY (2) + bHeight (1) + bState (1) + bSpeed (1) -> 11 bytes
         // ACK: dwObjectID (4) + wPosX (2) + wPosY (2) + bHeight (1) + bState (1) -> 10 bytes
         int copySize = (totalSize > 10) ? 10 : totalSize;
-        ackBuf.insert(ackBuf.end(), payload, payload + copySize);
+        insertPayloadWithObjectType(ackBuf, payload, copySize);
     } else {
-        ackBuf.insert(ackBuf.end(), payload, payload + totalSize);
+        insertPayloadWithObjectType(ackBuf, payload, totalSize);
     }
     
     PACKET_HEADER* mh = (PACKET_HEADER*)ackBuf.data(); 
@@ -361,11 +382,13 @@ void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize,
                                 sServerObject* mover = mapInst->GetPlayer(dwMoveID);
                                 if (mover && mover->bIsMoving) {
                                     // Build a synthetic STARTMOVE_ACK (0x430C)
-                                    // ACK format: bResult + dwObjectID + wPosX + wPosY + bHeight + wDesPosX + wDesPosY + bDesHeight + wDirection + bStatus + bSpeed + bFastMove
+                                    // ACK format: bResult + dwObjectID + bObjectType + wPosX + wPosY + bHeight + wDesPosX + wDesPosY + bDesHeight + wDirection + bStatus + bSpeed + bFastMove
                                     std::vector<BYTE> moveBuf; moveBuf.resize(4);
                                     moveBuf.push_back(0); // bResult
                                     // dwObjectID
                                     moveBuf.push_back(dwMoveID & 0xFF); moveBuf.push_back((dwMoveID>>8)&0xFF); moveBuf.push_back((dwMoveID>>16)&0xFF); moveBuf.push_back((dwMoveID>>24)&0xFF);
+                                    // bObjectType
+                                    moveBuf.push_back(mover->bObjectType); // 业务设计意图：插入 bObjectType 以便客户端 OnCS_NC_STARTMOVE_ACK 正确对齐解析。
                                     // wPosX, wPosY
                                     moveBuf.push_back(mover->wPosX & 0xFF); moveBuf.push_back(mover->wPosX >> 8);
                                     moveBuf.push_back(mover->wPosY & 0xFF); moveBuf.push_back(mover->wPosY >> 8);

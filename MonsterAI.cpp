@@ -45,6 +45,7 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
                             std::vector<BYTE> buf; buf.resize(4);
                             buf.push_back(0); // bResult
                             buf.push_back(sm.dwObjectID & 0xFF); buf.push_back((sm.dwObjectID>>8)&0xFF); buf.push_back((sm.dwObjectID>>16)&0xFF); buf.push_back((sm.dwObjectID>>24)&0xFF);
+                            buf.push_back(1); // 业务设计意图：插入bObjectType(1=PC)。因为m_pendingSyncs收集的都是玩家对象的移动。
                             buf.push_back(sm.wPosX & 0xFF); buf.push_back(sm.wPosX >> 8);
                             buf.push_back(sm.wPosY & 0xFF); buf.push_back(sm.wPosY >> 8);
                             buf.push_back(sm.bHeight);

@@ -120,6 +120,62 @@ void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
     bool isBuff = (pd && pd->dwKeepUpTime > 0 && dwMugongID != 41 && !isDebuffOnTarget);
 
     DWORD playerMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+    // === 统一内功 (IP) 校验 ===
+    if (pd && pd->dwCostMp > 0) {
+        if (g_MapInstances.count(playerMapID)) {
+            CMapInstance* mapInst = g_MapInstances[playerMapID];
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            sServerObject* pObj = mapInst->GetPlayer(dwAttackID);
+            if (pObj) {
+                LOG("[MugongPreAttack] CasterObj ID=" + std::to_string(dwAttackID) + " Skill=" + std::to_string(dwMugongID) + " IP=" + std::to_string(pObj->wIpCur) + " Cost=" + std::to_string(pd->dwCostMp));
+            } else {
+                LOG("[MugongPreAttack] CasterObj NOT FOUND for ID=" + std::to_string(dwAttackID));
+            }
+            if (pObj && pObj->wIpCur < pd->dwCostMp) {
+                LOG("[MugongPreAttack] Skill " + std::to_string(dwMugongID) + " blocked: IP " 
+                    + std::to_string(pObj->wIpCur) + " < cost " + std::to_string(pd->dwCostMp));
+                // 发送失败包 (bResult = 1, 代表内功/蓄力不足)
+                std::vector<BYTE> failBuf(4 + 29, 0);
+                failBuf[4] = 1; // bResult = 1
+                *(DWORD*)(failBuf.data() + 5) = dwMugongID;
+                PACKET_HEADER* head = (PACKET_HEADER*)failBuf.data();
+                head->id = 0x4014; // CS_BT_MUGONGPREATTACK_ACK
+                head->payloadSize = failBuf.size() - 4;
+                EncryptPacket(failBuf.data(), 0x42);
+                SafeSend(clientSocket, (const char*)failBuf.data(), failBuf.size(), 0);
+                return;
+            }
+        }
+    }
+
+    // === 统一内功 (IP) 校验 ===
+    if (pd && pd->dwCostMp > 0) {
+        if (g_MapInstances.count(playerMapID)) {
+            CMapInstance* mapInst = g_MapInstances[playerMapID];
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            sServerObject* pObj = mapInst->GetPlayer(dwAttackID);
+            if (pObj) {
+                LOG("[MugongPreAttack] CasterObj ID=" + std::to_string(dwAttackID) + " Skill=" + std::to_string(dwMugongID) + " IP=" + std::to_string(pObj->wIpCur) + " Cost=" + std::to_string(pd->dwCostMp));
+            } else {
+                LOG("[MugongPreAttack] CasterObj NOT FOUND for ID=" + std::to_string(dwAttackID));
+            }
+            if (pObj && pObj->wIpCur < pd->dwCostMp) {
+                LOG("[MugongPreAttack] Skill " + std::to_string(dwMugongID) + " blocked: IP " 
+                    + std::to_string(pObj->wIpCur) + " < cost " + std::to_string(pd->dwCostMp));
+                // 发送失败包 (bResult = 1, 代表内功/蓄力不足)
+                std::vector<BYTE> failBuf(4 + 29, 0);
+                failBuf[4] = 1; // bResult = 1
+                *(DWORD*)(failBuf.data() + 5) = dwMugongID;
+                PACKET_HEADER* head = (PACKET_HEADER*)failBuf.data();
+                head->id = 0x4014; // CS_BT_MUGONGPREATTACK_ACK
+                head->payloadSize = failBuf.size() - 4;
+                EncryptPacket(failBuf.data(), 0x42);
+                SafeSend(clientSocket, (const char*)failBuf.data(), failBuf.size(), 0);
+                return;
+            }
+        }
+    }
+
 
     // 检查五行必杀蓄气�?
     /*
@@ -232,56 +288,6 @@ void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
             sServerObject* pObj = mapInst->GetPlayer(dwAttackID);
 
             if (pObj) {
-
-                // Verify IP cost
-
-                if (pObj->wIpCur < pd->dwCostMp) {
-
-                    LOG("[MugongHandler] Buff " + std::to_string(dwMugongID) + " blocked: IP " 
-
-                        + std::to_string(pObj->wIpCur) + " < cost " + std::to_string(pd->dwCostMp));
-
-                    // Send 0x4016 with bResult=3 (IP insufficient) so client shows error message
-
-                    std::vector<BYTE> failBuf(4 + 38, 0);
-
-                    BYTE* fp = failBuf.data() + 4;
-
-                    fp[0] = 3; // bResult = 3 (IDS_SHORT_INLIFE)
-
-                    *(DWORD*)(fp + 1) = dwMugongID;
-
-                    fp[5] = bMugongLevel;
-
-                    fp[6] = 1; 
-
-                    *(DWORD*)(fp + 7) = dwAttackID;
-
-                    *(WORD*)(fp + 11) = wAttackPosX;
-
-                    *(WORD*)(fp + 13) = wAttackPosY;
-
-                    fp[15] = bAttackHeight;
-
-                    fp[16] = 1; // bDefType = OBJTYPE_PC
-
-                    *(DWORD*)(fp + 17) = dwAttackID; 
-
-                    PACKET_HEADER* fh = (PACKET_HEADER*)failBuf.data();
-
-                    fh->id = 0x4016;
-
-                    fh->payloadSize = 38;
-
-                    EncryptPacket(failBuf.data(), 0x42);
-
-                    SafeSend(clientSocket, (const char*)failBuf.data(), failBuf.size(), 0);
-
-                    return;
-
-                }
-
-                
 
                 // Deduct IP
 

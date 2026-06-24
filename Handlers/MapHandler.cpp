@@ -1416,6 +1416,8 @@ void OnCharInfoListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
                 moveBuf.push_back(mid & 0xFF); moveBuf.push_back((mid>>8)&0xFF); moveBuf.push_back((mid>>16)&0xFF); moveBuf.push_back((mid>>24)&0xFF);
 
+                moveBuf.push_back(o.bObjectType); // 业务设计意图：插入 bObjectType 以便客户端 OnCS_NC_STARTMOVE_ACK 正确对齐解析。
+
                 moveBuf.push_back(o.wPosX & 0xFF); moveBuf.push_back(o.wPosX >> 8);
 
                 moveBuf.push_back(o.wPosY & 0xFF); moveBuf.push_back(o.wPosY >> 8);

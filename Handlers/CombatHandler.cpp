@@ -18,6 +18,18 @@ void OnPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
     }
     LOG("> RECEIVED 0x4003 PreAttackReq! Size: " + std::to_string(totalSize) + " Hex: " + hexDump);
     
+    if (totalSize >= 20) {
+        BYTE bAtkType = payload[0];
+        DWORD dwAtkID = *(DWORD*)(payload + 1);
+        WORD wAtkPosX = *(WORD*)(payload + 5);
+        WORD wAtkPosY = *(WORD*)(payload + 7);
+        BYTE bDefType = payload[10];
+        DWORD dwDefID = *(DWORD*)(payload + 11);
+        WORD wDefPosX = *(WORD*)(payload + 15);
+        WORD wDefPosY = *(WORD*)(payload + 17);
+        LOG("[OnPreAttackReq] Parse: CasterType=" + std::to_string(bAtkType) + " CasterID=" + std::to_string(dwAtkID) + " CasterPos=(" + std::to_string(wAtkPosX) + "," + std::to_string(wAtkPosY) + ") TargetType=" + std::to_string(bDefType) + " TargetID=" + std::to_string(dwDefID) + " TargetPos=(" + std::to_string(wDefPosX) + "," + std::to_string(wDefPosY) + ")");
+    }
+    
     // Build 0x4004 PreAttackAck ?echo payload back with id changed to 0x4004
     // Layout: [4-byte header] + [payload bytes] + optional [bAttackSpeed if PC attacker]
     std::vector<BYTE> ackBuf(totalSize + 4);
@@ -444,6 +456,16 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                         monsterDied = true; // 复用死亡动画触发机制
                         deadObjType = 1; // OBJTYPE_PC
                         deadObjID = pTargetPlayer->dwObjectID;
+
+                        // [业务设计意图]
+                        // 玩家物理受击死亡时，必须立刻在服务端清理名下的分身，防止怪物转火分身引发客户端镜像生成和崩溃。
+                        // [潜在风险]
+                        extern void CleanupAllBunsins(DWORD ownerCharID, DWORD mapID);
+                        CleanupAllBunsins(pTargetPlayer->dwObjectID - 400000000, playerMapID);
+
+                        extern void ClearPlayerBuffsOnDeath(PlayerData& player, DWORD mapID);
+                        ClearPlayerBuffsOnDeath(*pTargetPlayer, playerMapID);
+
                         LOG("[CombatHandler] Player " + pTargetPlayer->szName + " died from physical attack by " + (pAttacker ? pAttacker->szName : "Unknown"));
                     }
                 }

@@ -603,4 +603,69 @@ void SendCharStatusInfoAck(SOCKET clientSocket, DWORD dwCharID, WORD opCode) {
     }
 }
 
+void ClearPlayerBuffsOnDeath(PlayerData& player, DWORD mapID) {
+    if (player.bIsBunsin) return; // 必须是真实玩家，分身无需处理
+    if (player.activeBuffs.empty() && !player.bSpiritActive) return;
+
+    DWORD charID = player.dwObjectID - 400000000;
+    LOG("[DeathBuffCleanup] Start clearing buffs for player dwObjectID=" + std::to_string(player.dwObjectID));
+
+    // 1. 发送 0x402E 清除客户端上的 Buff 图标
+    for (const auto& pair : player.activeBuffs) {
+        const auto& buff = pair.second;
+        std::vector<BYTE> endAck(4 + 11);
+        BYTE* ep = endAck.data() + 4;
+        ep[0] = 0; // bResult
+        *(DWORD*)(ep + 1) = player.dwObjectID;
+        ep[5] = 1; // bObjectType (Player)
+        *(DWORD*)(ep + 6) = buff.dwMugongID;
+        ep[10] = buff.bLevel;
+        PACKET_HEADER* headE = (PACKET_HEADER*)endAck.data();
+        headE->id = 0x402E; // CS_BT_KEEPUPMUGONGEND_ACK
+        headE->payloadSize = 11;
+        EncryptPacket(endAck.data(), 0x42);
+        
+        SessionMgr::GetInstance().BroadcastToMap(mapID, endAck);
+        LOG("[DeathBuffCleanup] Sent end packet for buff: " + std::to_string(buff.dwMugongID));
+    }
+    player.activeBuffs.clear();
+
+    // 2. 清除暴气状态并发送状态关闭包
+    if (player.bSpiritActive) {
+        player.bSpiritActive = false;
+        std::vector<BYTE> buf;
+        buf.resize(4, 0); // Header placeholder
+        buf.push_back(11); // bType = 11 (Spirit/Potion)
+        
+        auto pushDWord = [&](DWORD d) { 
+            buf.push_back(d & 0xFF); 
+            buf.push_back((d >> 8) & 0xFF); 
+            buf.push_back((d >> 16) & 0xFF); 
+            buf.push_back(d >> 24); 
+        };
+        auto pushString = [&](const std::string& str) {
+            WORD len = (WORD)str.length();
+            buf.push_back(len & 0xFF); buf.push_back(len >> 8);
+            for (char c : str) buf.push_back(c);
+        };
+        
+        pushDWord(player.dwObjectID);
+        pushDWord(1); // dwData1 -> bInstanceType = 1 (Spirit)
+        pushDWord(0); // dwData2 -> 0 (Stop spirit)
+        pushDWord(0); // dwData3 -> 0
+        pushString(""); pushString(""); pushString("");
+
+        WORD packetID = 0x3F10; // CS_CD_CHARUPDATE_ACK
+        WORD payloadSize = (WORD)(buf.size() - 4);
+        memcpy(&buf[0], &packetID, 2);
+        memcpy(&buf[2], &payloadSize, 2);
+        EncryptPacket(buf.data(), 0x42);
+
+        SessionMgr::GetInstance().BroadcastToMap(mapID, buf);
+    }
+
+    LOG("[DeathBuffCleanup] Finished clearing buffs.");
+}
+
+
 

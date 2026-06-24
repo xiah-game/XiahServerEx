@@ -256,6 +256,13 @@
 
                         pTarget->dwDeadTime = GetTickCount();
 
+                        // [业务设计意图]
+                        extern void CleanupAllBunsins(DWORD ownerCharID, DWORD mapID);
+                        CleanupAllBunsins(dwDefenseID - 400000000, playerMapID);
+
+                        extern void ClearPlayerBuffsOnDeath(PlayerData& player, DWORD mapID);
+                        ClearPlayerBuffsOnDeath(*pTarget, playerMapID);
+
                         LOG("[MugongHandler] PvP Player " + pTarget->szName + " died from skill " + std::to_string(dwMugongID));
 
                     }
@@ -604,7 +611,13 @@
                                 if (rawDmg > sPlDef) rawDmg -= sPlDef; else rawDmg = 1;
                                 sFinalDmg = (DWORD)rawDmg;
                                 if (pSplashPlayer->dwHpCur > sFinalDmg) { pSplashPlayer->dwHpCur -= sFinalDmg; }
-                                else { sFinalDmg = pSplashPlayer->dwHpCur; pSplashPlayer->dwHpCur = 0; pSplashPlayer->dwDeadTime = GetTickCount(); }
+                                else { 
+                                    sFinalDmg = pSplashPlayer->dwHpCur; 
+                                    pSplashPlayer->dwHpCur = 0; 
+                                    pSplashPlayer->dwDeadTime = GetTickCount(); 
+                                    extern void ClearPlayerBuffsOnDeath(PlayerData& player, DWORD mapID);
+                                    ClearPlayerBuffsOnDeath(*pSplashPlayer, playerMapID);
+                                }
                             }
                             if (pMugongData && pMugongData->dwKeepUpTime > 0 && sResult == 2) {
                                 sServerObject::sActiveBuff debuff;
