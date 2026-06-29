@@ -65,3 +65,7 @@ void OnPetInfoReq(SOCKET clientSocket, BYTE* payload, WORD payloadSize);
 // 返回 true=蓄气校验通过（继续走通用伤害）, false=蓄气不足（拦截释放）
 bool HandleFiveElmUltimate(MugongAttackContext& ctx);
 
+// 宠物捕捉类 (bType=2, bKind=17)
+// 实现文件: MugongSkill_PetCapture.cpp
+bool HandlePetCapture(MugongAttackContext& ctx);
+

@@ -290,7 +290,17 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket, bool sendI
                                 percDef += val;
                             }
                         }
-                        if (bd->wIncRatePerc > 0) percHit += (bd->wIncRatePerc > 100 ? (int)bd->wIncRatePerc - 100 : (int)bd->wIncRatePerc);
+                        if (bd->wIncRatePerc > 0) {
+                            sMugongTemplate* bfTpl = MugongManager::GetInstance()->GetTemplate(it->second.dwMugongID);
+                            if (bfTpl && bfTpl->bType == 4 && bfTpl->bKind == 20) {
+                                int decVal = 100 - (int)bd->wIncRatePerc;
+                                if (decVal > 0) {
+                                    percHit -= decVal;
+                                }
+                            } else {
+                                percHit += (bd->wIncRatePerc > 100 ? (int)bd->wIncRatePerc - 100 : (int)bd->wIncRatePerc);
+                            }
+                        }
                         if (bd->wIncCriticalPerc > 0) percCrit += (bd->wIncCriticalPerc > 100 ? (int)bd->wIncCriticalPerc - 100 : (int)bd->wIncCriticalPerc);
                     }
                     ++it;
@@ -665,6 +675,89 @@ void ClearPlayerBuffsOnDeath(PlayerData& player, DWORD mapID) {
     }
 
     LOG("[DeathBuffCleanup] Finished clearing buffs.");
+}
+
+void PlayerManager::ApplyBuffSafe(DWORD dwCharID, DWORD dwMugongID, BYTE bLevel, DWORD dwDuration, bool bIsDebuff) {
+    DWORD dwObjectID = ToClientPCID(dwCharID);
+    SOCKET s = SessionMgr::GetInstance().GetSocketByCharID(dwCharID);
+    if (!s) return;
+    DWORD pMapID = SessionMgr::GetInstance().GetMapID(s);
+    if (!g_MapInstances.count(pMapID)) return;
+    CMapInstance* mapInst = g_MapInstances[pMapID];
+
+    // 1. 业务设计意图：将地图非递归锁局限在极窄的作用域中，仅安全挂载 Buff 内存状态，随即释放。
+    // 潜在风险：锁释放后，其他线程可能修改目标状态，但由于挂载 Buff 是原子的且无后续依赖，此风险可控。
+    {
+        std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+        PlayerData* pTargetPlayer = mapInst->GetPlayer(dwObjectID);
+        if (pTargetPlayer && pTargetPlayer->dwHpCur > 0) {
+            PlayerData::sActiveBuff hitDebuff;
+            hitDebuff.dwMugongID = dwMugongID;
+            hitDebuff.bLevel = bLevel;
+            hitDebuff.dwEndTime = GetTickCount() + dwDuration;
+            hitDebuff.bIsDebuff = bIsDebuff;
+            pTargetPlayer->activeBuffs[dwMugongID] = hitDebuff;
+        }
+    } // 地图锁在此处随着大括号结束自动析构释放
+
+    // 2. 锁完全释放后，在无锁环境下安全进行属性重算与封包广播，彻底排除自我死锁
+    RecalculateStats(dwCharID, false, true);
+
+    // 广播 0x402C 显示特效与 Buff 图标
+    std::vector<BYTE> dAck(4 + 11);
+    BYTE* dp = dAck.data() + 4;
+    dp[0] = 0; *(DWORD*)(dp + 1) = dwObjectID; dp[5] = 1; // 1 = Player
+    *(DWORD*)(dp + 6) = dwMugongID; dp[10] = bLevel;
+    PACKET_HEADER* dh = (PACKET_HEADER*)dAck.data();
+    dh->id = 0x402C; dh->payloadSize = 11;
+    EncryptPacket(dAck.data(), 0x42);
+    BroadcastPacketToMap(pMapID, dAck);
+    LOG("[ApplyBuffSafe] SUCCESS on player " + std::to_string(dwObjectID) + " buff=" + std::to_string(dwMugongID) + " Lv=" + std::to_string(bLevel) + " duration=" + std::to_string(dwDuration) + "ms");
+}
+
+void PlayerManager::RemoveBuffSafe(DWORD dwCharID, DWORD dwMugongID) {
+    DWORD dwObjectID = ToClientPCID(dwCharID);
+    SOCKET s = SessionMgr::GetInstance().GetSocketByCharID(dwCharID);
+    if (!s) return;
+    DWORD pMapID = SessionMgr::GetInstance().GetMapID(s);
+    if (!g_MapInstances.count(pMapID)) return;
+    CMapInstance* mapInst = g_MapInstances[pMapID];
+
+    bool found = false;
+    BYTE bLevel = 0;
+    // 1. 业务设计意图：极窄加锁范围，仅在保护下安全擦除目标 Buff 内存状态。
+    {
+        std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+        PlayerData* pTargetPlayer = mapInst->GetPlayer(dwObjectID);
+        if (pTargetPlayer) {
+            auto it = pTargetPlayer->activeBuffs.find(dwMugongID);
+            if (it != pTargetPlayer->activeBuffs.end()) {
+                bLevel = it->second.bLevel;
+                pTargetPlayer->activeBuffs.erase(it);
+                found = true;
+            }
+        }
+    } // 地图锁自动析构释放
+
+    if (found) {
+        // 2. 锁释放后，安全地执行属性重算与 UI 移除广播
+        RecalculateStats(dwCharID, false, true);
+
+        // 广播 0x402E 清除客户端上的 Buff 图标
+        std::vector<BYTE> endAck(4 + 11);
+        BYTE* ep = endAck.data() + 4;
+        ep[0] = 0; // bResult
+        *(DWORD*)(ep + 1) = dwObjectID;
+        ep[5] = 1; // bObjectType (Player)
+        *(DWORD*)(ep + 6) = dwMugongID;
+        ep[10] = bLevel;
+        PACKET_HEADER* headE = (PACKET_HEADER*)endAck.data();
+        headE->id = 0x402E; // CS_BT_KEEPUPMUGONGEND_ACK
+        headE->payloadSize = 11;
+        EncryptPacket(endAck.data(), 0x42);
+        BroadcastPacketToMap(pMapID, endAck);
+        LOG("[RemoveBuffSafe] SUCCESS on player " + std::to_string(dwObjectID) + " buff=" + std::to_string(dwMugongID));
+    }
 }
 
 

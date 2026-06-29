@@ -214,7 +214,7 @@ void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
             for (const auto& bf : pObj->activeBuffs) {
                 if (bf.second.bIsDebuff) {
                     DWORD mugID = bf.second.dwMugongID;
-                    if (mugID == 94 || mugID == 95 || mugID == 35 || mugID == 65 || mugID == 125) {
+                    if (mugID == 94 || mugID == 35 || mugID == 65) {
                         isCC = true;
                         break;
                     }
@@ -249,7 +249,7 @@ void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
             for (const auto& bf : pObj->activeBuffs) {
                 if (bf.second.bIsDebuff) {
                     DWORD mugID = bf.second.dwMugongID;
-                    if (mugID == 94 || mugID == 95 || mugID == 35 || mugID == 65 || mugID == 125) {
+                    if (mugID == 94 || mugID == 35 || mugID == 65) {
                         isCC = true;
                         break;
                     }

@@ -73,6 +73,9 @@
     <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\MugongSkill_FiveElm.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\MugongSkill_PetCapture.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\ChatHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

@@ -1202,7 +1202,31 @@ void OnPetBongInReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
     }
 
     // 4. 数据解绑挂起并绑定封印
-    // A. 更改宠物所有者为 0 (代表挂起)
+    // A. 移除地图上的宠物实体并广播离开包 0x3503
+    DWORD pMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+    if (g_MapInstances.count(pMapID)) {
+        CMapInstance* mapInst = g_MapInstances[pMapID];
+        std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+        if (mapInst->GetPlayer(dwPetObjectID)) {
+            mapInst->RemovePlayer(dwPetObjectID);
+
+            std::vector<BYTE> leaveBuf(4);
+            auto pushDWord = [&](DWORD d) { leaveBuf.push_back(d&0xFF); leaveBuf.push_back((d>>8)&0xFF); leaveBuf.push_back((d>>16)&0xFF); leaveBuf.push_back(d>>24); };
+            
+            pushDWord(dwPetObjectID);
+            leaveBuf.push_back(4); // bObjectType = 4
+
+            PACKET_HEADER* leaveHead = (PACKET_HEADER*)leaveBuf.data();
+            leaveHead->id = 0x3503;
+            leaveHead->payloadSize = (WORD)(leaveBuf.size() - sizeof(PACKET_HEADER));
+            EncryptPacket(leaveBuf.data(), 0x42);
+            BroadcastPacketToMap(pMapID, leaveBuf);
+
+            LOG("[PetBongIn] Despawned pet ObjID=" + std::to_string(dwPetObjectID) + " on map " + std::to_string(pMapID));
+        }
+    }
+
+    // B. 更改宠物所有者为 0 (代表挂起)
     DBHelper::GetInstance().ExecuteUpdate("UPDATE CHAR_PET SET dwCharID = 0 WHERE dwID = " + std::to_string(dwPetID));
 
     // B. 更新镜子数据 ITEMDATA.nData1 = dwPetID, nData15 = 1 (m_bModifyCnt 封印数)
@@ -1352,6 +1376,60 @@ void OnPetBongOutReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tota
     DBHelper::GetInstance().ExecuteUpdate("UPDATE ITEMDATA SET nData1 = 0, nData15 = 0 WHERE dwItemID = " + std::to_string(dwItemID));
 
     LOG("[PetBongOut] Pet released successfully! dwPetID=" + std::to_string(dwPetID) + " freed from ItemID=" + std::to_string(dwItemID));
+
+    // C. 地图具现化：创建宠物临时实体并向 AOI 广播 0x3502
+    DWORD pMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+    if (g_MapInstances.count(pMapID)) {
+        CMapInstance* mapInst = g_MapInstances[pMapID];
+        std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+        PlayerData* pCaster = mapInst->GetPlayer(charID + 400000000);
+        if (pCaster) {
+            PlayerData petEntity;
+            petEntity.dwObjectID = pet.dwID + 800000000;
+            petEntity.bObjectType = 4; // OBJTYPE_PET
+            petEntity.dwMapID = pMapID;
+            petEntity.bNpcType = pet.bNpcType;
+            petEntity.wPosX = pCaster->wPosX + 2; // 主人坐标偏移
+            petEntity.wPosY = pCaster->wPosY + 2;
+            petEntity.bHeight = pCaster->bHeight;
+            petEntity.fPosX = (float)petEntity.wPosX;
+            petEntity.fPosY = (float)petEntity.wPosY;
+
+            petEntity.dwHpCur = pet.dwHpCur;
+            petEntity.dwHpMax = pet.dwHpMax;
+            petEntity.wWalkSpeed = pet.bSpeed;
+            petEntity.wLevel = pet.wLevel;
+            petEntity.dwOwnerID = charID;
+
+            petEntity.wWepAtk = pet.wAtkPwr;
+            petEntity.dwTotalAtk = pet.wAtkPwr;
+
+            mapInst->AddPlayer(petEntity);
+
+            // 广播 0x3502 MAPENTER_ACK
+            std::vector<BYTE> enterBuf(4);
+            auto pushDWord = [&](DWORD d) { enterBuf.push_back(d&0xFF); enterBuf.push_back((d>>8)&0xFF); enterBuf.push_back((d>>16)&0xFF); enterBuf.push_back(d>>24); };
+            auto pushWord = [&](WORD w) { enterBuf.push_back(w&0xFF); enterBuf.push_back(w>>8); };
+            
+            pushDWord(pMapID);
+            pushDWord(petEntity.dwObjectID);
+            enterBuf.push_back(4); // bObjectType = 4
+            pushWord(petEntity.wPosX);
+            pushWord(petEntity.wPosY);
+            enterBuf.push_back(petEntity.bHeight);
+            pushWord(0); // wDirection
+            enterBuf.push_back(0); // bStatus = Stand
+            enterBuf.push_back(petEntity.wWalkSpeed & 0xFF);
+
+            PACKET_HEADER* enterHead = (PACKET_HEADER*)enterBuf.data();
+            enterHead->id = 0x3502;
+            enterHead->payloadSize = (WORD)(enterBuf.size() - sizeof(PACKET_HEADER));
+            EncryptPacket(enterBuf.data(), 0x42);
+            BroadcastPacketToMap(pMapID, enterBuf);
+
+            LOG("[PetBongOut] Spawned pet ObjID=" + std::to_string(petEntity.dwObjectID) + " for owner=" + std::to_string(charID) + " at (" + std::to_string(petEntity.wPosX) + "," + std::to_string(petEntity.wPosY) + ")");
+        }
+    }
 
     // 5. 拼装大包并回复客户端
     std::vector<BYTE> ackBuf;

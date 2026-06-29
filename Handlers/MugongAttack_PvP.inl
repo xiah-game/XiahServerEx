@@ -93,7 +93,20 @@
                 
 
                 float hitChance = (float)playerAtkRating / (float)(playerAtkRating + targetDodge);
-
+                
+                // 降命中 Debuff 折损攻击方命中率
+                if (pAttacker) {
+                    for (const auto& bf : pAttacker->activeBuffs) {
+                        sMugongTemplate* debuffTpl = MugongManager::GetInstance()->GetTemplate(bf.second.dwMugongID);
+                        if (debuffTpl && debuffTpl->bType == 4 && debuffTpl->bKind == 20) {
+                            sMugongList* debuffData = MugongManager::GetInstance()->GetMugongLevelData(bf.second.dwMugongID, bf.second.bLevel);
+                            if (debuffData && debuffData->wIncRatePerc > 0 && debuffData->wIncRatePerc < 100) {
+                                hitChance *= (float)debuffData->wIncRatePerc / 100.0f;
+                            }
+                            break;
+                        }
+                    }
+                }
                 float dodgeRoll = (float)(rand() % 10000) / 10000.0f;
 
                 
@@ -384,9 +397,21 @@
                         WORD sMonAvoid = pSplashMon->wAvoidRatio;
 
                         DWORD sPlayerAtkRating = 50 + (pAttacker ? pAttacker->dwTotalHit : 0);
-
                         float sHitChance = (float)sPlayerAtkRating / (float)(sPlayerAtkRating + sMonAvoid);
-
+                        
+                        // 降命中 Debuff 折损攻击方命中率
+                        if (pAttacker) {
+                            for (const auto& bf : pAttacker->activeBuffs) {
+                                sMugongTemplate* debuffTpl = MugongManager::GetInstance()->GetTemplate(bf.second.dwMugongID);
+                                if (debuffTpl && debuffTpl->bType == 4 && debuffTpl->bKind == 20) {
+                                    sMugongList* debuffData = MugongManager::GetInstance()->GetMugongLevelData(bf.second.dwMugongID, bf.second.bLevel);
+                                    if (debuffData && debuffData->wIncRatePerc > 0 && debuffData->wIncRatePerc < 100) {
+                                        sHitChance *= (float)debuffData->wIncRatePerc / 100.0f;
+                                    }
+                                    break;
+                                }
+                            }
+                        }
                         float sRoll = (float)(rand() % 10000) / 10000.0f;
 
                         
@@ -597,6 +622,20 @@
                             WORD sPlDodge = pSplashPlayer->dwTotalDodge;
                             DWORD sPlayerAtkRating = 50 + (pAttacker ? pAttacker->dwTotalHit : 0);
                             float sHitChance = (float)sPlayerAtkRating / (float)(sPlayerAtkRating + sPlDodge);
+                            
+                            // 降命中 Debuff 折损攻击方命中率
+                            if (pAttacker) {
+                                for (const auto& bf : pAttacker->activeBuffs) {
+                                    sMugongTemplate* debuffTpl = MugongManager::GetInstance()->GetTemplate(bf.second.dwMugongID);
+                                    if (debuffTpl && debuffTpl->bType == 4 && debuffTpl->bKind == 20) {
+                                        sMugongList* debuffData = MugongManager::GetInstance()->GetMugongLevelData(bf.second.dwMugongID, bf.second.bLevel);
+                                        if (debuffData && debuffData->wIncRatePerc > 0 && debuffData->wIncRatePerc < 100) {
+                                            sHitChance *= (float)debuffData->wIncRatePerc / 100.0f;
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
                             float sRoll = (float)(rand() % 10000) / 10000.0f;
                             BYTE sCritHit = 0; DWORD sFinalDmg = 0; BYTE sResult = 2;
                             if (sPlDodge > 0 && sRoll > sHitChance) { sResult = 1; sFinalDmg = 0; }

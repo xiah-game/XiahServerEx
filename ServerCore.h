@@ -86,6 +86,7 @@ struct EntityBase {
     WORD  wLastUpdateY = 0;
     DWORD dwOwnerID = 0;      // 所有人ObjectID / CharID (用于分身/召唤兽结算)
     DWORD dwBunsinEndTime = 0;// 分身过期时间戳
+    DWORD wIpCur = 0, wIpMax = 0; // 统一实体内功 IP 属性支持，使得怪物亦拥有 IP 数据载体
 };
 
 struct PlayerData : EntityBase {
@@ -93,8 +94,6 @@ struct PlayerData : EntityBase {
     WORD  wStr = 10, wDex = 10, wVit = 10, wInt = 10;
     // Weapon stats
     DWORD wWepAtk = 0, wWepDef = 0, wWepMag = 0;
-    // IP (Mana)
-    DWORD wIpCur = 0, wIpMax = 0;
     // Equipment bonuses
     WORD  wPlusSpeed = 0, wCritical = 0;
     WORD  wEquipHp = 0;
@@ -119,6 +118,7 @@ struct PlayerData : EntityBase {
         bool bIsDebuff = false;
         DWORD dwLastTickTime = 0; // DoT 上次 tick 时间（bKind=19/21 用）
         DWORD dwSnapshotAtk = 0;  // DoT 施放瞬间攻击力快照（bKind=21 用）
+        DWORD dwCasterID = 0;     // 施法者/攻击者 ID（DoT 同步伤害数字用）
     };
     std::map<DWORD, sActiveBuff> activeBuffs;
     // Skills

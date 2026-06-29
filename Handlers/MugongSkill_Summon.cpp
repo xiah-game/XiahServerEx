@@ -4,7 +4,9 @@
 #include "../GameObjects/PlayerManager.h"
 #include "../Network/SessionMgr.h"
 #include "../GameObjects/MapInstance.h"
+#include "../DBHelper.h"
 #include <atomic>
+#include <algorithm>
 
 extern std::map<DWORD, CMapInstance*> g_MapInstances;
 
@@ -204,14 +206,38 @@ void OnPetInfoReq(SOCKET clientSocket, BYTE* payload, WORD payloadSize)
     CMapInstance* mapInst = g_MapInstances[dwMapID];
 
     std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-    PlayerData* pBunsin = mapInst->GetPlayer(dwObjectID);
-    if (!pBunsin || !pBunsin->bIsBunsin) {
-        LOG("[PetInfo] Object " + std::to_string(dwObjectID) + " not found or not bunsin");
+    PlayerData* pPet = mapInst->GetPlayer(dwObjectID);
+    if (!pPet) {
+        LOG("[PetInfo] Object " + std::to_string(dwObjectID) + " not found in map " + std::to_string(dwMapID));
         return;
     }
 
+    bool isRealPet = (dwObjectID >= 800000000 && dwObjectID < 850000000);
+    if (!isRealPet && !pPet->bIsBunsin) {
+        LOG("[PetInfo] Object " + std::to_string(dwObjectID) + " is neither real pet nor bunsin");
+        return;
+    }
+
+    std::string szPetName = "";
+    if (isRealPet) {
+        DWORD dwPetID = dwObjectID - 800000000;
+        std::string q = "SELECT szName FROM CHAR_PET WHERE dwID = " + std::to_string(dwPetID);
+        DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+            char nameBuf[32] = {0};
+            SQLGetData(hStmt, 1, SQL_C_CHAR, nameBuf, sizeof(nameBuf), NULL);
+            szPetName = nameBuf;
+        });
+        szPetName.erase(std::remove_if(szPetName.begin(), szPetName.end(), ::isspace), szPetName.end());
+        if (szPetName.empty()) szPetName = "Pet";
+    } else {
+        if (pPet->bNpcType == 250) {
+            szPetName = "\xbb\xc3\xca\xde"; // "幻兽" 的 GBK 编码
+        } else {
+            szPetName = "Clone";
+        }
+    }
+
     // 组装 PETINFO_ACK (0x3538)
-    // 格式严格对齐客户端 OnCS_NC_PETINFO_ACK 的 CMsg >> 顺序
     std::vector<BYTE> buf(4);
     auto pushByte = [&](BYTE b) { buf.push_back(b); };
     auto pushWord = [&](WORD w) { buf.push_back(w & 0xFF); buf.push_back((w >> 8) & 0xFF); };
@@ -224,29 +250,30 @@ void OnPetInfoReq(SOCKET clientSocket, BYTE* payload, WORD payloadSize)
 
     pushByte(0);                         // bResult = 0
     pushDWord(dwObjectID);               // dwID
-    pushByte(pBunsin->bNpcType);         // bNpcType (251=分身)
+    pushByte(pPet->bNpcType);            // bNpcType
     pushDWord(dwMapID);                  // dwMapID
-    pushWord(pBunsin->wPosX);            // wPosX
-    pushWord(pBunsin->wPosY);            // wPosY
-    pushByte(pBunsin->bHeight);          // bHeight
+    pushWord(pPet->wPosX);               // wPosX
+    pushWord(pPet->wPosY);               // wPosY
+    pushByte(pPet->bHeight);             // bHeight
     pushWord(0);                         // wDirection
-    if (pBunsin->bNpcType == 250) {
-        pushString("\xbb\xc3\xca\xde");   // "幻兽" 的 GBK 编码
-    } else {
-        pushString("Clone");             // szName (sString: WORD len + data)
-    }
+    pushString(szPetName);               // szName
     pushByte(0);                         // bStatus = Stand
-    pushWord(pBunsin->wPosX);            // wDesPosX (同位置)
-    pushWord(pBunsin->wPosY);            // wDesPosY
-    pushByte(pBunsin->bHeight);          // bDesHeight
-    pushDWord(pBunsin->dwHpMax);         // dwHpMax
-    pushDWord(pBunsin->dwHpCur);         // dwHpCur
-    pushByte(pBunsin->wWalkSpeed & 0xFF);// bSpeed
-    pushDWord(pBunsin->dwOwnerID + 400000000); // dwOwnerID (转回800M格式)
-    pushByte(pBunsin->bRebirth);         // bRevolutionStep
-    // wVisualID[6] —— 分身外观装备
+    pushWord(pPet->wPosX);               // wDesPosX
+    pushWord(pPet->wPosY);               // wDesPosY
+    pushByte(pPet->bHeight);             // bDesHeight
+    pushDWord(pPet->dwHpMax);            // dwHpMax
+    pushDWord(pPet->dwHpCur);            // dwHpCur
+    pushByte(pPet->wWalkSpeed & 0xFF);   // bSpeed
+    pushDWord(pPet->dwOwnerID + 400000000); // dwOwnerID (转回800M格式)
+    pushByte(pPet->bRebirth);            // bRevolutionStep
+
+    // wVisualID[6] —— 外观装备。如果是真实野生宠物，强制全充 0，避免客户端崩溃
     for (int i = 0; i < 6; i++) {
-        pushWord(pBunsin->wBunsinVisualID[i]);
+        if (isRealPet) {
+            pushWord(0);
+        } else {
+            pushWord(pPet->wBunsinVisualID[i]);
+        }
     }
 
     PACKET_HEADER* head = (PACKET_HEADER*)buf.data();
@@ -255,8 +282,7 @@ void OnPetInfoReq(SOCKET clientSocket, BYTE* payload, WORD payloadSize)
     EncryptPacket(buf.data(), 0x42);
     SafeSend(clientSocket, (const char*)buf.data(), buf.size(), 0);
 
-    LOG("[PetInfo] Sent PETINFO_ACK for bunsin " + std::to_string(dwObjectID)
-        + " NpcType=" + std::to_string(pBunsin->bNpcType)
-        + " HP=" + std::to_string(pBunsin->dwHpCur) + "/" + std::to_string(pBunsin->dwHpMax)
-        + " Owner=" + std::to_string(pBunsin->dwOwnerID));
+    LOG("[PetInfo] Sent PETINFO_ACK for " + std::string(isRealPet ? "RealPet" : "Bunsin") + " ObjID=" + std::to_string(dwObjectID)
+        + " Name=" + szPetName + " HP=" + std::to_string(pPet->dwHpCur) + "/" + std::to_string(pPet->dwHpMax)
+        + " Owner=" + std::to_string(pPet->dwOwnerID));
 }

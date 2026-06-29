@@ -51,7 +51,7 @@ void OnPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                     for (const auto& bf : pAtk->activeBuffs) {
                         if (bf.second.bIsDebuff) {
                             DWORD mugID = bf.second.dwMugongID;
-                            if (mugID == 94 || mugID == 95 || mugID == 35 || mugID == 65 || mugID == 125) {
+                            if (mugID == 94 || mugID == 35 || mugID == 65) {
                                 isCC = true;
                                 break;
                             }
@@ -144,7 +144,7 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                 for (const auto& bf : pAttacker->activeBuffs) {
                     if (bf.second.bIsDebuff) {
                         DWORD mugID = bf.second.dwMugongID;
-                        if (mugID == 94 || mugID == 95 || mugID == 35 || mugID == 65 || mugID == 125) {
+                        if (mugID == 94 || mugID == 35 || mugID == 65) {
                             isCC = true;
                             break;
                         }
@@ -210,6 +210,20 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                     // Xiah Dodge Logic
                     DWORD playerAtkRating = 50 + (pAttacker ? pAttacker->dwTotalHit : 0);
                     float hitChance = (float)playerAtkRating / (float)(playerAtkRating + monsterAvoid);
+                    
+                    // 降命中 Debuff 折损攻击方命中率
+                    if (pAttacker) {
+                        for (const auto& bf : pAttacker->activeBuffs) {
+                            sMugongTemplate* debuffTpl = MugongManager::GetInstance()->GetTemplate(bf.second.dwMugongID);
+                            if (debuffTpl && debuffTpl->bType == 4 && debuffTpl->bKind == 20) {
+                                sMugongList* debuffData = MugongManager::GetInstance()->GetMugongLevelData(bf.second.dwMugongID, bf.second.bLevel);
+                                if (debuffData && debuffData->wIncRatePerc > 0 && debuffData->wIncRatePerc < 100) {
+                                    hitChance *= (float)debuffData->wIncRatePerc / 100.0f;
+                                }
+                                break;
+                            }
+                        }
+                    }
                     
                     float roll = (float)(rand() % 10000) / 10000.0f;
                     
@@ -410,6 +424,20 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                 DWORD playerAtkRating = 50 + (pAttacker ? pAttacker->dwTotalHit : 0);
                 DWORD targetDodge = pTargetPlayer->dwTotalDodge;
                 float hitChance = (float)playerAtkRating / (float)(playerAtkRating + targetDodge);
+                
+                // 降命中 Debuff 折损攻击方命中率
+                if (pAttacker) {
+                    for (const auto& bf : pAttacker->activeBuffs) {
+                        sMugongTemplate* debuffTpl = MugongManager::GetInstance()->GetTemplate(bf.second.dwMugongID);
+                        if (debuffTpl && debuffTpl->bType == 4 && debuffTpl->bKind == 20) {
+                            sMugongList* debuffData = MugongManager::GetInstance()->GetMugongLevelData(bf.second.dwMugongID, bf.second.bLevel);
+                            if (debuffData && debuffData->wIncRatePerc > 0 && debuffData->wIncRatePerc < 100) {
+                                hitChance *= (float)debuffData->wIncRatePerc / 100.0f;
+                            }
+                            break;
+                        }
+                    }
+                }
                 float roll = (float)(rand() % 10000) / 10000.0f;
                 
                 if (targetDodge > 0 && roll > hitChance) {

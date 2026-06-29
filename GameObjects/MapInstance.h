@@ -84,12 +84,12 @@ private:
     void RemoveFromGrid(std::vector<std::vector<DWORD>>& grid, int gridIdx, DWORD dwObjectID);
     void AddToGrid(std::vector<std::vector<DWORD>>& grid, int gridIdx, DWORD dwObjectID);
 
-    // Internal AI helpers
     void ProcessMonsterAI(DWORD tick, MonsterData& obj);
     void ProcessBuffs(DWORD tick);
     void InterpolatePlayerPositions(DWORD tick);
 
 public:
+    void HandleMonsterDoTDeath(DWORD tick, MonsterData& obj, DWORD casterID, DWORD dwMugongID, BYTE bLevel);
     // Pending sync broadcasts (filled under m_mapMutex, sent via SessionMgr outside lock)
     struct PendingSyncMove {
         DWORD dwObjectID;
@@ -118,6 +118,9 @@ public:
 
     // 公开接口：添加地面特效
     void AddGroundEffect(const sGroundEffect& effect);
+
+    // 内部处理单次地面 AoE 特效的碰撞与伤害/Debuff结算
+    void ProcessSingleGroundEffect(DWORD tick, sGroundEffect& ge);
 
     std::vector<PendingSyncMove> m_pendingSyncs;
     DWORD m_lastSyncBroadcast = 0;

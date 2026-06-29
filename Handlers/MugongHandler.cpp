@@ -302,6 +302,22 @@ void OnMugongLearnReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tot
 
 // OnSelMugongReq + OnMugongPreAttackReq + IsAoeSkill -> MugongPreAttack.cpp
 
+static void SendSystemMessage(SOCKET clientSocket, const std::string& msg) {
+    std::vector<BYTE> buf; buf.resize(4, 0);
+    DWORD senderObjID = 0;
+    buf.push_back(senderObjID & 0xFF); buf.push_back((senderObjID >> 8) & 0xFF); buf.push_back((senderObjID >> 16) & 0xFF); buf.push_back(senderObjID >> 24);
+    buf.push_back(8); // CT_TIMEMESSAGE
+    WORD len = (WORD)msg.size();
+    buf.push_back(len & 0xFF); buf.push_back((len >> 8) & 0xFF);
+    buf.insert(buf.end(), msg.begin(), msg.end());
+    WORD packetID = 0x3E02;
+    WORD payloadSize = (WORD)(buf.size() - 4);
+    memcpy(&buf[0], &packetID, 2);
+    memcpy(&buf[2], &payloadSize, 2);
+    EncryptPacket(buf.data(), 0x42);
+    SafeSend(clientSocket, (const char*)buf.data(), (int)buf.size(), 0);
+}
+
 void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
 
     if (totalSize < 24) return;
@@ -428,6 +444,12 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
     // bType=1 即为治疗技能，不再硬编码排除具体技能 ID
     bool isHeal = (!isBuff && tpl && tpl->bType == 1);
 
+    // 逻辑问题修正：如果技能是敌方单体 Debuff 技能，且当前目标 ID 为 0 或者指向攻击者自己，说明没有选取合法敌方目标，直接拦截以防给自己挂上 debuff。
+    if (isTargetDebuff && (dwDefenseID == 0 || dwDefenseID == dwAttackID)) {
+        LOG("[MugongHandler] Blocked target debuff skill " + std::to_string(dwMugongID) + " cast with invalid/self target: " + std::to_string(dwDefenseID));
+        return;
+    }
+
     // === 特殊技能数据驱动路由（基于 bType/bKind） ===
     MugongAttackContext ctx;
     ctx.clientSocket = clientSocket;
@@ -456,6 +478,11 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
             HandleSummonSkill(ctx);
             return;
         }
+        // 捕捉普通宠物 (bType=2, bKind=17)
+        if (tpl->bType == 2 && tpl->bKind == 17) {
+            HandlePetCapture(ctx);
+            return;
+        }
         // 五行被动技 (bType=0, bKind=80~84): 蓄气校验
         if (tpl->bType == 0 && tpl->bKind >= 80 && tpl->bKind <= 84) {
             if (!HandleFiveElmUltimate(ctx)) {
@@ -465,27 +492,10 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
     }
 
     // 2.4. 攻击破状态：主动释放攻击技能时清除龟息(130)/隐身(178)
-    if (!isBuff && !isHeal && g_MapInstances.count(playerMapID)) {
-        CMapInstance* mapInst = g_MapInstances[playerMapID];
-        std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-        sServerObject* pObj = mapInst->GetPlayer(dwAttackID);
-        if (pObj) {
-            bool stateCleared = false;
-            if (pObj->activeBuffs.count(130) > 0) {
-                pObj->activeBuffs.erase(130);
-                stateCleared = true;
-                LOG("[MugongHandler] Player " + std::to_string(dwAttackID) + " attacked, Turtle Breath (130) removed.");
-            }
-            if (pObj->activeBuffs.count(178) > 0) {
-                pObj->activeBuffs.erase(178);
-                stateCleared = true;
-                LOG("[MugongHandler] Player " + std::to_string(dwAttackID) + " attacked, Stealth (178) removed.");
-            }
-            if (stateCleared) {
-                // 重算属性使面板同步
-                PlayerManager::GetInstance().RecalculateStats(dwAttackID - 400000000, false);
-            }
-        }
+    if (!isBuff && !isHeal) {
+        DWORD attackerCharID = dwAttackID - 400000000;
+        PlayerManager::GetInstance().RemoveBuffSafe(attackerCharID, 130);
+        PlayerManager::GetInstance().RemoveBuffSafe(attackerCharID, 178);
     }
 
     // 2.5. Perform early IP cost validation and deduction for all non-healing skills
@@ -1096,7 +1106,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
     }
 
     // === bType=4, bKind=24（寸草不生 127）：地面持续 AoE DoT ===
-    // 在施放者脚下布置毒雾，每 nEtc2 ms 对 nEtc1 半径内怪物造成 攻击×wIncAtkPerc% 伤害
+    // 在施放者指定的鼠标地面位置布置毒雾，每 nEtc2 ms 对 nEtc1 半径内怪物造成 攻击×wIncAtkPerc% 伤害
     if (tpl && tpl->bType == 4 && tpl->bKind == 24 && pMugongData) {
         DWORD dotDuration = pMugongData->dwKeepUpTime * 1000;
         float aoeRadius = (pMugongData->nEtc1 > 0) ? (float)pMugongData->nEtc1 : 20.0f;
@@ -1104,7 +1114,22 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
         WORD atkPerc = pMugongData->wIncAtkPerc;
 
         DWORD casterAtk = 50;
-        WORD castX = wAttackPosX, castY = wAttackPosY;
+        
+        // 1. 业务设计意图：引入服务端最大 15 格施法射程的安全防御机制。
+        // 计算玩家当前坐标 (wAttackPosX, wAttackPosY) 与鼠标指向点 (wTargetPosX, wTargetPosY) 的真实距离。
+        // 若超出射程，执行高精度向量投影截断，强行将毒雾生成点和动画广播点锁定在 15 格的施法最大边界上，完美防御越界封包挂。
+        float dx = (float)wAttackPosX - (float)wTargetPosX;
+        float dy = (float)wAttackPosY - (float)wTargetPosY;
+        float castDist = sqrtf(dx * dx + dy * dy);
+        float maxCastRange = 15.0f; // 寸草不生最大 15 格射程限制
+
+        WORD finalTargetX = wTargetPosX;
+        WORD finalTargetY = wTargetPosY;
+        if (castDist > maxCastRange) {
+            float ratio = maxCastRange / castDist;
+            finalTargetX = wAttackPosX + (WORD)((float)(wTargetPosX - wAttackPosX) * ratio);
+            finalTargetY = wAttackPosY + (WORD)((float)(wTargetPosY - wAttackPosY) * ratio);
+        }
 
         if (g_MapInstances.count(playerMapID)) {
             CMapInstance* mapInst = g_MapInstances[playerMapID];
@@ -1112,8 +1137,6 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
             PlayerData* pCaster = mapInst->GetPlayer(dwAttackID);
             if (pCaster) {
                 casterAtk = pCaster->dwTotalAtk;
-                castX = pCaster->wPosX;
-                castY = pCaster->wPosY;
             }
 
             // 创建地面特效
@@ -1121,8 +1144,8 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
             ge.dwMugongID = dwMugongID;
             ge.bLevel = bMugongLevel;
             ge.dwCasterID = dwAttackID;
-            ge.wPosX = castX;
-            ge.wPosY = castY;
+            ge.wPosX = finalTargetX; // 毒雾精确布置在鼠标指定的 3D 拾取网格坐标上
+            ge.wPosY = finalTargetY;
             ge.fRadius = aoeRadius;
             ge.dwTickInterval = tickInterval;
             ge.wAtkPerc = atkPerc;
@@ -1133,7 +1156,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
             mapInst->AddGroundEffect(ge);
         }
 
-        // 广播 0x402C 通知客户端创建毒雾特效（挂在施放者身上）
+        // 广播 0x402C 通知客户端创建毒雾特效（挂在施放者身上，用于显示状态图标）
         std::vector<BYTE> buffAck(4 + 11);
         BYTE* bp = buffAck.data() + 4;
         bp[0] = 0;
@@ -1146,11 +1169,11 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
         EncryptPacket(buffAck.data(), 0x42);
         BroadcastPacketToMap(playerMapID, buffAck);
 
-        // 广播 0x4016 施法动画
+        // 广播 0x4016 施法动画，将粒子特效精准降临在地面目标坐标上
         std::vector<BYTE> ackBuf(4 + 38, 0);
         BYTE* p = ackBuf.data() + 4;
         p[0] = 0; *(DWORD*)(p + 1) = dwMugongID; p[5] = bMugongLevel; p[6] = 1;
-        *(DWORD*)(p + 7) = dwAttackID; *(WORD*)(p + 11) = castX; *(WORD*)(p + 13) = castY;
+        *(DWORD*)(p + 7) = dwAttackID; *(WORD*)(p + 11) = finalTargetX; *(WORD*)(p + 13) = finalTargetY;
         p[15] = bAttackHeight; p[16] = 1; *(DWORD*)(p + 17) = dwAttackID;
         *(DWORD*)(p + 21) = 0; *(DWORD*)(p + 25) = 0; *(DWORD*)(p + 29) = 0; *(DWORD*)(p + 33) = 0; p[37] = 0;
         PACKET_HEADER* head10 = (PACKET_HEADER*)ackBuf.data();
@@ -1179,6 +1202,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                     dotBuff.dwEndTime = GetTickCount() + dotDuration;
                     dotBuff.bIsDebuff = true;
                     dotBuff.dwLastTickTime = GetTickCount();
+                    dotBuff.dwCasterID = dwAttackID; // 业务设计意图：记录施法者玩家ID，保证心跳DoT结算时能向客户端同步正确的攻击者
                     pMon->activeBuffs[dwMugongID] = dotBuff;
 
                     std::vector<BYTE> dotAck(4 + 11);
@@ -1219,29 +1243,80 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
         if (g_MapInstances.count(playerMapID)) {
             CMapInstance* mapInst = g_MapInstances[playerMapID];
-            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-            MonsterData* pMon = mapInst->GetMonster(dwDefenseID);
-            if (pMon && pMon->dwHpCur > 0) {
-                bool success = (successRate >= 100) || ((WORD)(rand() % 100) < successRate);
-                if (success) {
-                    PlayerData::sActiveBuff hitDebuff;
-                    hitDebuff.dwMugongID = dwMugongID;
-                    hitDebuff.bLevel = bMugongLevel;
-                    hitDebuff.dwEndTime = GetTickCount() + debuffDuration;
-                    hitDebuff.bIsDebuff = true;
-                    pMon->activeBuffs[dwMugongID] = hitDebuff;
+            
+            bool isPlayer = false;
+            bool isMonster = false;
+            bool pvpSuccess = false;
+            bool pveSuccess = false;
+            DWORD targetObjectID = 0;
+            BYTE targetObjectType = 0;
 
-                    std::vector<BYTE> dAck(4 + 11);
-                    BYTE* dp = dAck.data() + 4;
-                    dp[0] = 0; *(DWORD*)(dp + 1) = pMon->dwObjectID; dp[5] = pMon->bObjectType;
-                    *(DWORD*)(dp + 6) = dwMugongID; dp[10] = bMugongLevel;
-                    PACKET_HEADER* dh = (PACKET_HEADER*)dAck.data();
-                    dh->id = 0x402C; dh->payloadSize = 11;
-                    EncryptPacket(dAck.data(), 0x42);
-                    BroadcastPacketToMap(playerMapID, dAck);
-                    LOG("[MugongHandler] HitDebuff on monster " + std::to_string(pMon->dwObjectID)
-                        + " hitRate=" + std::to_string(pMugongData->wIncRatePerc) + "% duration=" + std::to_string(pMugongData->dwKeepUpTime) + "s");
+            // 1. 业务设计意图：引入局部大括号块以隔离地图非递归锁的生命周期。
+            // 在锁保护下，仅执行状态读取、概率判定与 Buff 挂载，挂载后立即释放锁。
+            // 潜在风险：锁释放后，被引用的 PlayerData 或 MonsterData 指针可能会失效，
+            // 故在此仅安全提取其 ObjectID 与 ObjectType，绝不将指针带到锁外访问。
+            {
+                std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+                
+                // 降命中 Debuff PvP 与 PvE 双重挂载支持
+                PlayerData* pTargetPlayer = mapInst->GetPlayer(dwDefenseID);
+                if (pTargetPlayer && pTargetPlayer->dwHpCur > 0) {
+                    isPlayer = true;
+                    pvpSuccess = (successRate >= 100) || ((WORD)(rand() % 100) < successRate);
+                    if (pvpSuccess) {
+                        PlayerData::sActiveBuff hitDebuff;
+                        hitDebuff.dwMugongID = dwMugongID;
+                        hitDebuff.bLevel = bMugongLevel;
+                        hitDebuff.dwEndTime = GetTickCount() + debuffDuration;
+                        hitDebuff.bIsDebuff = true;
+                        pTargetPlayer->activeBuffs[dwMugongID] = hitDebuff;
+                        targetObjectID = pTargetPlayer->dwObjectID;
+                    }
                 }
+                else {
+                    MonsterData* pMon = mapInst->GetMonster(dwDefenseID);
+                    if (pMon && pMon->dwHpCur > 0) {
+                        isMonster = true;
+                        pveSuccess = (successRate >= 100) || ((WORD)(rand() % 100) < successRate);
+                        if (pveSuccess) {
+                            PlayerData::sActiveBuff hitDebuff;
+                            hitDebuff.dwMugongID = dwMugongID;
+                            hitDebuff.bLevel = bMugongLevel;
+                            hitDebuff.dwEndTime = GetTickCount() + debuffDuration;
+                            hitDebuff.bIsDebuff = true;
+                            pMon->activeBuffs[dwMugongID] = hitDebuff;
+                            targetObjectID = pMon->dwObjectID;
+                            targetObjectType = pMon->bObjectType;
+                        }
+                    }
+                }
+            } // 地图锁在此处随着局部大括号结束而自动析构释放
+
+            // 2. 锁释放后，安全地执行属性重算与封包广播，彻底避免非递归锁自我死锁
+            if (isPlayer && pvpSuccess) {
+                // 实时触发受击玩家属性面板重算与静默刷新（避免清空武功窗口）
+                PlayerManager::GetInstance().RecalculateStats(dwDefenseID - 400000000, false, true);
+
+                std::vector<BYTE> dAck(4 + 11);
+                BYTE* dp = dAck.data() + 4;
+                dp[0] = 0; *(DWORD*)(dp + 1) = targetObjectID; dp[5] = 1; // 1 = Player
+                *(DWORD*)(dp + 6) = dwMugongID; dp[10] = bMugongLevel;
+                PACKET_HEADER* dh = (PACKET_HEADER*)dAck.data();
+                dh->id = 0x402C; dh->payloadSize = 11;
+                EncryptPacket(dAck.data(), 0x42);
+                BroadcastPacketToMap(playerMapID, dAck);
+                LOG("[MugongHandler] HitDebuff PVP SUCCESS on player " + std::to_string(targetObjectID) + " duration=" + std::to_string(pMugongData->dwKeepUpTime) + "s");
+            }
+            else if (isMonster && pveSuccess) {
+                std::vector<BYTE> dAck(4 + 11);
+                BYTE* dp = dAck.data() + 4;
+                dp[0] = 0; *(DWORD*)(dp + 1) = targetObjectID; dp[5] = targetObjectType; // 3 = Monster
+                *(DWORD*)(dp + 6) = dwMugongID; dp[10] = bMugongLevel;
+                PACKET_HEADER* dh = (PACKET_HEADER*)dAck.data();
+                dh->id = 0x402C; dh->payloadSize = 11;
+                EncryptPacket(dAck.data(), 0x42);
+                BroadcastPacketToMap(playerMapID, dAck);
+                LOG("[MugongHandler] HitDebuff PVE SUCCESS on monster " + std::to_string(targetObjectID) + " duration=" + std::to_string(pMugongData->dwKeepUpTime) + "s");
             }
         }
 
@@ -1279,6 +1354,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                     dotBuff.bIsDebuff = true;
                     dotBuff.dwLastTickTime = GetTickCount();
                     dotBuff.dwSnapshotAtk = casterAtk;
+                    dotBuff.dwCasterID = dwAttackID; // 业务设计意图：记录施法者玩家ID，保证心跳DoT结算时能向客户端同步正确的攻击者
                     pMon->activeBuffs[dwMugongID] = dotBuff;
 
                     std::vector<BYTE> dotAck(4 + 11);
@@ -1317,30 +1393,83 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
         if (g_MapInstances.count(playerMapID)) {
             CMapInstance* mapInst = g_MapInstances[playerMapID];
-            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-            MonsterData* pMon = mapInst->GetMonster(dwDefenseID);
-            if (pMon && pMon->dwHpCur > 0) {
-                bool success = (successRate >= 100) || ((WORD)(rand() % 100) < successRate);
-                if (success) {
-                    PlayerData::sActiveBuff mpDot;
-                    mpDot.dwMugongID = dwMugongID;
-                    mpDot.bLevel = bMugongLevel;
-                    mpDot.dwEndTime = GetTickCount() + dotDuration;
-                    mpDot.bIsDebuff = true;
-                    mpDot.dwLastTickTime = GetTickCount();
-                    pMon->activeBuffs[dwMugongID] = mpDot;
+            
+            bool isPlayer = false;
+            bool isMonster = false;
+            bool pvpSuccess = false;
+            bool pveSuccess = false;
+            DWORD targetObjectID = 0;
+            BYTE targetObjectType = 0;
 
-                    std::vector<BYTE> dotAck(4 + 11);
-                    BYTE* dp = dotAck.data() + 4;
-                    dp[0] = 0; *(DWORD*)(dp + 1) = pMon->dwObjectID; dp[5] = pMon->bObjectType;
-                    *(DWORD*)(dp + 6) = dwMugongID; dp[10] = bMugongLevel;
-                    PACKET_HEADER* dh = (PACKET_HEADER*)dotAck.data();
-                    dh->id = 0x402C; dh->payloadSize = 11;
-                    EncryptPacket(dotAck.data(), 0x42);
-                    BroadcastPacketToMap(playerMapID, dotAck);
-                    LOG("[MugongHandler] MpDot on monster " + std::to_string(pMon->dwObjectID)
-                        + " drain=" + std::to_string(pMugongData->nEtc1) + "/tick");
+            // 1. 业务设计意图：引入局部大括号以隔离地图非递归锁的生命周期，避免在重算或发送封包时触发自我死锁。
+            // 锁仅保护状态读取、概率计算与 Buff 数据录入，录入完毕后瞬时释放。
+            {
+                std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+                
+                PlayerData* pTargetPlayer = mapInst->GetPlayer(dwDefenseID);
+                if (pTargetPlayer && pTargetPlayer->dwHpCur > 0) {
+                    isPlayer = true;
+                    pvpSuccess = (successRate >= 100) || ((WORD)(rand() % 100) < successRate);
+                    if (pvpSuccess) {
+                        PlayerData::sActiveBuff mpDot;
+                        mpDot.dwMugongID = dwMugongID;
+                        mpDot.bLevel = bMugongLevel;
+                        mpDot.dwEndTime = GetTickCount() + dotDuration;
+                        mpDot.bIsDebuff = true;
+                        mpDot.dwLastTickTime = GetTickCount();
+                        mpDot.dwCasterID = dwAttackID; // 记录施法者ID，保证IP DoT源追踪
+                        pTargetPlayer->activeBuffs[dwMugongID] = mpDot;
+                        targetObjectID = pTargetPlayer->dwObjectID;
+                    }
                 }
+                else {
+                    MonsterData* pMon = mapInst->GetMonster(dwDefenseID);
+                    if (pMon && pMon->dwHpCur > 0) {
+                        isMonster = true;
+                        pveSuccess = (successRate >= 100) || ((WORD)(rand() % 100) < successRate);
+                        if (pveSuccess) {
+                            PlayerData::sActiveBuff mpDot;
+                            mpDot.dwMugongID = dwMugongID;
+                            mpDot.bLevel = bMugongLevel;
+                            mpDot.dwEndTime = GetTickCount() + dotDuration;
+                            mpDot.bIsDebuff = true;
+                            mpDot.dwLastTickTime = GetTickCount();
+                            mpDot.dwCasterID = dwAttackID; // 记录施法者ID
+                            pMon->activeBuffs[dwMugongID] = mpDot;
+                            targetObjectID = pMon->dwObjectID;
+                            targetObjectType = pMon->bObjectType;
+                        }
+                    }
+                }
+            } // 地图锁在此自动释放析构
+
+            // 2. 锁释放后，安全地执行属性重算与 debuff 图标广播 (0x402C)
+            if (isPlayer && pvpSuccess) {
+                // 实时触发受击玩家属性面板重算与静默刷新 (不清理武功窗口)
+                PlayerManager::GetInstance().RecalculateStats(dwDefenseID - 400000000, false, true);
+
+                std::vector<BYTE> dAck(4 + 11);
+                BYTE* dp = dAck.data() + 4;
+                dp[0] = 0; *(DWORD*)(dp + 1) = targetObjectID; dp[5] = 1; // 1 = Player
+                *(DWORD*)(dp + 6) = dwMugongID; dp[10] = bMugongLevel;
+                PACKET_HEADER* dh = (PACKET_HEADER*)dAck.data();
+                dh->id = 0x402C; dh->payloadSize = 11;
+                EncryptPacket(dAck.data(), 0x42);
+                BroadcastPacketToMap(playerMapID, dAck);
+                LOG("[MugongHandler] MpDot PVP SUCCESS on player " + std::to_string(targetObjectID) 
+                    + " drain=" + std::to_string(pMugongData->nEtc1) + "/tick");
+            }
+            else if (isMonster && pveSuccess) {
+                std::vector<BYTE> dAck(4 + 11);
+                BYTE* dp = dAck.data() + 4;
+                dp[0] = 0; *(DWORD*)(dp + 1) = targetObjectID; dp[5] = targetObjectType;
+                *(DWORD*)(dp + 6) = dwMugongID; dp[10] = bMugongLevel;
+                PACKET_HEADER* dh = (PACKET_HEADER*)dAck.data();
+                dh->id = 0x402C; dh->payloadSize = 11;
+                EncryptPacket(dAck.data(), 0x42);
+                BroadcastPacketToMap(playerMapID, dAck);
+                LOG("[MugongHandler] MpDot PVE SUCCESS on monster " + std::to_string(targetObjectID) 
+                    + " drain=" + std::to_string(pMugongData->nEtc1) + "/tick");
             }
         }
 
@@ -1487,45 +1616,31 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
         // bType=4, bKind=7（九天凤舞/元气神功）：范围内友方也挂同样buff
         if (tpl && tpl->bType == 4 && tpl->bKind == 7 && pMugongData && g_MapInstances.count(playerMapID)) {
             CMapInstance* mapInst = g_MapInstances[playerMapID];
-            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-            PlayerData* pCaster = mapInst->GetPlayer(dwAttackID);
-            if (pCaster) {
-                float buffRange = (pMugongData->wAttackRange > 0) ? (float)pMugongData->wAttackRange : 50.0f;
-                WORD cx = pCaster->wPosX, cy = pCaster->wPosY;
-                DWORD endTime = GetTickCount() + pMugongData->dwKeepUpTime * 1000;
+            std::vector<DWORD> targetAllyCharIDs;
+            
+            // 1. 业务设计意图：地图非递归锁仅用于极其轻量级的 AOI 队友检索与距离校验，随即释放，杜绝锁重入。
+            {
+                std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+                PlayerData* pCaster = mapInst->GetPlayer(dwAttackID);
+                if (pCaster) {
+                    float buffRange = (pMugongData->wAttackRange > 0) ? (float)pMugongData->wAttackRange : 50.0f;
+                    WORD cx = pCaster->wPosX, cy = pCaster->wPosY;
 
-                std::vector<PlayerData*> aoiPlayers = mapInst->GetPlayersInAOI(cx, cy);
-                for (PlayerData* pAlly : aoiPlayers) {
-                    if (!pAlly || pAlly->dwObjectID == dwAttackID || pAlly->dwHpCur == 0) continue;
-                    float dx = (float)pAlly->wPosX - (float)cx;
-                    float dy = (float)pAlly->wPosY - (float)cy;
-                    if (sqrtf(dx * dx + dy * dy) > buffRange) continue;
+                    std::vector<PlayerData*> aoiPlayers = mapInst->GetPlayersInAOI(cx, cy);
+                    for (PlayerData* pAlly : aoiPlayers) {
+                        if (!pAlly || pAlly->dwObjectID == dwAttackID || pAlly->dwHpCur == 0) continue;
+                        float dx = (float)pAlly->wPosX - (float)cx;
+                        float dy = (float)pAlly->wPosY - (float)cy;
+                        if (sqrtf(dx * dx + dy * dy) > buffRange) continue;
 
-                    // 挂buff
-                    PlayerData::sActiveBuff allyBuff;
-                    allyBuff.dwMugongID = dwMugongID;
-                    allyBuff.bLevel = bMugongLevel;
-                    allyBuff.dwEndTime = endTime;
-                    allyBuff.bIsDebuff = false;
-                    pAlly->activeBuffs[dwMugongID] = allyBuff;
-
-                    // 广播 0x402C 给队友
-                    std::vector<BYTE> allyAck(4 + 11);
-                    BYTE* abp = allyAck.data() + 4;
-                    abp[0] = 0;
-                    *(DWORD*)(abp + 1) = pAlly->dwObjectID;
-                    abp[5] = 1;
-                    *(DWORD*)(abp + 6) = dwMugongID;
-                    abp[10] = bMugongLevel;
-                    PACKET_HEADER* ah = (PACKET_HEADER*)allyAck.data();
-                    ah->id = 0x402C; ah->payloadSize = 11;
-                    EncryptPacket(allyAck.data(), 0x42);
-                    BroadcastPacketToMap(playerMapID, allyAck);
-
-                    // 重算队友属性
-                    PlayerManager::GetInstance().RecalculateStats(pAlly->dwObjectID - 400000000, false);
-                    LOG("[MugongHandler] AOE Buff " + std::to_string(dwMugongID) + " applied to ally " + std::to_string(pAlly->dwObjectID));
+                        targetAllyCharIDs.push_back(pAlly->dwObjectID - 400000000);
+                    }
                 }
+            } // 地图锁在此处随着大括号结束自动析构释放
+
+            // 2. 锁完全释放后，依次对符合条件的队友调用 ApplyBuffSafe 进行并发安全的挂载、重算与广播
+            for (DWORD allyCharID : targetAllyCharIDs) {
+                PlayerManager::GetInstance().ApplyBuffSafe(allyCharID, dwMugongID, bMugongLevel, pMugongData->dwKeepUpTime * 1000, false);
             }
         }
 

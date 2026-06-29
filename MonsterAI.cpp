@@ -12,6 +12,7 @@
 #include <thread>
 #include <time.h>
 #include <set>
+#include <unordered_set>
 
 void MonsterAIWorker(int workerId, int totalWorkers) {
     srand((unsigned int)time(NULL) ^ workerId);
@@ -29,23 +30,39 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
         for (auto& pair : g_MapInstances) {
             if (idx % totalWorkers == workerId) {
                 if (pair.second) {
-                    std::vector<CMapInstance::PendingSyncMove> syncsToSend;
+                    struct SyncToSend {
+                        CMapInstance::PendingSyncMove move;
+                        std::unordered_set<DWORD> aoiPlayerIDs;
+                    };
+                    std::vector<SyncToSend> syncsToSend;
                     DWORD mapID = pair.first;
                     {
                         std::lock_guard<std::mutex> lock(pair.second->GetMutex());
                         pair.second->Update(tick);
-                        syncsToSend = pair.second->m_pendingSyncs;
+                        for (const auto& sm : pair.second->m_pendingSyncs) {
+                            SyncToSend sts;
+                            sts.move = sm;
+                            // 业务设计意图：在持地图锁期间，收集该移动玩家当前坐标九宫格范围内的其他在线玩家，用以在锁外进行精确局部广播，从而在保证并发性能的同时彻底消灭全图广播负载。
+                            std::vector<PlayerData*> aoiPlayers = pair.second->GetPlayersInAOI(sm.wPosX, sm.wPosY);
+                            for (auto* p : aoiPlayers) {
+                                if (p->dwObjectID != sm.dwObjectID) {
+                                    sts.aoiPlayerIDs.insert(p->dwObjectID);
+                                }
+                            }
+                            syncsToSend.push_back(sts);
+                        }
                         pair.second->m_pendingSyncs.clear();
                     }
                     
                     // Broadcast pending sync moves outside map mutex to prevent deadlock
                     if (!syncsToSend.empty()) {
-                        for (const auto& sm : syncsToSend) {
+                        for (const auto& sts : syncsToSend) {
+                            const auto& sm = sts.move;
                             // Build SYNCMOVE_ACK (0x430E)
                             std::vector<BYTE> buf; buf.resize(4);
                             buf.push_back(0); // bResult
                             buf.push_back(sm.dwObjectID & 0xFF); buf.push_back((sm.dwObjectID>>8)&0xFF); buf.push_back((sm.dwObjectID>>16)&0xFF); buf.push_back((sm.dwObjectID>>24)&0xFF);
-                            buf.push_back(1); // 业务设计意图：插入bObjectType(1=PC)。因为m_pendingSyncs收集的都是玩家对象的移动。
+                            // 意图：NV_SYNCMOVE_ACK 协议不包含 bObjectType，直接追加坐标以和客户端 OnCS_NV_SYNCMOVE_ACK 对齐，消除 1 字节位移
                             buf.push_back(sm.wPosX & 0xFF); buf.push_back(sm.wPosX >> 8);
                             buf.push_back(sm.wPosY & 0xFF); buf.push_back(sm.wPosY >> 8);
                             buf.push_back(sm.bHeight);
@@ -63,15 +80,10 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
                             h->payloadSize = buf.size() - sizeof(PACKET_HEADER);
                             EncryptPacket(buf.data(), 0x42);
                             
-                            // Send to all other players on same map (exclude self)
-                            DWORD selfCharID = sm.dwObjectID - 400000000;
-                            SOCKET selfSock = SessionMgr::GetInstance().GetSocketByCharID(selfCharID);
-                            SessionMgr::GetInstance().ForEachSocketInMap(mapID, [&](SOCKET s, DWORD sCharID) {
-                                DWORD sObjID = sCharID + 400000000;
-                                if (sObjID != sm.dwObjectID) {
-                                    SafeSend(s, (const char*)buf.data(), buf.size(), 0);
-                                }
-                            });
+                            // 业务设计意图：局部广播——仅发送给处于该玩家九宫格 AOI 范围内的其他在线玩家，彻底消灭全图广播负载，节省服务器网络带宽。
+                            if (!sts.aoiPlayerIDs.empty()) {
+                                SessionMgr::GetInstance().SendToObjectIDs(sts.aoiPlayerIDs, mapID, buf, INVALID_SOCKET);
+                            }
                         }
                     }
 
@@ -215,6 +227,7 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
                                 expiredSpirits.push_back(pl.dwObjectID);
                             }
 
+                            bool hasIpRegenSync = false;
                             for (auto it = pl.activeBuffs.begin(); it != pl.activeBuffs.end(); ) {
                                 if (tick >= it->second.dwEndTime) {
                                     ExpiredBuff eb;
@@ -226,7 +239,46 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
                                     LOG("[BuffExpiry] Buff " + std::to_string(it->second.dwMugongID) + " expired on player " + std::to_string(pl.dwObjectID));
                                     it = pl.activeBuffs.erase(it);
                                 } else {
+                                    // 业务设计意图：处理玩家身上的持续减蓝 Buff (bKind=22) Tick 结算。
+                                    // 每 1000 毫秒扣减玩家的 wIpCur，并发送 0x3B0D (CS_IF_CHARHP_ACK) 刷新客户端自身的蓝条。
+                                    sMugongTemplate* bfTpl = MugongManager::GetInstance()->GetTemplate(it->second.dwMugongID);
+                                    if (bfTpl && bfTpl->bType == 4 && bfTpl->bKind == 22 && it->second.bIsDebuff) {
+                                        sMugongList* dotData = MugongManager::GetInstance()->GetMugongLevelData(it->second.dwMugongID, it->second.bLevel);
+                                        if (dotData) {
+                                            DWORD tickInterval = 1000; // 每秒 Tick
+                                            if (tick - it->second.dwLastTickTime >= tickInterval) {
+                                                it->second.dwLastTickTime = tick;
+                                                DWORD drain = (dotData->nEtc1 > 0) ? dotData->nEtc1 : 1;
+                                                if (pl.wIpCur > drain) {
+                                                    pl.wIpCur -= drain;
+                                                } else {
+                                                    pl.wIpCur = 0;
+                                                }
+                                                hasIpRegenSync = true;
+                                                LOG("[MpDot-Tick] Player " + std::to_string(pl.dwObjectID) + " drained " + std::to_string(drain) + " IP, current IP: " + std::to_string(pl.wIpCur));
+                                            }
+                                        }
+                                    }
                                     ++it;
+                                }
+                            }
+
+                            if (hasIpRegenSync) {
+                                DWORD charID = pl.dwObjectID - 400000000;
+                                SOCKET targetSock = SessionMgr::GetInstance().GetSocketByCharID(charID);
+                                if (targetSock != INVALID_SOCKET) {
+                                    std::vector<BYTE> hpBuf(4);
+                                    auto push4 = [&](DWORD d) { hpBuf.push_back(d&0xFF); hpBuf.push_back((d>>8)&0xFF); hpBuf.push_back((d>>16)&0xFF); hpBuf.push_back((d>>24)&0xFF); };
+                                    push4(pl.dwHpMax);
+                                    push4(pl.dwHpCur);
+                                    push4(pl.wIpMax);
+                                    push4(pl.wIpCur);
+                                    hpBuf.push_back(0); // bType = 0 (auto recovery, no effect)
+                                    PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
+                                    hpHead->id = 0x3B0D; // CS_IF_CHARHP_ACK
+                                    hpHead->payloadSize = hpBuf.size() - 4;
+                                    EncryptPacket(hpBuf.data(), 0x42);
+                                    SafeSend(targetSock, (const char*)hpBuf.data(), hpBuf.size(), 0);
                                 }
                             }
                         }

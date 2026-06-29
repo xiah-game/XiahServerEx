@@ -53,7 +53,7 @@ void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize,
             for (const auto& bf : pObj->activeBuffs) {
                 if (bf.second.bIsDebuff) {
                     DWORD mugID = bf.second.dwMugongID;
-                    if (mugID == 94 || mugID == 95 || mugID == 35 || mugID == 65 || mugID == 125) {
+                    if (mugID == 94 || mugID == 35 || mugID == 65) {
                         isCC = true;
                         break;
                     }
@@ -81,7 +81,8 @@ void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize,
         
         int dx = pObj->wPosX - pObj->wLastUpdateX;
         int dy = pObj->wPosY - pObj->wLastUpdateY;
-        needsUpdate = (dx*dx + dy*dy >= 40*40 || pObj->wLastUpdateX == 0);
+        const int AOI_REFRESH_DIST_SQ = 2 * 2; // 业务意图：结合 1:4 地图缩放，物理移动约 8 米（2逻辑格）即触发九宫格视野刷新
+        needsUpdate = (dx*dx + dy*dy >= AOI_REFRESH_DIST_SQ || pObj->wLastUpdateX == 0);
         
         // Save old update pos for AOI entry check
         lastUX = pObj->wLastUpdateX;
@@ -161,10 +162,10 @@ void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize,
             if (bSpeed == 0) bSpeed = 11;
             payload[17] = bSpeed; // Force correct speed, client often sends 0
         }
-        insertPayloadWithObjectType(ackBuf, payload, totalSize);
+        ackBuf.insert(ackBuf.end(), payload, payload + totalSize);
         ackBuf.push_back(0); // bFastMove
     } else if (headerId == 0x430D) { // SYNCMOVE
-        insertPayloadWithObjectType(ackBuf, payload, totalSize);
+        ackBuf.insert(ackBuf.end(), payload, payload + totalSize);
         
         DWORD currentTick = GetTickCount();
         WORD wDiffTime = 100; // default to 100ms
@@ -185,9 +186,9 @@ void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize,
         // REQ: dwObjectID (4) + wPosX (2) + wPosY (2) + bHeight (1) + bState (1) + bSpeed (1) -> 11 bytes
         // ACK: dwObjectID (4) + wPosX (2) + wPosY (2) + bHeight (1) + bState (1) -> 10 bytes
         int copySize = (totalSize > 10) ? 10 : totalSize;
-        insertPayloadWithObjectType(ackBuf, payload, copySize);
+        ackBuf.insert(ackBuf.end(), payload, payload + copySize);
     } else {
-        insertPayloadWithObjectType(ackBuf, payload, totalSize);
+        ackBuf.insert(ackBuf.end(), payload, payload + totalSize);
     }
     
     PACKET_HEADER* mh = (PACKET_HEADER*)ackBuf.data(); 
@@ -267,7 +268,7 @@ void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize,
                         SafeSend(clientSocket, (const char*)leaveBuf.data(), leaveBuf.size(), 0);
                         
                         // o 也看不见我了，向 o 发送删除我的消息
-                        DWORD otherCharID = o->dwObjectID - 400000000;
+                        DWORD otherCharID = o->dwObjectID % 400000000; // 业务意图：使用模运算精准还原出无偏移的纯净 CharID，消除 800M 格式下的寻址偏差
                         SOCKET otherSock = SessionMgr::GetInstance().GetSocketByCharID(otherCharID);
                         if (otherSock != INVALID_SOCKET) {
                             std::vector<BYTE> otherLeave; otherLeave.resize(4);
@@ -347,8 +348,39 @@ void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize,
                     if (inNew && (!inOld || lastUX == 0)) {
                         pushDWord(o->dwObjectID); pushByte(o->bObjectType); pushWord(o->wPosX); pushWord(o->wPosY); pushByte(o->bHeight);
                         
+                        // 业务意图：如果我新看到的玩家 o 正在移动，向我自己补发 o 正在移动的 STARTMOVE_ACK，使我客户端立刻播放 o 的走路动画，彻底消除“静止滑行”与“瞬移”Bug
+                        if (o->bIsMoving) {
+                            std::vector<BYTE> moveBuf; moveBuf.resize(4);
+                            moveBuf.push_back(0); // bResult
+                            // dwObjectID
+                            moveBuf.push_back(o->dwObjectID & 0xFF); moveBuf.push_back((o->dwObjectID>>8)&0xFF); moveBuf.push_back((o->dwObjectID>>16)&0xFF); moveBuf.push_back((o->dwObjectID>>24)&0xFF);
+                            // 意图：NV_STARTMOVE_ACK 协议不包含 bObjectType，直接追加坐标，消除 1 字节解包位移
+                            // wPosX, wPosY
+                            moveBuf.push_back(o->wPosX & 0xFF); moveBuf.push_back(o->wPosX >> 8);
+                            moveBuf.push_back(o->wPosY & 0xFF); moveBuf.push_back(o->wPosY >> 8);
+                            moveBuf.push_back(o->bHeight); // bHeight
+                            // wDesPosX, wDesPosY
+                            moveBuf.push_back(o->wMoveDesX & 0xFF); moveBuf.push_back(o->wMoveDesX >> 8);
+                            moveBuf.push_back(o->wMoveDesY & 0xFF); moveBuf.push_back(o->wMoveDesY >> 8);
+                            moveBuf.push_back(o->bMoveDesH); // bDesHeight
+                            // wDirection
+                            moveBuf.push_back(o->wMoveDirection & 0xFF); moveBuf.push_back(o->wMoveDirection >> 8);
+                            moveBuf.push_back(o->bMoveState); // bStatus
+                            BYTE speed = (o->wWalkSpeed & 0xFF);
+                            if (speed == 0) speed = 11;
+                            moveBuf.push_back(speed); // bSpeed
+                            moveBuf.push_back(0); // bFastMove
+                            
+                            PACKET_HEADER* moveHead = (PACKET_HEADER*)moveBuf.data();
+                            moveHead->id = 0x430C; // STARTMOVE_ACK
+                            moveHead->payloadSize = moveBuf.size() - sizeof(PACKET_HEADER);
+                            EncryptPacket(moveBuf.data(), 0x42);
+                            SafeSend(clientSocket, (const char*)moveBuf.data(), moveBuf.size(), 0);
+                            LOG("[MoveHandler] Re-sent STARTMOVE_ACK to self for newly seen moving player " + std::to_string(o->dwObjectID));
+                        }
+
                         // Tell the OTHER player about ME, because I just entered their AOI!
-                        DWORD otherCharID = (o->dwObjectID >= 400000000 && o->dwObjectID < 800000000) ? o->dwObjectID - 400000000 : (o->dwObjectID >= 800000000 ? o->dwObjectID - 400000000 : o->dwObjectID);
+                        DWORD otherCharID = o->dwObjectID % 400000000; // 业务意图：使用模运算精准还原出无偏移的纯净 CharID，消除 800M 格式下的寻址偏差
                         SOCKET otherSock = SessionMgr::GetInstance().GetSocketByCharID(otherCharID);
                         if (otherSock != INVALID_SOCKET && otherSock != clientSocket) {
                             std::vector<BYTE> otherBuf;
@@ -382,13 +414,12 @@ void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize,
                                 sServerObject* mover = mapInst->GetPlayer(dwMoveID);
                                 if (mover && mover->bIsMoving) {
                                     // Build a synthetic STARTMOVE_ACK (0x430C)
-                                    // ACK format: bResult + dwObjectID + bObjectType + wPosX + wPosY + bHeight + wDesPosX + wDesPosY + bDesHeight + wDirection + bStatus + bSpeed + bFastMove
+                                    // ACK format: bResult + dwObjectID + wPosX + wPosY + bHeight + wDesPosX + wDesPosY + bDesHeight + wDirection + bStatus + bSpeed + bFastMove
                                     std::vector<BYTE> moveBuf; moveBuf.resize(4);
                                     moveBuf.push_back(0); // bResult
                                     // dwObjectID
                                     moveBuf.push_back(dwMoveID & 0xFF); moveBuf.push_back((dwMoveID>>8)&0xFF); moveBuf.push_back((dwMoveID>>16)&0xFF); moveBuf.push_back((dwMoveID>>24)&0xFF);
-                                    // bObjectType
-                                    moveBuf.push_back(mover->bObjectType); // 业务设计意图：插入 bObjectType 以便客户端 OnCS_NC_STARTMOVE_ACK 正确对齐解析。
+                                    // 意图：NV_STARTMOVE_ACK 协议不包含 bObjectType，直接追加坐标，消除其他玩家解包此包时的 1 字节位移
                                     // wPosX, wPosY
                                     moveBuf.push_back(mover->wPosX & 0xFF); moveBuf.push_back(mover->wPosX >> 8);
                                     moveBuf.push_back(mover->wPosY & 0xFF); moveBuf.push_back(mover->wPosY >> 8);
