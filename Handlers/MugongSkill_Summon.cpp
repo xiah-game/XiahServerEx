@@ -282,6 +282,12 @@ void OnPetInfoReq(SOCKET clientSocket, BYTE* payload, WORD payloadSize)
     EncryptPacket(buf.data(), 0x42);
     SafeSend(clientSocket, (const char*)buf.data(), buf.size(), 0);
 
+    if (isRealPet && pPet->bNeedTamingAck) {
+        extern void SendTamingAck(SOCKET clientSocket, BYTE bResult, DWORD dwObjectID, BYTE bType);
+        SendTamingAck(clientSocket, 0, dwObjectID, 0);
+        pPet->bNeedTamingAck = false; // 发送完立即抹除，保证一生只发送一次
+    }
+
     LOG("[PetInfo] Sent PETINFO_ACK for " + std::string(isRealPet ? "RealPet" : "Bunsin") + " ObjID=" + std::to_string(dwObjectID)
         + " Name=" + szPetName + " HP=" + std::to_string(pPet->dwHpCur) + "/" + std::to_string(pPet->dwHpMax)
         + " Owner=" + std::to_string(pPet->dwOwnerID));
