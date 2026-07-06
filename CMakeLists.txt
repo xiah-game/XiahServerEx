@@ -39,6 +39,7 @@ set(SOURCES
     Handlers/MugongSkill_Summon.cpp
     Handlers/MugongSkill_FiveElm.cpp
     Handlers/MugongSkill_PetCapture.cpp
+    Handlers/PetGiveItemHandler.cpp
     Handlers/ChatHandler.cpp
     Handlers/PartyHandler.cpp
     Handlers/RebuildItemHandler.cpp

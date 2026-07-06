@@ -110,7 +110,20 @@ static void SerializeItemData(const ItemDB::FullItemRow& row, std::vector<BYTE>&
         pushByte(bi, dat18); pushByte(bi, dat19);
         pushByte(bi, d[13]); pushByte(bi, d[14]); pushByte(bi, d[15]); pushByte(bi, d[16]);
         if (type == 9) {
-            pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0);
+            // d[14] 对应 nData15（封印状态标记：1=已封印，0=未封印）
+            DWORD dwNpcID = (d[14] == 1) ? (d[0] == -9999 ? 0 : d[0]) : 0;
+            pushDWord(bi, dwNpcID);
+            if (kind == 5) {
+                pushWord(bi, (WORD)dat18);
+                pushWord(bi, (WORD)dat19);
+                pushWord(bi, (WORD)dat20);
+                pushWord(bi, (WORD)dat21);
+            } else {
+                pushWord(bi, d[1] == -9999 ? 0 : d[1]);
+                pushWord(bi, d[2] == -9999 ? 0 : d[2]);
+                pushWord(bi, d[3] == -9999 ? 0 : d[3]);
+                pushWord(bi, d[4] == -9999 ? 0 : d[4]);
+            }
         } else if (type == 8) {
             for (int i = 0; i < 8; i++) pushByte(bi, 0);
         } else {

@@ -178,6 +178,14 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                 }
                 finalDmg = pAttacker->dwTotalAtk;
                 if (finalDmg == 0) finalDmg = 50; // Fallback
+
+                // 战宠与分身协同攻击：锁定怪物目标
+                for (auto& pair : mapInst->GetPlayers()) {
+                    PlayerData& pl = pair.second;
+                    if (pl.dwOwnerID == (attackerId - 800000000) && pl.dwObjectID >= 800000000 && pl.dwHpCur > 0) {
+                        pl.dwPetTargetObjectID = targetId;
+                    }
+                }
                 
                 LOG("[CombatHandler] Player " + std::to_string(attackerId) + " attacks with Dmg: " + std::to_string(finalDmg) + " (TotalAtk: " + std::to_string(pAttacker->dwTotalAtk) + ")");
             }

@@ -1,5 +1,6 @@
 #include "ItemSerializer.h"
 #include "../GameObjects/MugongManager.h"
+#include "../DBHelper.h"
 
 // 内部 static helpers，不暴露给其他编译单元
 static void pushByte(std::vector<BYTE>& buf, BYTE b) { buf.push_back(b); }
@@ -46,6 +47,26 @@ void SerializeItemData(const ItemDB::FullItemRow& row, std::vector<BYTE>& bi) {
     std::string itemName(row.szName);
     if (itemName.empty() && g_ItemTemplates.count(refid)) itemName = g_ItemTemplates[refid].szName;
 
+    if (type == 9 && kind == 5 && d[14] == 1 && d[0] > 0) {
+        std::string petName;
+        int petLevel = 0;
+        DBHelper::GetInstance().ExecuteQuery(
+            "SELECT szName, wLevel FROM CHAR_PET WHERE dwID = " + std::to_string(d[0]),
+            [&](SQLHSTMT hStmt) {
+                char szPetName[32] = {0};
+                WORD wPetLvl = 0;
+                SQLLEN len1, len2;
+                SQLGetData(hStmt, 1, SQL_C_CHAR, szPetName, sizeof(szPetName), &len1);
+                SQLGetData(hStmt, 2, SQL_C_USHORT, &wPetLvl, 0, &len2);
+                petName = szPetName;
+                petLevel = wPetLvl;
+            });
+        if (!petName.empty()) {
+            itemName = petName;
+            lvl = petLevel;
+        }
+    }
+
     pushDWord(bi, row.dwItemID); pushWord(bi, refid);
     pushByte(bi, type); pushByte(bi, kind); pushWord(bi, vis);
     // 物品名称：WORD长度 + 字节数据（不含 null 终止符，与客户端 sString 解析对齐）
@@ -64,8 +85,21 @@ void SerializeItemData(const ItemDB::FullItemRow& row, std::vector<BYTE>& bi) {
         pushByte(bi, dat18); pushByte(bi, dat19);
         pushByte(bi, d[13]); pushByte(bi, d[14]); pushByte(bi, d[15]); pushByte(bi, d[16]);
         if (type == 9) {
-            // 坐骑（Bongin）：额外 12 字节
-            pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0);
+            // 坐骑（Bongin）：额外 12 字节 (dwNpcID, wSoakHP, wSoakAtk, wSoakDef, wSoakHit)
+            // d[14] 对应 nData15（封印状态标记：1=已封印，0=未封印）
+            DWORD dwNpcID = (d[14] == 1) ? (d[0] == -9999 ? 0 : d[0]) : 0;
+            pushDWord(bi, dwNpcID);
+            if (kind == 5) {
+                pushWord(bi, (WORD)dat18);
+                pushWord(bi, (WORD)dat19);
+                pushWord(bi, (WORD)dat20);
+                pushWord(bi, (WORD)dat21);
+            } else {
+                pushWord(bi, d[1] == -9999 ? 0 : d[1]);
+                pushWord(bi, d[2] == -9999 ? 0 : d[2]);
+                pushWord(bi, d[3] == -9999 ? 0 : d[3]);
+                pushWord(bi, d[4] == -9999 ? 0 : d[4]);
+            }
         } else if (type == 8) {
             // 宝石插槽（Socket）：8 字节
             for (int i = 0; i < 8; i++) pushByte(bi, 0);

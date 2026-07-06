@@ -614,7 +614,13 @@ void TradeManager::SendTradeSackItemAck(SOCKET targetSocket, WORD packetID, BYTE
                 pushDWord(payload, d[8]); pushDWord(payload, d[9]); pushDWord(payload, d[10]); pushDWord(payload, d[11]); pushWord(payload, d[12]);
                 pushByte(payload, dat18); pushByte(payload, dat19);
                 pushByte(payload, d[13]); pushByte(payload, d[14]); pushByte(payload, d[15]); pushByte(payload, d[16]);
-                if (type == 9) { pushDWord(payload, 0); pushWord(payload, 0); pushWord(payload, 0); pushWord(payload, 0); pushWord(payload, 0); }
+                if (type == 9) {
+                    pushDWord(payload, d[0] == -9999 ? 0 : d[0]);
+                    pushWord(payload, d[1] == -9999 ? 0 : d[1]);
+                    pushWord(payload, d[2] == -9999 ? 0 : d[2]);
+                    pushWord(payload, d[3] == -9999 ? 0 : d[3]);
+                    pushWord(payload, d[4] == -9999 ? 0 : d[4]);
+                }
                 else if (type == 8) { for(int i=0;i<8;i++) pushByte(payload, 0); }
                 else { pushByte(payload, 0); }
                 if (type >= 1 && type <= 4) { pushByte(payload, dat19); pushByte(payload, dat20); pushByte(payload, dat21); pushWord(payload, dat25); }
@@ -707,7 +713,13 @@ static void SendAddOnSackAck(SOCKET s, BYTE bSackID, BYTE bSackPos, DWORD dwItem
         pushDWord(bi, d[8]); pushDWord(bi, d[9]); pushDWord(bi, d[10]); pushDWord(bi, d[11]); pushWord(bi, d[12]);
         pushByte(bi, dat18); pushByte(bi, dat19);
         pushByte(bi, d[13]); pushByte(bi, d[14]); pushByte(bi, d[15]); pushByte(bi, d[16]);
-        if (type == 9) { pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); }
+        if (type == 9) {
+            pushDWord(bi, d[0] == -9999 ? 0 : d[0]);
+            pushWord(bi, d[1] == -9999 ? 0 : d[1]);
+            pushWord(bi, d[2] == -9999 ? 0 : d[2]);
+            pushWord(bi, d[3] == -9999 ? 0 : d[3]);
+            pushWord(bi, d[4] == -9999 ? 0 : d[4]);
+        }
         else if (type == 8) { for(int i=0;i<8;i++) pushByte(bi, 0); }
         else { pushByte(bi, 0); }
         if (type >= 1 && type <= 4) { pushByte(bi, dat19); pushByte(bi, dat20); pushByte(bi, dat21); pushWord(bi, dat25); }

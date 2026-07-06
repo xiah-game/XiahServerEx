@@ -376,6 +376,13 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
         // bType=4 + bKind=16(致盲)/17(麻痹) = 无法施法的 CC 状态
         // 注意：bKind=18(定身/擒拿) 只限制移动，不限制施法和攻击
         if (pObj) {
+            // 战宠与分身协同攻击：锁定怪物目标
+            for (auto& pair : mapInst->GetPlayers()) {
+                PlayerData& pl = pair.second;
+                if (pl.dwOwnerID == (dwAttackID - 800000000) && pl.dwObjectID >= 800000000 && pl.dwHpCur > 0) {
+                    pl.dwPetTargetObjectID = dwDefenseID;
+                }
+            }
             bool isCC = false;
             for (const auto& bf : pObj->activeBuffs) {
                 if (bf.second.bIsDebuff) {
@@ -478,8 +485,8 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
             HandleSummonSkill(ctx);
             return;
         }
-        // 捕捉普通宠物 (bType=2, bKind=17)
-        if (tpl->bType == 2 && tpl->bKind == 17) {
+        // 捕捉普通宠物 (bType=2/4, bKind=17)
+        if ((tpl->bType == 2 || tpl->bType == 4) && tpl->bKind == 17) {
             HandlePetCapture(ctx);
             return;
         }

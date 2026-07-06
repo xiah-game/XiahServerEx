@@ -418,6 +418,87 @@ void OnMapEnterReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
     // Sync pet list (0x3B20) to client g_PetList
     SendPetListAck(clientSocket, dwActualCharID);
 
+    // Auto-spawn active pet on login/map-enter
+    struct DbActivePet {
+        DWORD dwID = 0;
+        BYTE bNpcType = 0;
+        char szName[32] = {0};
+        WORD wLevel = 0;
+        DWORD dwHpMax = 0;
+        DWORD dwHpCur = 0;
+        WORD wAtkPwr = 0;
+        WORD wDefPwr = 0;
+        BYTE bSpeed = 0;
+    };
+    DbActivePet activePet;
+    bool hasActivePet = false;
+
+    std::string qActivePet = "SELECT dwID, bNpcType, szName, wLevel, dwHpMax, dwHpCur, wAtkPwr, wDefPwr, bSpeed FROM CHAR_PET WHERE dwCharID = " + std::to_string(dwActualCharID) + " AND bStatus = 1 AND dwID NOT IN (SELECT nData1 FROM ITEMDATA WHERE nData15 = 1)";
+    DBHelper::GetInstance().ExecuteQuery(qActivePet, [&](SQLHSTMT hStmt) {
+        SQLLEN c[9];
+        SQLGetData(hStmt, 1, SQL_C_ULONG, &activePet.dwID, 0, &c[0]);
+        SQLGetData(hStmt, 2, SQL_C_UTINYINT, &activePet.bNpcType, 0, &c[1]);
+        SQLGetData(hStmt, 3, SQL_C_CHAR, activePet.szName, sizeof(activePet.szName), &c[2]);
+        SQLGetData(hStmt, 4, SQL_C_USHORT, &activePet.wLevel, 0, &c[3]);
+        SQLGetData(hStmt, 5, SQL_C_ULONG, &activePet.dwHpMax, 0, &c[4]);
+        SQLGetData(hStmt, 6, SQL_C_ULONG, &activePet.dwHpCur, 0, &c[5]);
+        SQLGetData(hStmt, 7, SQL_C_USHORT, &activePet.wAtkPwr, 0, &c[6]);
+        SQLGetData(hStmt, 8, SQL_C_USHORT, &activePet.wDefPwr, 0, &c[7]);
+        SQLGetData(hStmt, 9, SQL_C_UTINYINT, &activePet.bSpeed, 0, &c[8]);
+        hasActivePet = true;
+    });
+
+    if (hasActivePet) {
+        auto mapInst = g_MapInstances[dwMapID];
+        if (mapInst) {
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            PlayerData petEntity;
+            petEntity.dwObjectID = activePet.dwID + 800000000;
+            petEntity.bObjectType = 4; // OBJTYPE_PET
+            petEntity.dwMapID = dwMapID;
+            petEntity.bNpcType = activePet.bNpcType;
+            petEntity.wPosX = wCurX + 2;
+            petEntity.wPosY = wCurY + 2;
+            petEntity.bHeight = 0;
+            petEntity.wMoveDesX = petEntity.wPosX;
+            petEntity.wMoveDesY = petEntity.wPosY;
+            petEntity.bMoveDesH = petEntity.bHeight;
+            petEntity.wMoveDirection = 0;
+            petEntity.dwHpMax = activePet.dwHpMax;
+            petEntity.dwHpCur = activePet.dwHpCur;
+            petEntity.dwTotalAtk = activePet.wAtkPwr;
+            petEntity.dwTotalDef = activePet.wDefPwr;
+            petEntity.wWalkSpeed = activePet.bSpeed;
+            petEntity.dwOwnerID = dwActualCharID;
+            petEntity.szName = activePet.szName;
+
+            mapInst->AddPlayer(petEntity);
+
+            // Broadcast MAPENTER_ACK (0x3502) to the map so the client draws it
+            std::vector<BYTE> enterBuf(4);
+            auto pushDWord = [&](DWORD d) { enterBuf.push_back(d&0xFF); enterBuf.push_back((d>>8)&0xFF); enterBuf.push_back((d>>16)&0xFF); enterBuf.push_back(d>>24); };
+            auto pushWord = [&](WORD w) { enterBuf.push_back(w&0xFF); enterBuf.push_back(w>>8); };
+            
+            pushDWord(dwMapID);
+            pushDWord(petEntity.dwObjectID);
+            enterBuf.push_back(4); // bObjectType = 4
+            pushWord(petEntity.wPosX);
+            pushWord(petEntity.wPosY);
+            enterBuf.push_back(petEntity.bHeight);
+            pushWord(0); // wDirection
+            enterBuf.push_back(0); // bStatus = Stand
+            enterBuf.push_back(petEntity.wWalkSpeed & 0xFF);
+
+            PACKET_HEADER* enterHead = (PACKET_HEADER*)enterBuf.data();
+            enterHead->id = 0x3502;
+            enterHead->payloadSize = (WORD)(enterBuf.size() - sizeof(PACKET_HEADER));
+            EncryptPacket(enterBuf.data(), 0x42);
+            BroadcastPacketToMap(dwMapID, enterBuf);
+
+            LOG("[MapHandler] Auto-spawned active pet ObjID=" + std::to_string(petEntity.dwObjectID) + " for owner=" + std::to_string(dwActualCharID));
+        }
+    }
+
 
 
     // Sync active drops in player's AOI upon entering

@@ -221,11 +221,11 @@ void OnFunctionalNpcItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload
                     pushWord(0); // wHuljungModityCount
                     pushWord(0); // wModifyCount
                     
-                    if (tpl.bType == 9) { // BONGIN has extra soak fields
-                        pushWord(0); // wSoakHPRatio
-                        pushWord(0); // wSoakAtkRatio
-                        pushWord(0); // wSoakDefRatio
-                        pushWord(0); // wSoakHitRatio
+                    if (tpl.bType == 9) { // BONGIN: 封印镜子吸收比率从模板读取
+                        pushWord((WORD)tpl.nData18); // wSoakHPRatio
+                        pushWord((WORD)tpl.nData19); // wSoakAtkRatio
+                        pushWord((WORD)tpl.nData20); // wSoakDefRatio
+                        pushWord((WORD)tpl.nData21); // wSoakHitRatio
                     }
                     break;
                 case 11: // NPCRING
@@ -403,17 +403,16 @@ MonsterData* pObj = NULL;
         // Insert ITEMDATA for equipment types so stats persist in DB
         if (newDbItemID > 0 && tpl.bType >= 1 && tpl.bType <= 9) {
             int nData[25] = {0};
-            nData[0] = tpl.nData1;  // nData1 = DecrDurRate
-            nData[1] = tpl.nData2;  // nData2 = CurDur
-            nData[2] = tpl.nData3;  // nData3 = MaxDur
-            nData[3] = tpl.nData4;  // nData4 = AtkPwr
-            nData[4] = tpl.nData5;  // nData5 = DefPwr
-            nData[5] = tpl.nData6;  // nData6 = AtkRating
-            nData[6] = tpl.nData7;  // nData7 = StkSpeed
-            nData[7] = tpl.nData8;  // nData8 = AtkRange
-            nData[8] = tpl.nData9;  // nData9 = IncrHp
-            nData[9] = tpl.nData10; // nData10 = IncrIp
-            nData[12] = tpl.nData13; // nData13 = IncrCritical
+            // 从模板拷贝全部 25 个 nData 字段
+            nData[0]  = tpl.nData1;   nData[1]  = tpl.nData2;   nData[2]  = tpl.nData3;
+            nData[3]  = tpl.nData4;   nData[4]  = tpl.nData5;   nData[5]  = tpl.nData6;
+            nData[6]  = tpl.nData7;   nData[7]  = tpl.nData8;   nData[8]  = tpl.nData9;
+            nData[9]  = tpl.nData10;  nData[10] = tpl.nData11;  nData[11] = tpl.nData12;
+            nData[12] = tpl.nData13;  nData[13] = tpl.nData14;  nData[14] = tpl.nData15;
+            nData[15] = tpl.nData16;  nData[16] = tpl.nData17;  nData[17] = tpl.nData18;
+            nData[18] = tpl.nData19;  nData[19] = tpl.nData20;  nData[20] = tpl.nData21;
+            nData[21] = tpl.nData22;  nData[22] = tpl.nData23;  nData[23] = tpl.nData24;
+            nData[24] = tpl.nData25;
             ItemDB::GetInstance().InsertItemData(newDbItemID, nData);
         }
 
@@ -499,12 +498,12 @@ MonsterData* pObj = NULL;
             pushByte(0); // bModifyCnt
             pushByte(0); // bRepairCnt
             pushByte(0); // bRepairDiscount
-            if (tpl.bType == 9) { // BONGIN
-                pushDWord(0); // dwNpcID
-                pushWord(0); // wSoakHPRatio
-                pushWord(0); // wSoakAtkRatio
-                pushWord(0); // wSoakDefRatio
-                pushWord(0); // wSoakHitRatio
+            if (tpl.bType == 9) { // BONGIN: 封印镜子吸收比率从模板读取
+                pushDWord(0); // dwNpcID（新购买未封印宠物）
+                pushWord((WORD)tpl.nData18); // wSoakHPRatio
+                pushWord((WORD)tpl.nData19); // wSoakAtkRatio
+                pushWord((WORD)tpl.nData20); // wSoakDefRatio
+                pushWord((WORD)tpl.nData21); // wSoakHitRatio
             } else if (tpl.bType == 8) { // SOCKET
                 pushByte(0); // bDanIncExp
                 pushByte(0); // bMopDecAtk

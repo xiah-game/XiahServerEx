@@ -105,7 +105,13 @@ void SendItemRefresh(SOCKET clientSocket, DWORD dwItemID, BYTE bSackID, BYTE bSa
             pushDWord(bi, d9); pushDWord(bi, d10); pushDWord(bi, d11); pushDWord(bi, d12); pushWord(bi, d13);
             pushByte(bi, dat18); pushByte(bi, dat19);
             pushByte(bi, d14); pushByte(bi, d15); pushByte(bi, d16); pushByte(bi, d17);
-            if (type == 9) { pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); }
+            if (type == 9) {
+                pushDWord(bi, d1 == -9999 ? 0 : d1);
+                pushWord(bi, d2 == -9999 ? 0 : d2);
+                pushWord(bi, d3 == -9999 ? 0 : d3);
+                pushWord(bi, d4 == -9999 ? 0 : d4);
+                pushWord(bi, d5 == -9999 ? 0 : d5);
+            }
             else if (type == 8) { for(int i=0;i<8;i++) pushByte(bi, 0); }
             else { pushByte(bi, 0); }
             if (type >= 1 && type <= 4) { pushByte(bi, dat19); pushByte(bi, dat20); pushByte(bi, dat21); pushWord(bi, dat25); }

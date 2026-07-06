@@ -153,6 +153,10 @@ struct PlayerData : EntityBase {
     // Visual equipment and Fame sync
     DWORD dwFame = 0;
     WORD  wVisualID[9] = {0};
+    DWORD dwPetTargetObjectID = 0; // 战宠/分身当前锁定的攻击怪物目标
+    DWORD dwLastPetAttackTime = 0; // 战宠/分身上一次协同攻击时间戳
+    DWORD dwLastPetMoveTime = 0;   // 战宠/分身上一次跟随移动时间戳
+    bool  bNeedTamingAck = false;  // 刚捕捉成功需下发驯服ACK标志
     BYTE  bRarity[9] = {0};
     BYTE  bStxType[9] = {0};
     BYTE  bNeedCharType[9] = {0};
@@ -313,6 +317,7 @@ struct sItemTemplate {
     BYTE bCY;
     int nBasicData1, nBasicData2, nBasicData3, nBasicData4, nBasicData5;
     int nData1, nData2, nData3, nData4, nData5, nData6, nData7, nData8, nData9, nData10, nData11, nData12, nData13;
+    int nData14, nData15, nData16, nData17, nData18, nData19, nData20, nData21, nData22, nData23, nData24, nData25;
 };
 
 struct sLevelTemplate {

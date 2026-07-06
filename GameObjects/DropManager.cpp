@@ -147,11 +147,19 @@ void DropManager::DropItemToMap(DWORD killerID, const MonsterData& obj, DWORD it
     newDrop.wPosY = dropY;
     memset(newDrop.nData, 0, sizeof(newDrop.nData));
     
-    newDrop.nData[0] = tpl.nData1;  newDrop.nData[1] = tpl.nData2;
-    newDrop.nData[2] = tpl.nData3;  newDrop.nData[3] = tpl.nData4;
-    newDrop.nData[4] = tpl.nData5;  newDrop.nData[5] = tpl.nData6;
-    newDrop.nData[6] = tpl.nData7;  newDrop.nData[7] = tpl.nData8;
-    newDrop.nData[8] = tpl.nData9;  newDrop.nData[9] = tpl.nData10;
+    newDrop.nData[0]  = tpl.nData1;   newDrop.nData[1]  = tpl.nData2;
+    newDrop.nData[2]  = tpl.nData3;   newDrop.nData[3]  = tpl.nData4;
+    newDrop.nData[4]  = tpl.nData5;   newDrop.nData[5]  = tpl.nData6;
+    newDrop.nData[6]  = tpl.nData7;   newDrop.nData[7]  = tpl.nData8;
+    newDrop.nData[8]  = tpl.nData9;   newDrop.nData[9]  = tpl.nData10;
+    newDrop.nData[10] = tpl.nData11;  newDrop.nData[11] = tpl.nData12;
+    newDrop.nData[12] = tpl.nData13;  newDrop.nData[13] = tpl.nData14;
+    newDrop.nData[14] = tpl.nData15;  newDrop.nData[15] = tpl.nData16;
+    newDrop.nData[16] = tpl.nData17;  newDrop.nData[17] = tpl.nData18;
+    newDrop.nData[18] = tpl.nData19;  newDrop.nData[19] = tpl.nData20;
+    newDrop.nData[20] = tpl.nData21;  newDrop.nData[21] = tpl.nData22;
+    newDrop.nData[22] = tpl.nData23;  newDrop.nData[23] = tpl.nData24;
+    newDrop.nData[24] = tpl.nData25;
     
     // Xiah Socket Rolling Logic
     if (tpl.bType <= 4) {
@@ -668,7 +676,13 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
                 pushDWord(bi, d9); pushDWord(bi, d10); pushDWord(bi, d11); pushDWord(bi, d12); pushWord(bi, d13);
                 pushByte(bi, dat18); pushByte(bi, dat19);
                 pushByte(bi, d14); pushByte(bi, d15); pushByte(bi, d16); pushByte(bi, d17);
-                if (type == 9) { pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); }
+                if (type == 9) {
+                    pushDWord(bi, d1 == -9999 ? 0 : d1);
+                    pushWord(bi, d2 == -9999 ? 0 : d2);
+                    pushWord(bi, d3 == -9999 ? 0 : d3);
+                    pushWord(bi, d4 == -9999 ? 0 : d4);
+                    pushWord(bi, d5 == -9999 ? 0 : d5);
+                }
                 else if (type == 8) { for(int i=0;i<8;i++) pushByte(bi, 0); }
                 else { pushByte(bi, 0); }
                 if (type >= 1 && type <= 4) { pushByte(bi, dat19); pushByte(bi, dat20); pushByte(bi, dat21); pushWord(bi, dat25); }
@@ -709,7 +723,13 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
                 pushDWord(bi, 0); pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0);
                 pushByte(bi, 0); pushByte(bi, 0);
                 pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0);
-                if (drop.bType == 9) { pushDWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); pushWord(bi, 0); }
+                if (drop.bType == 9) {
+                    pushDWord(bi, drop.nData[0]);
+                    pushWord(bi, drop.nData[1]);
+                    pushWord(bi, drop.nData[2]);
+                    pushWord(bi, drop.nData[3]);
+                    pushWord(bi, drop.nData[4]);
+                }
                 else if (drop.bType == 8) { for(int i=0;i<8;i++) pushByte(bi, 0); }
                 else { pushByte(bi, 0); }
                 if (drop.bType >= 1 && drop.bType <= 4) { pushByte(bi, 0); pushByte(bi, 0); pushByte(bi, 0); pushWord(bi, 0); }

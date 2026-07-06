@@ -2,6 +2,7 @@
 #include "../Network/SessionMgr.h"
 #include "LoginHandler.h"
 #include "ItemHandler.h"
+#include "PetGiveItemHandler.h"
 
 #include "MapHandler.h"
 #include "MoveHandler.h"
@@ -127,6 +128,11 @@ void InitPacketHandlers() {
         OnUseItemReq(s, charID, p, size);
     });
 
+    RegisterHandler(0x421A, [](SOCKET s, BYTE* p, WORD size) {
+        DWORD charID = SessionMgr::GetInstance().GetCharID(s);
+        if (charID) OnPetGiveItemReq(s, charID, p, size);
+    });
+
     // 遁身符 "记录当前位置" (CS_IM_REMARKITEM_REQ)
     RegisterHandler(0x4249, [](SOCKET s, BYTE* p, WORD size) {
         DWORD charID = SessionMgr::GetInstance().GetCharID(s);
@@ -179,7 +185,11 @@ void InitPacketHandlers() {
     RegisterHandler(0x3533, [](SOCKET s, BYTE* p, WORD size) { OnFunctionalNpcItemListReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
 
     // 分身/宠物详细信息请求 (CS_NC_PETINFO_REQ = OFFSET_CS_NC + 54 = 0x3537)
+    extern void OnPetInfoReq(SOCKET clientSocket, BYTE* payload, WORD payloadSize);
+    extern void OnPetInfoListReq(SOCKET clientSocket, BYTE* payload, WORD payloadSize);
     RegisterHandler(0x3537, [](SOCKET s, BYTE* p, WORD size) { OnPetInfoReq(s, p, size); });
+    RegisterHandler(0x353B, [](SOCKET s, BYTE* p, WORD size) { OnPetInfoListReq(s, p, size); });
+    RegisterHandler(0x353C, [](SOCKET s, BYTE* p, WORD size) { OnPetDetailInfoReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
 
     // Move Handlers
     RegisterHandler(0x430B, [](SOCKET s, BYTE* p, WORD size) { OnMoveReq(s, SessionMgr::GetInstance().GetCharID(s), p, size, 0x430B); });
@@ -189,6 +199,13 @@ void InitPacketHandlers() {
     // 宠物封印与解封（BONGIN）
     RegisterHandler(0x3547, [](SOCKET s, BYTE* p, WORD size) { OnPetBongInReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
     RegisterHandler(0x3549, [](SOCKET s, BYTE* p, WORD size) { OnPetBongOutReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
+
+    // 宠物列表请求 (CS_IF_PETLIST_REQ = OFFSET_CS_IF + 30 = 0x3B1F)
+    RegisterHandler(0x3B1F, [](SOCKET s, BYTE* p, WORD size) {
+        DWORD charID = SessionMgr::GetInstance().GetCharID(s);
+        if (charID) SendPetListAck(s, charID);
+    });
+    RegisterHandler(0x3569, [](SOCKET s, BYTE* p, WORD size) { OnPetControlReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
 
     // Combat Handlers
     RegisterHandler(0x4003, [](SOCKET s, BYTE* p, WORD size) { OnPreAttackReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });

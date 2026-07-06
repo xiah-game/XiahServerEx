@@ -224,10 +224,16 @@ DWORD ItemDB::InsertItemFromTemplate(DWORD dwCharID, WORD wRefID, BYTE bSackPos)
         "SELECT @@IDENTITY AS NewItemID",
         [&](SQLHSTMT hStmt) { SQLLEN cb; int id = 0; SQLGetData(hStmt, 1, SQL_C_SLONG, &id, 0, &cb); dwNewItemID = (DWORD)id; });
     if (dwNewItemID == 0) return 0;
-    // Step C: Insert ITEMDATA from ITEMTEMPLATE
+    // Step C: Insert ITEMDATA from ITEMTEMPLATE — 拷贝全部 25 个 nData 字段
     DBHelper::GetInstance().ExecuteUpdate(
-        "INSERT INTO ITEMDATA (dwItemID, nData1, nData2, nData3, nData4, nData5, nData6, nData7, nData8) "
-        "SELECT " + std::to_string(dwNewItemID) + ", nData1, nData2, nData3, nData4, nData5, nData6, nData7, nData8 FROM ITEMTEMPLATE WHERE wRefID = " + std::to_string(wRefID));
+        "INSERT INTO ITEMDATA (dwItemID, nData1, nData2, nData3, nData4, nData5, nData6, nData7, nData8, nData9, nData10, "
+        "nData11, nData12, nData13, nData14, nData15, nData16, nData17, nData18, nData19, nData20, nData21, nData22, nData23, nData24, nData25) "
+        "SELECT " + std::to_string(dwNewItemID) + ", ISNULL(nData1,0), ISNULL(nData2,0), ISNULL(nData3,0), ISNULL(nData4,0), ISNULL(nData5,0), "
+        "ISNULL(nData6,0), ISNULL(nData7,0), ISNULL(nData8,0), ISNULL(nData9,0), ISNULL(nData10,0), "
+        "ISNULL(nData11,0), ISNULL(nData12,0), ISNULL(nData13,0), ISNULL(nData14,0), ISNULL(nData15,0), "
+        "ISNULL(nData16,0), ISNULL(nData17,0), ISNULL(nData18,0), ISNULL(nData19,0), ISNULL(nData20,0), "
+        "ISNULL(nData21,0), ISNULL(nData22,0), ISNULL(nData23,0), ISNULL(nData24,0), ISNULL(nData25,0) "
+        "FROM ITEMTEMPLATE WHERE wRefID = " + std::to_string(wRefID));
     // Step D: Insert SACKITEM
     DBHelper::GetInstance().ExecuteUpdate(
         "INSERT INTO SACKITEM (dwCharID, bSackPos, dwItemID) VALUES (" + std::to_string(dwCharID) + ", " + std::to_string(bSackPos) + ", " + std::to_string(dwNewItemID) + ")");
@@ -302,10 +308,14 @@ int ItemDB::DecrementNBasicData3(DWORD dwItemID) {
 DWORD ItemDB::InsertItem(WORD wRefID, BYTE bType, BYTE bKind, WORD wVisualID, const std::string& szName,
                           DWORD dwCost, WORD wLevel, BYTE bCharType, DWORD wAmount) {
     DWORD newId = 0;
-    std::string q = "SET NOCOUNT ON; INSERT INTO ITEM (wRefID, bType, bKind, wVisualID, szName, dwCost, wLevel, bCharType, wAmount) VALUES ("
-        + std::to_string(wRefID) + ", " + std::to_string(bType) + ", " + std::to_string(bKind) + ", "
+    // 从 ITEMTEMPLATE 同步 nBasicData1~nBasicData5，确保购买后物品属性完整
+    std::string q = "SET NOCOUNT ON; INSERT INTO ITEM (wRefID, bType, bKind, wVisualID, szName, dwCost, wLevel, bCharType, wAmount, "
+        "nBasicData1, nBasicData2, nBasicData3, nBasicData4, nBasicData5) "
+        "SELECT " + std::to_string(wRefID) + ", " + std::to_string(bType) + ", " + std::to_string(bKind) + ", "
         + std::to_string(wVisualID) + ", '" + szName + "', " + std::to_string(dwCost) + ", "
-        + std::to_string(wLevel) + ", " + std::to_string(bCharType) + ", " + std::to_string(wAmount) + "); SELECT @@IDENTITY;";
+        + std::to_string(wLevel) + ", " + std::to_string(bCharType) + ", " + std::to_string(wAmount) + ", "
+        "ISNULL(nBasicData1,0), ISNULL(nBasicData2,0), ISNULL(nBasicData3,0), ISNULL(nBasicData4,0), ISNULL(nBasicData5,0) "
+        "FROM ITEMTEMPLATE WHERE wRefID = " + std::to_string(wRefID) + "; SELECT @@IDENTITY;";
     DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
         SQLLEN c; SQLGetData(hStmt, 1, SQL_C_ULONG, &newId, 0, &c);
     });

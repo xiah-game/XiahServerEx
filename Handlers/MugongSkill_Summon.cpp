@@ -292,3 +292,22 @@ void OnPetInfoReq(SOCKET clientSocket, BYTE* payload, WORD payloadSize)
         + " Name=" + szPetName + " HP=" + std::to_string(pPet->dwHpCur) + "/" + std::to_string(pPet->dwHpMax)
         + " Owner=" + std::to_string(pPet->dwOwnerID));
 }
+
+void OnPetInfoListReq(SOCKET clientSocket, BYTE* payload, WORD payloadSize)
+{
+    if (payloadSize < 6) return;
+
+    DWORD dwMapID = *(DWORD*)(payload);
+    WORD wNumObject = *(WORD*)(payload + 4);
+
+    if (payloadSize < 6 + wNumObject * 4) return;
+
+    for (WORD i = 0; i < wNumObject; ++i) {
+        DWORD dwObjectID = *(DWORD*)(payload + 6 + i * 4);
+        
+        BYTE tempPayload[8];
+        *(DWORD*)(tempPayload) = dwObjectID;
+        *(DWORD*)(tempPayload + 4) = dwMapID;
+        OnPetInfoReq(clientSocket, tempPayload, 8);
+    }
+}

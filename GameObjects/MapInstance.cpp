@@ -1,5 +1,6 @@
 #include "MapInstance.h"
 #include "../Network/SessionMgr.h"
+#include "../DBHelper.h"
 #include <cmath>
 #include <unordered_set>
 #include "MugongManager.h"
@@ -46,6 +47,46 @@ void CMapInstance::RemovePlayer(DWORD dwObjectID) {
             extern void CleanupAllBunsins(DWORD ownerCharID, DWORD mapID);
             CleanupAllBunsins(dwObjectID - 400000000, m_dwMapID);
         }
+
+        // 清理玩家召唤的真实宠物，防止宠物作为虚体在地图上永久驻留
+        if (dwObjectID >= 400000000 && dwObjectID < 800000000) {
+            std::vector<DWORD> petsToRemove;
+            for (auto& pair : m_players) {
+                if (pair.second.dwObjectID >= 800000000 && pair.second.dwObjectID < 850000000) {
+                    if (pair.second.dwOwnerID == dwObjectID) {
+                        petsToRemove.push_back(pair.second.dwObjectID);
+                    }
+                }
+            }
+            for (DWORD petID : petsToRemove) {
+                // 广播 MAPLEAVE_ACK (0x3506) 告知周围客户端删除宠物虚体
+                std::vector<BYTE> leaveBuf;
+                leaveBuf.resize(4, 0);
+                auto pushByte = [&](BYTE b) { leaveBuf.push_back(b); };
+                auto pushDWord = [&](DWORD d) { leaveBuf.push_back(d & 0xFF); leaveBuf.push_back((d >> 8) & 0xFF); leaveBuf.push_back((d >> 16) & 0xFF); leaveBuf.push_back(d >> 24); };
+                pushByte(0);
+                pushDWord(petID);
+                pushByte(4); // bObjectType = 4 (PET)
+                pushDWord(m_dwMapID);
+                PACKET_HEADER* leaveHead = (PACKET_HEADER*)leaveBuf.data();
+                leaveHead->id = 0x3506;
+                leaveHead->payloadSize = (WORD)(leaveBuf.size() - sizeof(PACKET_HEADER));
+                EncryptPacket(leaveBuf.data(), 0x42);
+                BroadcastPacketAOI_NoLock(m_players[petID].wPosX, m_players[petID].wPosY, leaveBuf);
+
+                // 保存战宠当前生命值到数据库
+                DWORD rawPetID = petID - 800000000;
+                DBHelper::GetInstance().ExecuteUpdate(
+                    "UPDATE CHAR_PET SET dwHpCur = " + std::to_string(m_players[petID].dwHpCur) + " WHERE dwID = " + std::to_string(rawPetID));
+
+                // 从九宫格网格及角色列表中彻底移除战宠实体
+                int pIdx = GetGridIndex(m_players[petID].wPosX, m_players[petID].wPosY);
+                if (pIdx >= 0) RemoveFromGrid(m_playerGrid, pIdx, petID);
+                m_players.erase(petID);
+                LOG("[MapInstance] Cleaned up active pet dwObjectID=" + std::to_string(petID) + " for disconnecting owner dwCharID=" + std::to_string(dwObjectID));
+            }
+        }
+
         int idx = GetGridIndex(it->second.wPosX, it->second.wPosY);
         if (idx >= 0) RemoveFromGrid(m_playerGrid, idx, dwObjectID);
         m_players.erase(it);
@@ -88,6 +129,199 @@ void CMapInstance::BroadcastPacket(const std::vector<BYTE>& packet) {
 }
 
 void CMapInstance::Update(DWORD tick) {
+    // -----------------------------------------------------
+    // 战宠与分身跟随及协同战斗 AI
+    // -----------------------------------------------------
+    for (auto& pair : m_players) {
+        PlayerData& pl = pair.second;
+        if (pl.dwObjectID >= 800000000 && pl.dwHpCur > 0) {
+            DWORD ownerObjID = pl.dwOwnerID + 400000000;
+            if (m_players.count(ownerObjID)) {
+                PlayerData& owner = m_players[ownerObjID];
+                bool isInCombat = false;
+                if (pl.dwPetTargetObjectID != 0) {
+                    MonsterData* pTargetMon = GetMonster(pl.dwPetTargetObjectID);
+                    if (pTargetMon && pTargetMon->dwHpCur > 0) {
+                        isInCombat = true;
+                        int distMon = std::abs((int)pl.wPosX - (int)pTargetMon->wPosX) + std::abs((int)pl.wPosY - (int)pTargetMon->wPosY);
+                        if (distMon <= 2) {
+                            if (tick - pl.dwLastPetAttackTime >= 1200) {
+                                pl.dwLastPetAttackTime = tick;
+                                DWORD petDmg = 25 + pl.wLevel * 3;
+                                pTargetMon->dwHpCur = (pTargetMon->dwHpCur > petDmg) ? (pTargetMon->dwHpCur - petDmg) : 0;
+                                std::vector<BYTE> atkBuf; atkBuf.resize(4);
+                                atkBuf.push_back(0);
+                                atkBuf.push_back(pl.dwObjectID & 0xFF); atkBuf.push_back((pl.dwObjectID >> 8) & 0xFF);
+                                atkBuf.push_back((pl.dwObjectID >> 16) & 0xFF); atkBuf.push_back(pl.dwObjectID >> 24);
+                                atkBuf.push_back(pl.wPosX & 0xFF); atkBuf.push_back(pl.wPosX >> 8);
+                                atkBuf.push_back(pl.wPosY & 0xFF); atkBuf.push_back(pl.wPosY >> 8);
+                                atkBuf.push_back(pl.bHeight);
+                                atkBuf.push_back(1);
+                                atkBuf.push_back(pTargetMon->dwObjectID & 0xFF); atkBuf.push_back((pTargetMon->dwObjectID >> 8) & 0xFF);
+                                atkBuf.push_back((pTargetMon->dwObjectID >> 16) & 0xFF); atkBuf.push_back(pTargetMon->dwObjectID >> 24);
+                                atkBuf.push_back(petDmg & 0xFF); atkBuf.push_back(petDmg >> 8);
+                                atkBuf.push_back(0); atkBuf.push_back(0);
+                                atkBuf.push_back(0); atkBuf.push_back(0);
+                                DWORD maxHp = pTargetMon->dwHpMax;
+                                DWORD curHp = pTargetMon->dwHpCur;
+                                atkBuf.push_back(maxHp & 0xFF); atkBuf.push_back((maxHp >> 8) & 0xFF);
+                                atkBuf.push_back((maxHp >> 16) & 0xFF); atkBuf.push_back(maxHp >> 24);
+                                atkBuf.push_back(curHp & 0xFF); atkBuf.push_back((curHp >> 8) & 0xFF);
+                                atkBuf.push_back((curHp >> 16) & 0xFF); atkBuf.push_back(curHp >> 24);
+                                atkBuf.push_back(0); atkBuf.push_back(0);
+                                atkBuf.push_back(0); atkBuf.push_back(0);
+                                PACKET_HEADER* atkHead = (PACKET_HEADER*)atkBuf.data();
+                                atkHead->id = 0x4006;
+                                atkHead->payloadSize = atkBuf.size() - 4;
+                                EncryptPacket(atkBuf.data(), 0x42);
+                                BroadcastPacketAOI_NoLock(pl.wPosX, pl.wPosY, atkBuf);
+                                if (pTargetMon->dwHpCur == 0) {
+                                    HandleMonsterDoTDeath(tick, *pTargetMon, pl.dwObjectID, 0, 1);
+                                    pl.dwPetTargetObjectID = 0;
+                                }
+                            }
+                        } else {
+                            if (tick - pl.dwLastPetMoveTime >= 800) {
+                                pl.dwLastPetMoveTime = tick;
+                                int oldX = pl.wPosX; int oldY = pl.wPosY;
+                                int gridIdxOld = GetGridIndex(oldX, oldY);
+                                if (gridIdxOld >= 0) RemoveFromGrid(m_playerGrid, gridIdxOld, pl.dwObjectID);
+                                int stepX = (pTargetMon->wPosX > pl.wPosX) ? 1 : ((pTargetMon->wPosX < pl.wPosX) ? -1 : 0);
+                                int stepY = (pTargetMon->wPosY > pl.wPosY) ? 1 : ((pTargetMon->wPosY < pl.wPosY) ? -1 : 0);
+                                pl.wPosX += stepX; pl.wPosY += stepY;
+                                pl.fPosX = (float)pl.wPosX; pl.fPosY = (float)pl.wPosY;
+                                int gridIdxNew = GetGridIndex(pl.wPosX, pl.wPosY);
+                                if (gridIdxNew >= 0) AddToGrid(m_playerGrid, gridIdxNew, pl.dwObjectID);
+                                float angle = std::atan2((float)stepY, (float)stepX) * 180.0f / 3.14159265f;
+                                if (angle < 0) angle += 360.0f;
+                                WORD wDirection = (WORD)angle;
+                                std::vector<BYTE> moveBuf; moveBuf.resize(4);
+                                moveBuf.push_back(0);
+                                moveBuf.push_back(pl.dwObjectID & 0xFF); moveBuf.push_back((pl.dwObjectID >> 8) & 0xFF);
+                                moveBuf.push_back((pl.dwObjectID >> 16) & 0xFF); moveBuf.push_back((pl.dwObjectID >> 24) & 0xFF);
+                                moveBuf.push_back(pl.wPosX & 0xFF); moveBuf.push_back(pl.wPosX >> 8);
+                                moveBuf.push_back(pl.wPosY & 0xFF); moveBuf.push_back(pl.wPosY >> 8);
+                                moveBuf.push_back(pl.bHeight);
+                                moveBuf.push_back(pTargetMon->wPosX & 0xFF); moveBuf.push_back(pTargetMon->wPosX >> 8);
+                                moveBuf.push_back(pTargetMon->wPosY & 0xFF); moveBuf.push_back(pTargetMon->wPosY >> 8);
+                                moveBuf.push_back(pTargetMon->bHeight);
+                                moveBuf.push_back(wDirection & 0xFF); moveBuf.push_back(wDirection >> 8);
+                                moveBuf.push_back(1);
+                                moveBuf.push_back(pl.wWalkSpeed & 0xFF);
+                                moveBuf.push_back(0);
+                                PACKET_HEADER* moveHead = (PACKET_HEADER*)moveBuf.data();
+                                moveHead->id = 0x430C; moveHead->payloadSize = moveBuf.size() - 4;
+                                EncryptPacket(moveBuf.data(), 0x42);
+                                BroadcastPacketAOI_NoLock(pl.wPosX, pl.wPosY, moveBuf);
+                                std::vector<BYTE> stopBuf; stopBuf.resize(4);
+                                stopBuf.push_back(0);
+                                stopBuf.push_back(pl.dwObjectID & 0xFF); stopBuf.push_back((pl.dwObjectID >> 8) & 0xFF);
+                                stopBuf.push_back((pl.dwObjectID >> 16) & 0xFF); stopBuf.push_back((pl.dwObjectID >> 24) & 0xFF);
+                                stopBuf.push_back(pl.wPosX & 0xFF); stopBuf.push_back(pl.wPosX >> 8);
+                                stopBuf.push_back(pl.wPosY & 0xFF); stopBuf.push_back(pl.wPosY >> 8);
+                                stopBuf.push_back(pl.bHeight);
+                                stopBuf.push_back(wDirection & 0xFF); stopBuf.push_back(wDirection >> 8);
+                                PACKET_HEADER* stopHead = (PACKET_HEADER*)stopBuf.data();
+                                stopHead->id = 0x4310; stopHead->payloadSize = stopBuf.size() - 4;
+                                EncryptPacket(stopBuf.data(), 0x42);
+                                BroadcastPacketAOI_NoLock(pl.wPosX, pl.wPosY, stopBuf);
+                            }
+                        }
+                    } else {
+                        pl.dwPetTargetObjectID = 0;
+                    }
+                }
+                if (!isInCombat) {
+                    int dist = std::abs((int)pl.wPosX - (int)owner.wPosX) + std::abs((int)pl.wPosY - (int)owner.wPosY);
+                    if (dist >= 18) {
+                        int oldX = pl.wPosX; int oldY = pl.wPosY;
+                        int gridIdxOld = GetGridIndex(oldX, oldY);
+                        if (gridIdxOld >= 0) RemoveFromGrid(m_playerGrid, gridIdxOld, pl.dwObjectID);
+                        pl.wPosX = owner.wPosX; pl.wPosY = owner.wPosY;
+                        pl.fPosX = (float)pl.wPosX; pl.fPosY = (float)pl.wPosY;
+                        int gridIdxNew = GetGridIndex(pl.wPosX, pl.wPosY);
+                        if (gridIdxNew >= 0) AddToGrid(m_playerGrid, gridIdxNew, pl.dwObjectID);
+                        std::vector<BYTE> leaveBuf; leaveBuf.resize(4);
+                        leaveBuf.push_back(0);
+                        leaveBuf.push_back(pl.dwObjectID & 0xFF); leaveBuf.push_back((pl.dwObjectID >> 8) & 0xFF);
+                        leaveBuf.push_back((pl.dwObjectID >> 16) & 0xFF); leaveBuf.push_back(pl.dwObjectID >> 24);
+                        leaveBuf.push_back(4);
+                        leaveBuf.push_back(m_dwMapID & 0xFF); leaveBuf.push_back((m_dwMapID >> 8) & 0xFF);
+                        leaveBuf.push_back((m_dwMapID >> 16) & 0xFF); leaveBuf.push_back(m_dwMapID >> 24);
+                        leaveBuf.push_back(0);
+                        PACKET_HEADER* lh = (PACKET_HEADER*)leaveBuf.data();
+                        lh->id = 0x3506; lh->payloadSize = leaveBuf.size() - 4;
+                        EncryptPacket(leaveBuf.data(), 0x42);
+                        BroadcastPacketAOI_NoLock(oldX, oldY, leaveBuf);
+                        std::vector<BYTE> enterBuf; enterBuf.resize(4);
+                        enterBuf.push_back(0);
+                        enterBuf.push_back(m_dwMapID & 0xFF); enterBuf.push_back((m_dwMapID >> 8) & 0xFF);
+                        enterBuf.push_back((m_dwMapID >> 16) & 0xFF); enterBuf.push_back(m_dwMapID >> 24);
+                        enterBuf.push_back(pl.dwObjectID & 0xFF); enterBuf.push_back((pl.dwObjectID >> 8) & 0xFF);
+                        enterBuf.push_back((pl.dwObjectID >> 16) & 0xFF); enterBuf.push_back(pl.dwObjectID >> 24);
+                        enterBuf.push_back(4);
+                        enterBuf.push_back(pl.wPosX & 0xFF); enterBuf.push_back(pl.wPosX >> 8);
+                        enterBuf.push_back(pl.wPosY & 0xFF); enterBuf.push_back(pl.wPosY >> 8);
+                        enterBuf.push_back(pl.bHeight);
+                        enterBuf.push_back(0); enterBuf.push_back(0);
+                        enterBuf.push_back(0);
+                        enterBuf.push_back(pl.wWalkSpeed & 0xFF);
+                        PACKET_HEADER* eh = (PACKET_HEADER*)enterBuf.data();
+                        eh->id = 0x3502; eh->payloadSize = enterBuf.size() - 4;
+                        EncryptPacket(enterBuf.data(), 0x42);
+                        BroadcastPacketAOI_NoLock(pl.wPosX, pl.wPosY, enterBuf);
+                    }
+                    else if (dist > 2) {
+                        if (tick - pl.dwLastPetMoveTime >= 1000) {
+                            pl.dwLastPetMoveTime = tick;
+                            int oldX = pl.wPosX; int oldY = pl.wPosY;
+                            int gridIdxOld = GetGridIndex(oldX, oldY);
+                            if (gridIdxOld >= 0) RemoveFromGrid(m_playerGrid, gridIdxOld, pl.dwObjectID);
+                            int stepX = (owner.wPosX > pl.wPosX) ? 1 : ((owner.wPosX < pl.wPosX) ? -1 : 0);
+                            int stepY = (owner.wPosY > pl.wPosY) ? 1 : ((owner.wPosY < pl.wPosY) ? -1 : 0);
+                            pl.wPosX += stepX; pl.wPosY += stepY;
+                            pl.fPosX = (float)pl.wPosX; pl.fPosY = (float)pl.wPosY;
+                            int gridIdxNew = GetGridIndex(pl.wPosX, pl.wPosY);
+                            if (gridIdxNew >= 0) AddToGrid(m_playerGrid, gridIdxNew, pl.dwObjectID);
+                            float angle = std::atan2((float)stepY, (float)stepX) * 180.0f / 3.14159265f;
+                            if (angle < 0) angle += 360.0f;
+                            WORD wDirection = (WORD)angle;
+                            std::vector<BYTE> moveBuf; moveBuf.resize(4);
+                            moveBuf.push_back(0);
+                            moveBuf.push_back(pl.dwObjectID & 0xFF); moveBuf.push_back((pl.dwObjectID >> 8) & 0xFF);
+                            moveBuf.push_back((pl.dwObjectID >> 16) & 0xFF); moveBuf.push_back((pl.dwObjectID >> 24) & 0xFF);
+                            moveBuf.push_back(pl.wPosX & 0xFF); moveBuf.push_back(pl.wPosX >> 8);
+                            moveBuf.push_back(pl.wPosY & 0xFF); moveBuf.push_back(pl.wPosY >> 8);
+                            moveBuf.push_back(pl.bHeight);
+                            moveBuf.push_back(owner.wPosX & 0xFF); moveBuf.push_back(owner.wPosX >> 8);
+                            moveBuf.push_back(owner.wPosY & 0xFF); moveBuf.push_back(owner.wPosY >> 8);
+                            moveBuf.push_back(owner.bHeight);
+                            moveBuf.push_back(wDirection & 0xFF); moveBuf.push_back(wDirection >> 8);
+                            moveBuf.push_back(1);
+                            moveBuf.push_back(pl.wWalkSpeed & 0xFF);
+                            moveBuf.push_back(0);
+                            PACKET_HEADER* moveHead = (PACKET_HEADER*)moveBuf.data();
+                            moveHead->id = 0x430C; moveHead->payloadSize = moveBuf.size() - 4;
+                            EncryptPacket(moveBuf.data(), 0x42);
+                            BroadcastPacketAOI_NoLock(pl.wPosX, pl.wPosY, moveBuf);
+                            std::vector<BYTE> stopBuf; stopBuf.resize(4);
+                            stopBuf.push_back(0);
+                            stopBuf.push_back(pl.dwObjectID & 0xFF); stopBuf.push_back((pl.dwObjectID >> 8) & 0xFF);
+                            stopBuf.push_back((pl.dwObjectID >> 16) & 0xFF); stopBuf.push_back((pl.dwObjectID >> 24) & 0xFF);
+                            stopBuf.push_back(pl.wPosX & 0xFF); stopBuf.push_back(pl.wPosX >> 8);
+                            stopBuf.push_back(pl.wPosY & 0xFF); stopBuf.push_back(pl.wPosY >> 8);
+                            stopBuf.push_back(pl.bHeight);
+                            stopBuf.push_back(wDirection & 0xFF); stopBuf.push_back(wDirection >> 8);
+                            PACKET_HEADER* stopHead = (PACKET_HEADER*)stopBuf.data();
+                            stopHead->id = 0x4310; stopHead->payloadSize = stopBuf.size() - 4;
+                            EncryptPacket(stopBuf.data(), 0x42);
+                            BroadcastPacketAOI_NoLock(pl.wPosX, pl.wPosY, stopBuf);
+                        }
+                    }
+                }
+            }
+        }
+    }
     // -----------------------------------------------------
     // -0. Process Expired or Dead Bunsins (Clones)
     // -----------------------------------------------------

@@ -16,8 +16,9 @@ void SendCharPremiumList(SOCKET clientSocket, DWORD charID);
 void OnPetBongInReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);
 void OnPetBongOutReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);
 void SendPetListAck(SOCKET clientSocket, DWORD charID);
+void OnPetControlReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);
 void OnRemarkItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize); // 0x4249 遁身符记录坐标
+void OnPetDetailInfoReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);
 void OnRebirthReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize); // 0x426F 觉醒请求
 
 bool LoadPetLevelExp();
-

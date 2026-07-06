@@ -145,6 +145,20 @@ constexpr WORD PKT_REMOVEFROMBANK_ACK  = 0x3DA4;
 constexpr WORD PKT_PARTYPOSITION_ACK   = 0x442C;  // CS_IT_PARTYPOSITION_ACK (0x4401 + 43)
 
 // ============================================================
+// Pet / Info (CS_IF family)
+// ============================================================
+constexpr WORD PKT_PETLIST_REQ          = 0x3B1F;  // CS_IF_PETLIST_REQ
+constexpr WORD PKT_PETDETAILINFO_REQ    = 0x353C;  // CS_NC_PETDETAILINFO_REQ
+constexpr WORD PKT_PETDETAILINFO_ACK    = 0x353D;  // CS_NC_PETDETAILINFO_ACK
+
+// ============================================================
+// Exit / Status (CS_NV family, offset 0x4301)
+// ============================================================
+constexpr WORD PKT_ENDGAME_REQ          = 0x4303;  // CS_NV_ENDGAME_REQ
+constexpr WORD PKT_ENDGAME_ACK          = 0x4304;  // CS_NV_ENDGAME_ACK
+
+// ============================================================
 // Encryption key
 // ============================================================
 constexpr BYTE ENCRYPT_KEY = 0x42;
+
