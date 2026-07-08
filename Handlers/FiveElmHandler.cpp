@@ -423,3 +423,60 @@ void OnExecStaminaReq(SOCKET s, DWORD charID, BYTE* /*payload*/, WORD /*size*/) 
     LOG("[FiveElmHandler] ExecStamina SUCCESS for player " + std::to_string(charID));
 }
 
+// 判定五行相克关系：A 克制 B
+static bool IsFEStrongCounter(BYTE attFE, BYTE defFE) {
+    if (attFE == 1 && defFE == 4) return true; // 火克金
+    if (attFE == 2 && defFE == 1) return true; // 水克火
+    if (attFE == 3 && defFE == 5) return true; // 木克土
+    if (attFE == 4 && defFE == 3) return true; // 金克木
+    if (attFE == 5 && defFE == 2) return true; // 土克水
+    return false;
+}
+
+// 二期：五行克制乘数动态计算
+float CalculateFiveElmCounter(BYTE attFE, BYTE defFE, BYTE attFELevel, BYTE defFELevel, bool ignoreCounter) {
+    if (attFE == 0 || defFE == 0) {
+        return 1.00f; // 凡胎/无五行
+    }
+    if (attFE == defFE) {
+        return 0.95f; // 同属性抵抗
+    }
+    if (IsFEStrongCounter(attFE, defFE)) {
+        return 1.00f + 0.10f * attFELevel; // 强克制优势：每级被动增伤 10% (1级1.10, 3级1.30)
+    }
+    if (IsFEStrongCounter(defFE, attFE)) {
+        if (ignoreCounter) {
+            return 1.00f; // 首饰特技 8 消除被克制折损，保底 1.00
+        }
+        return 0.85f + 0.05f * defFELevel; // 被克制劣势：防御方被动等级抵消折损 (从 0.85 恢复至最高 1.00)
+    }
+    return 1.00f; // 中性五行
+}
+
+// 二期：五行伤害数值计算
+DWORD CalculateFiveElmDamage(DWORD baseAtkExp, BYTE attFELevel, float fCounter, DWORD defenderLevel, WORD defFEExp, bool ignoreDef) {
+    // 1. 计算五行攻击力
+    double dAtk = (double)baseAtkExp * (1.0 + (double)attFELevel * 0.20);
+    
+    // 2. 计算五行防御力
+    double dDef = 0.0;
+    if (!ignoreDef) {
+        if (defFEExp > 0 && defenderLevel == 0) {
+            // 玩家防御分支 (传 level 为 0 时，根据玩家熟练度进行 / 10 判定)
+            dDef = (double)defFEExp / 10.0;
+        } else {
+            // 怪物防御分支 (defenderLevel 为怪物等级，defFEExp 为怪物模板抗性值)
+            dDef = (double)defenderLevel * 2.0 + (double)defFEExp;
+        }
+    }
+    
+    // 3. 伤害扣减
+    double rawDmg = dAtk * (double)fCounter - dDef;
+    if (rawDmg < 0.0) {
+        rawDmg = 0.0;
+    }
+    
+    return (DWORD)(rawDmg + 0.5); // 四舍五入后输出
+}
+
+

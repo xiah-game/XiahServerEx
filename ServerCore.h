@@ -178,6 +178,18 @@ struct PlayerData : EntityBase {
     bool  bSpiritActive = false;
     DWORD dwSpiritEndTime = 0;
 
+    // 五行二期首饰特技与等级对抗缓存
+    bool  bIgnoreDefFiveElm = false; // 忽略五行防御
+    bool  bIgnoreFiveElm = false;    // 忽略被克制折损
+
+    BYTE GetFiveElmPassiveLevel() const {
+        if (bCurFiveElm < 1 || bCurFiveElm > 5) return 0;
+        DWORD mugID = 150 + bCurFiveElm - 1;
+        auto it = learnedMugongs.find(mugID);
+        if (it != learnedMugongs.end()) return it->second;
+        return 0;
+    }
+
     // 技能CD跟踪：技能ID → 上次释放时间(GetTickCount)
     std::map<DWORD, DWORD> mugongLastCastTime;
 
@@ -201,6 +213,8 @@ struct PlayerData : EntityBase {
         wEarthExp = 0;
         bSpiritActive = false;
         dwSpiritEndTime = 0;
+        bIgnoreDefFiveElm = false;
+        bIgnoreFiveElm = false;
     }
 };
 

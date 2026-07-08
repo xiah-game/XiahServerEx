@@ -9,6 +9,7 @@
 #include "ExpSystem.h"
 #include "PlayerManager.h"
 #include "../DB/CharacterDB.h"
+#include "../Handlers/FiveElmHandler.h"
 
 
 
@@ -358,6 +359,12 @@ void CMapInstance::Update(DWORD tick) {
     // -----------------------------------------------------
     for (auto& pair : m_players) {
         PlayerData& pl = pair.second;
+        if (pl.dwDeadTime != 0) {
+            LOG("[PlayerDeathDebug] ObjID=" + std::to_string(pl.dwObjectID) 
+                + " HpCur=" + std::to_string(pl.dwHpCur)
+                + " DeadTime=" + std::to_string(pl.dwDeadTime)
+                + " TimeDiff=" + std::to_string(tick - pl.dwDeadTime));
+        }
         if (pl.dwHpCur == 0 && pl.dwDeadTime != 0 && (tick - pl.dwDeadTime) >= 500) {
             // Send death broadcast after 500ms delay
             auto pushDWord = [&](std::vector<BYTE>& buf, DWORD d) { buf.push_back(d&0xFF); buf.push_back((d>>8)&0xFF); buf.push_back((d>>16)&0xFF); buf.push_back(d>>24); };
@@ -1201,6 +1208,31 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                         } else {
                             damage = 1;
                         }
+
+                        // 五行二期：怪物对玩家属性附加伤害及凡胎穿透结算
+                        DWORD elemDmg = 0;
+                        if (obj.bFiveElm > 0) {
+                            DWORD baseAtkExp = obj.wIncFiveElmExp;
+                            if (baseAtkExp == 0) {
+                                baseAtkExp = g_NpcTemplates.count(obj.bPropType) ? g_NpcTemplates[obj.bPropType].wFiveElmExp : 0;
+                            }
+                            BYTE attLvl = 0; // 怪物默认无五行被动等级
+                            BYTE defLvl = player.GetFiveElmPassiveLevel();
+                            float fCounter = CalculateFiveElmCounter(obj.bFiveElm, player.bCurFiveElm, attLvl, defLvl, player.bIgnoreFiveElm);
+                            
+                            WORD playerDefExp = 0;
+                            if (player.bCurFiveElm > 0) {
+                                switch (obj.bFiveElm) {
+                                    case 1: playerDefExp = player.wFireExp; break;
+                                    case 2: playerDefExp = player.wWaterExp; break;
+                                    case 3: playerDefExp = player.wWoodExp; break;
+                                    case 4: playerDefExp = player.wMetalExp; break;
+                                    case 5: playerDefExp = player.wEarthExp; break;
+                                }
+                            }
+                            elemDmg = CalculateFiveElmDamage(baseAtkExp, attLvl, fCounter, 0, playerDefExp, player.bIgnoreDefFiveElm);
+                        }
+                        damage += elemDmg;
 
                         // bType=4, bKind=5（狂魔毒功/神功）：受伤放大 nEtc1%
                         for (auto& bf : player.activeBuffs) {

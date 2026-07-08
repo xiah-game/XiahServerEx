@@ -55,11 +55,22 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket, bool sendI
     // 2. Fetch equipment stats from DB
     int equipAtk=0, equipDef=0, equipMag=0, equipSpd=0, equipAtkSpd=0, equipCrit=0, equipHp=0, equipIp=0, equipRestoreHp=0, equipRestoreIp=0;
     int equippedWeaponKind = -1; // 记录装备的武器子类型
+    bool ignoreDefFE = false;
+    bool ignoreFE = false;
     std::vector<ItemDB::EquipStatRow> equipRows;
     ItemDB::GetInstance().GetEquippedItemStats(dwCharID, equipRows);
     for (auto& row : equipRows) {
         int d4=row.d4, d5=row.d5, d6=row.d6, d7=row.d7, d13=row.d13, d9=row.d9, d10=row.d10, d11=row.d11, d12=row.d12;
         WORD ref = row.wRefID;
+        if (g_ItemTemplates.count(ref)) {
+            auto& tpl = g_ItemTemplates[ref];
+            // 首饰类型为 6(戒指), 7(项链) 或模板中的 bType==8 (首饰)
+            if (tpl.bType == 6 || tpl.bType == 7 || tpl.bType == 8) {
+                int funcID = (row.d1 != 0 ? row.d1 : tpl.nData1);
+                if (funcID == 6) ignoreDefFE = true;
+                if (funcID == 8) ignoreFE = true;
+            }
+        }
         if (g_ItemTemplates.count(ref) && g_ItemTemplates[ref].bType == 1) {
             equippedWeaponKind = g_ItemTemplates[ref].bKind;
         }
@@ -79,7 +90,7 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket, bool sendI
             equipAtkSpd += d7;
         }
         equipHp += d9; equipIp += d10; equipRestoreHp += d11; equipRestoreIp += d12;
-        LOG("[RecalcStats] EquipRow ref=" + std::to_string(ref) + " d7(spd)=" + std::to_string(d7) + " d9(hp)=" + std::to_string(d9) + " d10(ip)=" + std::to_string(d10) + " d11(restHp)=" + std::to_string(d11) + " d12(restIp)=" + std::to_string(d12) + " d13(crit)=" + std::to_string(d13));
+        LOG("[RecalcStats] EquipRow ref=" + std::to_string(ref) + " d7(spd)=" + std::to_string(d7) + " d9(hp)=" + std::to_string(d9) + " d10(ip)=" + std::to_string(d10) + " d11(restHp)=" + std::to_string(d11) + " d12(restIp)=" + std::to_string(d12) + " d13(crit)=" + std::to_string(d13) + " d1(func)=" + std::to_string(row.d1));
     }
 
     // 鍔ㄦ佹媺鍙栧ず鍛界﹀湪鏁版嵁搴 nData22 閰嶇疆鐨勬毚鍑诲 (鑻ヤ负 0 涓旀娴嬪埌瑁呭囧垯鍏煎规ч檷绾т负榛樿ょ殑 +20 鏆村嚮鍔墻)
@@ -111,6 +122,10 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket, bool sendI
             pObj->wDex = baseDex;
             pObj->wVit = baseVit;
             pObj->wInt = baseInt; // Actually wSus in this context
+
+            // 五行二期首饰特技标志位缓存更新
+            pObj->bIgnoreDefFiveElm = ignoreDefFE;
+            pObj->bIgnoreFiveElm = ignoreFE;
 
             // Load visual equipment and fame from DB into memory
             CharacterDB::GetInstance().LoadVisualEquipAndFame(dwCharID, pObj);

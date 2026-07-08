@@ -407,9 +407,9 @@ bool ItemDB::IsSackPosOccupiedAbs(DWORD dwCharID, BYTE absolutePos) {
 }
 
 void ItemDB::GetEquippedItemStats(DWORD dwCharID, std::vector<EquipStatRow>& out) {
-    std::string q = "SELECT I.wRefID, ISNULL(D.nData4, -9999), ISNULL(D.nData5, -9999), ISNULL(D.nData6, -9999), ISNULL(D.nData7, -9999), ISNULL(D.nData13, -9999), ISNULL(D.nData9, -9999), ISNULL(D.nData10, -9999), ISNULL(D.nData11, -9999), ISNULL(D.nData12, -9999) FROM SACKITEM S JOIN ITEM I ON S.dwItemID = I.dwItemID LEFT JOIN ITEMDATA D ON S.dwItemID = D.dwItemID WHERE S.dwCharID = " + std::to_string(dwCharID) + " AND S.bSackPos < 20";
+    std::string q = "SELECT I.wRefID, ISNULL(D.nData4, -9999), ISNULL(D.nData5, -9999), ISNULL(D.nData6, -9999), ISNULL(D.nData7, -9999), ISNULL(D.nData13, -9999), ISNULL(D.nData9, -9999), ISNULL(D.nData10, -9999), ISNULL(D.nData11, -9999), ISNULL(D.nData12, -9999), ISNULL(D.nData1, 0), ISNULL(D.nData2, 0) FROM SACKITEM S JOIN ITEM I ON S.dwItemID = I.dwItemID LEFT JOIN ITEMDATA D ON S.dwItemID = D.dwItemID WHERE S.dwCharID = " + std::to_string(dwCharID) + " AND S.bSackPos < 20";
     DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
-        EquipStatRow r; SQLLEN c[10];
+        EquipStatRow r; SQLLEN c[12];
         SQLGetData(hStmt, 1, SQL_C_USHORT, &r.wRefID, 0, &c[0]);
         SQLGetData(hStmt, 2, SQL_C_SLONG, &r.d4, 0, &c[1]);
         SQLGetData(hStmt, 3, SQL_C_SLONG, &r.d5, 0, &c[2]);
@@ -420,6 +420,8 @@ void ItemDB::GetEquippedItemStats(DWORD dwCharID, std::vector<EquipStatRow>& out
         SQLGetData(hStmt, 8, SQL_C_SLONG, &r.d10, 0, &c[7]);
         SQLGetData(hStmt, 9, SQL_C_SLONG, &r.d11, 0, &c[8]);
         SQLGetData(hStmt, 10, SQL_C_SLONG, &r.d12, 0, &c[9]);
+        SQLGetData(hStmt, 11, SQL_C_SLONG, &r.d1, 0, &c[10]);
+        SQLGetData(hStmt, 12, SQL_C_SLONG, &r.d2, 0, &c[11]);
         out.push_back(r);
     });
 }

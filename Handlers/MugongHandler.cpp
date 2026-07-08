@@ -1,6 +1,7 @@
 #include "MugongHandler.h"
 #include "MugongAttackContext.h"
 #include "PartyHandler.h"
+#include "FiveElmHandler.h"
 
 #include "../GameObjects/MugongManager.h"
 
@@ -364,6 +365,15 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
 
     DWORD playerMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+    if (g_MapInstances.count(playerMapID)) {
+        CMapInstance* mapInst = g_MapInstances[playerMapID];
+        std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+        PlayerData* pObj = mapInst->GetPlayer(charID + 400000000);
+        if (pObj && pObj->dwHpCur == 0) {
+            LOG("[MugongHandler] Blocked skill attack for dead player charID=" + std::to_string(charID));
+            return;
+        }
+    }
 
 
 

@@ -120,6 +120,15 @@ void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
     bool isBuff = (pd && pd->dwKeepUpTime > 0 && dwMugongID != 41 && !isDebuffOnTarget);
 
     DWORD playerMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+    if (g_MapInstances.count(playerMapID)) {
+        CMapInstance* mapInst = g_MapInstances[playerMapID];
+        std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+        PlayerData* pObj = mapInst->GetPlayer(charID + 400000000);
+        if (pObj && pObj->dwHpCur == 0) {
+            LOG("[MugongPreAttack] Blocked skill pre-attack for dead player charID=" + std::to_string(charID));
+            return;
+        }
+    }
     // === 统一内功 (IP) 校验 ===
     if (pd && pd->dwCostMp > 0) {
         if (g_MapInstances.count(playerMapID)) {
@@ -177,7 +186,7 @@ void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
     }
 
 
-    // 检查五行必杀蓄气�?
+    // 检查五行必杀蓄气?
     /*
     if (dwMugongID >= 150 && dwMugongID <= 154) {
         bool canCast = false;
@@ -190,7 +199,7 @@ void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
             }
         }
         if (!canCast) {
-            LOG("[MugongHandler] 蓄气值不�?000，无法释放五行必杀技! ID=" + std::to_string(dwMugongID));
+            LOG("[MugongHandler] 蓄气值不?000，无法释放五行必杀技! ID=" + std::to_string(dwMugongID));
             // 发送失败包 (bResult = 1, 代表内功/蓄力不足)
             std::vector<BYTE> failBuf(4 + 29, 0);
             failBuf[4] = 1; // bResult = 1
@@ -385,7 +394,7 @@ void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
 
     } else {
 
-        // �� Buff ������������������쨦�訦��?178
+        // �� Buff ������������������쨦�訦�?178
 
         if (g_MapInstances.count(playerMapID)) {
 
@@ -491,7 +500,7 @@ bool IsAoeSkill(DWORD dwMugongID, sMugongTemplate* tpl) {
 
     if (!tpl) return false;
 
-    // 1. �����������?(bKind 80-84) ����
+    // 1. ����������?(bKind 80-84) ����
 
     if (tpl->bKind >= 80 && tpl->bKind <= 84) return true;
 
@@ -499,7 +508,7 @@ bool IsAoeSkill(DWORD dwMugongID, sMugongTemplate* tpl) {
 
     // 2. ������ 80~120 ���㨦����
 
-    // �������?(bType = 3) �����������?(bKind = 0) ���?
+    // ������?(bType = 3) ����������?(bKind = 0) ��?
 
     if (tpl->bType == 3 && tpl->bKind == 0) return true;
 

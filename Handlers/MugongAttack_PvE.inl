@@ -249,7 +249,27 @@
 
                     
 
-                    finalDmg = (DWORD)rawDmg;
+                    DWORD elemDmg = 0;
+                    if (pAttacker && pAttacker->bCurFiveElm > 0) {
+                        DWORD baseFEValue = 0;
+                        switch (pAttacker->bCurFiveElm) {
+                            case 1: baseFEValue = pAttacker->wFireExp; break;
+                            case 2: baseFEValue = pAttacker->wWaterExp; break;
+                            case 3: baseFEValue = pAttacker->wWoodExp; break;
+                            case 4: baseFEValue = pAttacker->wMetalExp; break;
+                            case 5: baseFEValue = pAttacker->wEarthExp; break;
+                        }
+                        BYTE attLvl = pAttacker->GetFiveElmPassiveLevel();
+                        BYTE defLvl = 0; // 怪物无被动等级
+                        float fCounter = CalculateFiveElmCounter(pAttacker->bCurFiveElm, pTarget->bFiveElm, attLvl, defLvl, pAttacker->bIgnoreFiveElm);
+                        
+                        WORD monsterFEExp = pTarget->wIncFiveElmExp;
+                        if (monsterFEExp == 0 && g_NpcTemplates.count(pTarget->bPropType)) {
+                            monsterFEExp = g_NpcTemplates[pTarget->bPropType].wFiveElmExp;
+                        }
+                        elemDmg = CalculateFiveElmDamage(baseFEValue, attLvl, fCounter, pTarget->wLevel, monsterFEExp, pAttacker->bIgnoreDefFiveElm);
+                    }
+                    finalDmg = (DWORD)rawDmg + elemDmg;
 
                     // 武功命中蓄力（普通武功技能命中怪物）：施法者处于五行激活状态
                     if (pAttacker && pAttacker->bCurFiveElm > 0 && (dwMugongID < 150 || dwMugongID > 154)) {
@@ -519,7 +539,27 @@
 
                             
 
-                            sFinalDmg = (DWORD)rawDmg;
+                            DWORD sElemDmg = 0;
+                            if (pAttacker && pAttacker->bCurFiveElm > 0) {
+                                DWORD baseFEValue = 0;
+                                switch (pAttacker->bCurFiveElm) {
+                                    case 1: baseFEValue = pAttacker->wFireExp; break;
+                                    case 2: baseFEValue = pAttacker->wWaterExp; break;
+                                    case 3: baseFEValue = pAttacker->wWoodExp; break;
+                                    case 4: baseFEValue = pAttacker->wMetalExp; break;
+                                    case 5: baseFEValue = pAttacker->wEarthExp; break;
+                                }
+                                BYTE attLvl = pAttacker->GetFiveElmPassiveLevel();
+                                BYTE defLvl = 0; // 怪物无被动等级
+                                float fCounter = CalculateFiveElmCounter(pAttacker->bCurFiveElm, pSplashMon->bFiveElm, attLvl, defLvl, pAttacker->bIgnoreFiveElm);
+                                
+                                WORD monsterFEExp = pSplashMon->wIncFiveElmExp;
+                                if (monsterFEExp == 0 && g_NpcTemplates.count(pSplashMon->bPropType)) {
+                                    monsterFEExp = g_NpcTemplates[pSplashMon->bPropType].wFiveElmExp;
+                                }
+                                sElemDmg = CalculateFiveElmDamage(baseFEValue, attLvl, fCounter, pSplashMon->wLevel, monsterFEExp, pAttacker->bIgnoreDefFiveElm);
+                            }
+                            sFinalDmg = (DWORD)rawDmg + sElemDmg;
 
                             
 
@@ -702,7 +742,30 @@
                                 WORD critRate = (pAttacker && pAttacker->wCritical > 0) ? pAttacker->wCritical : 5;
                                 if ((WORD)(rand() % 100) < critRate) { rawDmg *= 1.5f; sCritHit = 1; }
                                 if (rawDmg > sPlDef) rawDmg -= sPlDef; else rawDmg = 1;
-                                sFinalDmg = (DWORD)rawDmg;
+                                DWORD sElemDmg = 0;
+                                if (pAttacker && pAttacker->bCurFiveElm > 0) {
+                                    DWORD baseFEValue = 0;
+                                    switch (pAttacker->bCurFiveElm) {
+                                        case 1: baseFEValue = pAttacker->wFireExp; break;
+                                        case 2: baseFEValue = pAttacker->wWaterExp; break;
+                                        case 3: baseFEValue = pAttacker->wWoodExp; break;
+                                        case 4: baseFEValue = pAttacker->wMetalExp; break;
+                                        case 5: baseFEValue = pAttacker->wEarthExp; break;
+                                    }
+                                    BYTE attLvl = pAttacker->GetFiveElmPassiveLevel();
+                                    BYTE defLvl = pSplashPlayer->GetFiveElmPassiveLevel();
+                                    float fCounter = CalculateFiveElmCounter(pAttacker->bCurFiveElm, pSplashPlayer->bCurFiveElm, attLvl, defLvl, pAttacker->bIgnoreFiveElm);
+                                    WORD playerDefExp = 0;
+                                    switch (pAttacker->bCurFiveElm) {
+                                        case 1: playerDefExp = pSplashPlayer->wFireExp; break;
+                                        case 2: playerDefExp = pSplashPlayer->wWaterExp; break;
+                                        case 3: playerDefExp = pSplashPlayer->wWoodExp; break;
+                                        case 4: playerDefExp = pSplashPlayer->wMetalExp; break;
+                                        case 5: playerDefExp = pSplashPlayer->wEarthExp; break;
+                                    }
+                                    sElemDmg = CalculateFiveElmDamage(baseFEValue, attLvl, fCounter, 0, playerDefExp, pAttacker->bIgnoreDefFiveElm);
+                                }
+                                sFinalDmg = (DWORD)rawDmg + sElemDmg;
                                 if (pSplashPlayer->dwHpCur > sFinalDmg) { pSplashPlayer->dwHpCur -= sFinalDmg; }
                                 else { sFinalDmg = pSplashPlayer->dwHpCur; pSplashPlayer->dwHpCur = 0; pSplashPlayer->dwDeadTime = GetTickCount(); }
                             }

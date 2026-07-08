@@ -42,9 +42,15 @@ void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize,
             pObj = mapInst->GetPlayer(dwMoveID);
         }
         
-        if (pObj && pObj->bShopStatus == 1) {
-            SendSystemWarningChat(clientSocket, "[Shop] Setup is active. Player movement is blocked!");
-            return;
+        if (pObj) {
+            if (pObj->dwHpCur == 0) {
+                LOG("[MoveHandler] Blocked movement for dead player charID=" + std::to_string(dwMoveID));
+                return;
+            }
+            if (pObj->bShopStatus == 1) {
+                SendSystemWarningChat(clientSocket, "[Shop] Setup is active. Player movement is blocked!");
+                return;
+            }
         }
 
         // 检查控制类 Debuff (定身/冰冻/眩晕) 拦截玩家移动

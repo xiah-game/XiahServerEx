@@ -100,19 +100,17 @@ void SendCharPremiumList(SOCKET clientSocket, DWORD charID) {
         WORD wRefID = 0;
         int d = 0, h = 0, m = 0;
         SQLLEN l1 = 0, l2 = 0, l3 = 0, l4 = 0;
-        while (SQLFetch(hStmt) == SQL_SUCCESS) {
-            SQLGetData(hStmt, 1, SQL_C_USHORT, &wRefID, 0, &l1);
-            SQLGetData(hStmt, 2, SQL_C_LONG, &d, 0, &l2);
-            SQLGetData(hStmt, 3, SQL_C_LONG, &h, 0, &l3);
-            SQLGetData(hStmt, 4, SQL_C_LONG, &m, 0, &l4);
-            
-            BuffNode node;
-            node.wRefID = wRefID;
-            node.bEndDay = (BYTE)d;
-            node.bEndHour = (BYTE)h;
-            node.bEndMin = (BYTE)m;
-            activeBuffs.push_back(node);
-        }
+        SQLGetData(hStmt, 1, SQL_C_USHORT, &wRefID, 0, &l1);
+        SQLGetData(hStmt, 2, SQL_C_LONG, &d, 0, &l2);
+        SQLGetData(hStmt, 3, SQL_C_LONG, &h, 0, &l3);
+        SQLGetData(hStmt, 4, SQL_C_LONG, &m, 0, &l4);
+        
+        BuffNode node;
+        node.wRefID = wRefID;
+        node.bEndDay = (BYTE)d;
+        node.bEndHour = (BYTE)h;
+        node.bEndMin = (BYTE)m;
+        activeBuffs.push_back(node);
     });
     
     // 组装并发送 0x4321 (CS_NV_CHARPREMIUM_ACK) 封包
@@ -551,9 +549,15 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
     if (g_MapInstances.count(pMapID)) {
         std::lock_guard<std::mutex> lock(g_MapInstances[pMapID]->GetMutex());
         PlayerData* pObj = g_MapInstances[pMapID]->GetPlayer(charID + 400000000);
-        if (pObj && pObj->bShopStatus == 1) {
-            SendSystemWarningChat(clientSocket, "[Shop] Setup is active. Item usage is blocked!");
-            return;
+        if (pObj) {
+            if (pObj->dwHpCur == 0) {
+                LOG("[ItemHandler] Blocked item usage for dead player charID=" + std::to_string(charID));
+                return;
+            }
+            if (pObj->bShopStatus == 1) {
+                SendSystemWarningChat(clientSocket, "[Shop] Setup is active. Item usage is blocked!");
+                return;
+            }
         }
     }
 
@@ -621,6 +625,34 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
             LOG("[ItemHandler] Premium card mismatch! itemName=" + itemName);
             SendSystemWarningChat(clientSocket, "增益卡激活失败：无法识别该增益卡或其已失效！");
             return;
+        }
+
+        // [覆盖安全校验] 防止低级卡覆盖高级卡
+        if (premiumRefID > 0) {
+            BYTE newKind = 0;
+            WORD newValue = 0;
+            std::string qNewTpl = "SELECT bKind, wValue FROM ITEM_PREMIUM WHERE wRefID = " + std::to_string(premiumRefID);
+            DBHelper::GetInstance().ExecuteQuery(qNewTpl, [&](SQLHSTMT hStmt) {
+                SQLGetData(hStmt, 1, SQL_C_UTINYINT, &newKind, 0, NULL);
+                SQLGetData(hStmt, 2, SQL_C_USHORT, &newValue, 0, NULL);
+            });
+
+            int activeRefID = 0;
+            WORD activeValue = 0;
+            std::string qActive = "SELECT TOP 1 c.wRefID, p.wValue FROM CHAR_PREMIUM c "
+                                  "INNER JOIN ITEM_PREMIUM p ON c.wRefID = p.wRefID "
+                                  "WHERE c.dwCharID = " + std::to_string(charID) + " "
+                                  "  AND c.bKind = " + std::to_string(newKind) + " "
+                                  "  AND c.dateEnd > GETDATE()";
+            DBHelper::GetInstance().ExecuteQuery(qActive, [&](SQLHSTMT hStmt) {
+                SQLGetData(hStmt, 1, SQL_C_USHORT, &activeRefID, 0, NULL);
+                SQLGetData(hStmt, 2, SQL_C_USHORT, &activeValue, 0, NULL);
+            });
+            
+            if (activeRefID > 0 && activeValue > newValue) {
+                SendSystemWarningChat(clientSocket, "[Premium] Existing higher-level buff is active! Cannot overwrite.");
+                return;
+            }
         }
     }
 
@@ -969,25 +1001,56 @@ void OnUseItemReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
             }
             
             // 4. 时效叠加防刷更新 SQL：如果已有同类有效卡，直接延长 dateEnd，否则以当前 GETDATE() 起始写入
-            std::string qCheck = "SELECT COUNT(*) FROM CHAR_PREMIUM WHERE dwCharID = " + std::to_string(charID) + " AND wRefID = " + std::to_string(premiumRefID) + " AND dateEnd > GETDATE()";
+std::string qCheck = "SELECT COUNT(*) FROM CHAR_PREMIUM WHERE dwCharID = " + std::to_string(charID) + " AND wRefID = " + std::to_string(premiumRefID) + " AND dateEnd > GETDATE()";
             int hasActive = 0;
             DBHelper::GetInstance().ExecuteQuery(qCheck, [&](SQLHSTMT hStmt) {
                 SQLGetData(hStmt, 1, SQL_C_LONG, &hasActive, 0, NULL);
             });
             
-            std::string qWrite = "";
-            if (hasActive > 0) {
-                qWrite = "UPDATE CHAR_PREMIUM SET dateEnd = DATEADD(minute, " + std::to_string(addMinutes) + ", dateEnd) WHERE dwCharID = " + std::to_string(charID) + " AND wRefID = " + std::to_string(premiumRefID) + " AND dateEnd > GETDATE()";
+            // 4. 同类卡高级覆盖低级、同级叠加时间、低级不可盖高级规则
+            int activeRefID = 0;
+            WORD activeValue = 0;
+            std::string qActive = "SELECT TOP 1 c.wRefID, p.wValue FROM CHAR_PREMIUM c "
+                                  "INNER JOIN ITEM_PREMIUM p ON c.wRefID = p.wRefID "
+                                  "WHERE c.dwCharID = " + std::to_string(charID) + " "
+                                  "  AND c.bKind = " + std::to_string(premiumKind) + " "
+                                  "  AND c.dateEnd > GETDATE()";
+            DBHelper::GetInstance().ExecuteQuery(qActive, [&](SQLHSTMT hStmt) {
+                SQLGetData(hStmt, 1, SQL_C_USHORT, &activeRefID, 0, NULL);
+                SQLGetData(hStmt, 2, SQL_C_USHORT, &activeValue, 0, NULL);
+            });
+            
+            if (activeRefID > 0) {
+                if (activeValue == premiumValue) {
+                    // 同加成值，直接叠加时长
+                    std::string qWrite = "UPDATE CHAR_PREMIUM SET dateEnd = DATEADD(minute, " + std::to_string(addMinutes) + ", dateEnd) "
+                                         "WHERE dwCharID = " + std::to_string(charID) + " AND wRefID = " + std::to_string(activeRefID) + " AND dateEnd > GETDATE()";
+                    DBHelper::GetInstance().ExecuteUpdate(qWrite);
+                } else if (activeValue < premiumValue) {
+                    // 大覆盖小，物理删除低级卡，并插入高级卡
+                    std::string qDel = "DELETE c FROM CHAR_PREMIUM c "
+                                       "INNER JOIN ITEM_PREMIUM p ON c.wRefID = p.wRefID "
+                                       "WHERE c.dwCharID = " + std::to_string(charID) + " "
+                                       "  AND p.bKind = " + std::to_string(premiumKind) + " "
+                                       "  AND p.wValue < " + std::to_string(premiumValue) + " "
+                                       "  AND c.dateEnd > GETDATE()";
+                    DBHelper::GetInstance().ExecuteUpdate(qDel);
+                    
+                    std::string qWrite = "INSERT INTO CHAR_PREMIUM (szAccount, dwCharID, wRefID, bType, bKind, dateStart, dateEnd, dwDupID) VALUES ('" 
+                            + std::string(szAccount) + "', " + std::to_string(charID) + ", " + std::to_string(premiumRefID) + ", " 
+                            + std::to_string(premiumType) + ", " + std::to_string(premiumKind) + ", GETDATE(), DATEADD(minute, " 
+                            + std::to_string(addMinutes) + ", GETDATE()), 0)";
+                    DBHelper::GetInstance().ExecuteUpdate(qWrite);
+                }
             } else {
-                qWrite = "INSERT INTO CHAR_PREMIUM (szAccount, dwCharID, wRefID, bType, bKind, dateStart, dateEnd, dwDupID) VALUES ('" 
+                // 身上无同类时效 Buff，直接插入
+                std::string qWrite = "INSERT INTO CHAR_PREMIUM (szAccount, dwCharID, wRefID, bType, bKind, dateStart, dateEnd, dwDupID) VALUES ('" 
                         + std::string(szAccount) + "', " + std::to_string(charID) + ", " + std::to_string(premiumRefID) + ", " 
                         + std::to_string(premiumType) + ", " + std::to_string(premiumKind) + ", GETDATE(), DATEADD(minute, " 
                         + std::to_string(addMinutes) + ", GETDATE()), 0)";
+                DBHelper::GetInstance().ExecuteUpdate(qWrite);
             }
             
-            DBHelper::GetInstance().ExecuteUpdate(qWrite);
-            
-            // 5. 瞬间同步刷新客户端 Buff 栏与倒计时提示！
             SendCharPremiumList(clientSocket, charID);
             
             // 6. 系统文字提示（物品使用成功）
