@@ -56,6 +56,7 @@ public:
     void SetTicketId(SOCKET s, DWORD ticketId);
     DWORD GetTicketId(SOCKET s);
     bool AcceptSequence(SOCKET s, uint32_t seq);
+    bool ValidateTimestamp(SOCKET s, uint32_t timestamp, uint32_t now);
 
 private:
     SessionMgr() {}
@@ -64,6 +65,8 @@ private:
         DWORD ticketId = 0;
         uint32_t maxSeq = 0;
         uint64_t seqWindow = 0;
+        int64_t clockOffset = 0;
+        bool offsetInitialized = false;
     };
 
     std::mutex m_mutex;

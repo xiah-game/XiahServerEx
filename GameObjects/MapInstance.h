@@ -2,6 +2,7 @@
 
 #include <map>
 #include <vector>
+#include <queue>
 #include <mutex>
 #include "../ServerCore.h"
 #include <unordered_set>
@@ -87,6 +88,11 @@ private:
     void ProcessMonsterAI(DWORD tick, MonsterData& obj);
     void ProcessBuffs(DWORD tick);
     void InterpolatePlayerPositions(DWORD tick);
+
+    bool IsWalkable(int x, int y) const;
+    bool HasLineOfSight(int x0, int y0, int x1, int y1) const;
+    bool FindPath(int startX, int startY, int goalX, int goalY, std::vector<std::pair<int, int>>& outPath, int maxRange = 35) const;
+    int FindFurthestVisibleWaypoint(int curX, int curY, const std::vector<std::pair<int, int>>& path) const;
 
 public:
     void HandleMonsterDoTDeath(DWORD tick, MonsterData& obj, DWORD casterID, DWORD dwMugongID, BYTE bLevel);

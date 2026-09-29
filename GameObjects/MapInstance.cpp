@@ -384,6 +384,26 @@ void CMapInstance::Update(DWORD tick) {
             BroadcastPacketAOI_NoLock(pl.wPosX, pl.wPosY, animBuf);
             
             LOG("[PlayerDeath] Sent deferred death broadcast for ObjID=" + std::to_string(pl.dwObjectID));
+            for (auto& mPair : m_monsters) {
+                if (mPair.second.dwTargetID == pl.dwObjectID) {
+                    mPair.second.dwTargetID = 0;
+                    mPair.second.bInAttackRange = false;
+                    float dist = std::sqrt(std::pow((float)mPair.second.wPosX - mPair.second.wSpawnX, 2) + std::pow((float)mPair.second.wPosY - mPair.second.wSpawnY, 2));
+                    if (dist > 1.0f) {
+                        mPair.second.bIsReturning = true;
+                        mPair.second.dwReturnStartTime = tick;
+                        mPair.second.fPosX = (float)mPair.second.wPosX;
+                        mPair.second.fPosY = (float)mPair.second.wPosY;
+                        mPair.second.wDestX = mPair.second.wSpawnX;
+                        mPair.second.wDestY = mPair.second.wSpawnY;
+                        mPair.second.wLastSentDestX = 0;
+                        mPair.second.wLastSentDestY = 0;
+                        mPair.second.wLastSentPosX = 0;
+                        mPair.second.wLastSentPosY = 0;
+                        mPair.second.dwHpCur = mPair.second.dwHpMax;
+                    }
+                }
+            }
             pl.dwDeadTime = 0; // Clear so we don't send again
         }
     }
@@ -653,7 +673,8 @@ void CMapInstance::InterpolatePlayerPositions(DWORD tick) {
         if (p.dwMapID == 2 || p.dwMapID == 10 || p.dwMapID == 16) {
             speedScale = 0.25f; // 业务意图：针对 4 倍缩放地图，将服务端插值步长修正为 0.25 倍，与客户端真实 3D 物理运动速度完全咬合
         }
-        float speed = (float)(p.wWalkSpeed > 0 ? p.wWalkSpeed : 11) * 0.1f * 0.65f * speedScale;
+        // 航位推测步长：保持 1:1 物理速度，彻底消除 0.65f 导致的服务端玩家残影滞后
+        float speed = (float)(p.wWalkSpeed > 0 ? p.wWalkSpeed : 11) * 0.1f * speedScale;
         float nx = dx / dist, ny = dy / dist;
         p.fPosX += nx * speed;
         p.fPosY += ny * speed;
@@ -682,6 +703,181 @@ void CMapInstance::InterpolatePlayerPositions(DWORD tick) {
 void CMapInstance::ProcessBuffs(DWORD tick) {
     // Buff expiry is now handled centrally in MonsterAI.cpp
     // which can safely call RecalculateStats() outside the map mutex.
+}
+
+bool CMapInstance::IsWalkable(int x, int y) const {
+    if (m_collisionGrid.empty()) return true;
+    if (x < 0 || y < 0 || x >= m_width || y >= m_height) return false;
+    return m_collisionGrid[y * m_width + x] == 0;
+}
+
+bool CMapInstance::HasLineOfSight(int x0, int y0, int x1, int y1) const {
+    if (m_collisionGrid.empty()) return true;
+    int dx = std::abs(x1 - x0);
+    int dy = std::abs(y1 - y0);
+    int sx = (x0 < x1) ? 1 : -1;
+    int sy = (y0 < y1) ? 1 : -1;
+    int err = dx - dy;
+
+    int x = x0;
+    int y = y0;
+    while (x != x1 || y != y1) {
+        if (!IsWalkable(x, y)) return false;
+        int e2 = 2 * err;
+        if (e2 > -dy) {
+            err -= dy;
+            x += sx;
+        }
+        if (e2 < dx) {
+            err += dx;
+            y += sy;
+        }
+    }
+    return IsWalkable(x1, y1);
+}
+
+bool CMapInstance::FindPath(int startX, int startY, int goalX, int goalY, std::vector<std::pair<int, int>>& outPath, int maxRange) const {
+    outPath.clear();
+    if (startX == goalX && startY == goalY) {
+        outPath.push_back({startX, startY});
+        return true;
+    }
+    if (m_collisionGrid.empty()) {
+        outPath.push_back({startX, startY});
+        outPath.push_back({goalX, goalY});
+        return true;
+    }
+
+    // 终点若不可行走，在周围 2 格内寻找最近的合法格子作为替代目标
+    if (!IsWalkable(goalX, goalY)) {
+        int bestGx = -1, bestGy = -1;
+        int bestDistSq = 9999;
+        for (int dy = -2; dy <= 2; ++dy) {
+            for (int dx = -2; dx <= 2; ++dx) {
+                int candX = goalX + dx;
+                int candY = goalY + dy;
+                if (IsWalkable(candX, candY)) {
+                    int d = dx * dx + dy * dy;
+                    if (d < bestDistSq) {
+                        bestDistSq = d;
+                        bestGx = candX;
+                        bestGy = candY;
+                    }
+                }
+            }
+        }
+        if (bestGx < 0) return false;
+        goalX = bestGx;
+        goalY = bestGy;
+    }
+
+    // 局部 A* 动态包围盒限制，避免全图遍历造成性能开销
+    int minX = (std::max)(0, (std::min)(startX, goalX) - 12);
+    int maxX = (std::min)(m_width - 1, (std::max)(startX, goalX) + 12);
+    int minY = (std::max)(0, (std::min)(startY, goalY) - 12);
+    int maxY = (std::min)(m_height - 1, (std::max)(startY, goalY) + 12);
+
+    if ((maxX - minX) > maxRange * 2 || (maxY - minY) > maxRange * 2) {
+        return false;
+    }
+
+    int boxW = maxX - minX + 1;
+    int boxH = maxY - minY + 1;
+    int totalCells = boxW * boxH;
+
+    std::vector<int> gScore(totalCells, 100000000);
+    std::vector<int> cameFrom(totalCells, -1);
+
+    auto ToLocal = [&](int x, int y) {
+        return (y - minY) * boxW + (x - minX);
+    };
+
+    struct QNode {
+        int x, y;
+        int fCost;
+        bool operator>(const QNode& o) const { return fCost > o.fCost; }
+    };
+    std::priority_queue<QNode, std::vector<QNode>, std::greater<QNode>> pq;
+
+    int startLocal = ToLocal(startX, startY);
+    gScore[startLocal] = 0;
+    int h0 = (std::abs(goalX - startX) + std::abs(goalY - startY)) * 10;
+    pq.push({startX, startY, h0});
+
+    static const int dirs[8][2] = {
+        {0, 1}, {1, 0}, {0, -1}, {-1, 0},
+        {1, 1}, {1, -1}, {-1, 1}, {-1, -1}
+    };
+
+    bool found = false;
+    int expansions = 0;
+    const int maxExpansions = 800;
+
+    while (!pq.empty() && expansions < maxExpansions) {
+        QNode cur = pq.top();
+        pq.pop();
+        expansions++;
+
+        if (cur.x == goalX && cur.y == goalY) {
+            found = true;
+            break;
+        }
+
+        int curLocal = ToLocal(cur.x, cur.y);
+        int curG = gScore[curLocal];
+
+        for (int i = 0; i < 8; ++i) {
+            int nx = cur.x + dirs[i][0];
+            int ny = cur.y + dirs[i][1];
+
+            if (nx < minX || nx > maxX || ny < minY || ny > maxY) continue;
+            if (!IsWalkable(nx, ny)) continue;
+
+            // 斜向移动防切死角
+            if (dirs[i][0] != 0 && dirs[i][1] != 0) {
+                if (!IsWalkable(cur.x + dirs[i][0], cur.y) || !IsWalkable(cur.x, cur.y + dirs[i][1])) {
+                    continue;
+                }
+            }
+
+            int stepCost = (dirs[i][0] != 0 && dirs[i][1] != 0) ? 14 : 10;
+            int nextG = curG + stepCost;
+            int nextLocal = ToLocal(nx, ny);
+
+            if (nextG < gScore[nextLocal]) {
+                gScore[nextLocal] = nextG;
+                cameFrom[nextLocal] = curLocal;
+                int h = (std::abs(goalX - nx) + std::abs(goalY - ny)) * 10;
+                pq.push({nx, ny, nextG + h});
+            }
+        }
+    }
+
+    if (!found) return false;
+
+    // 回溯生成整条路径
+    int curr = ToLocal(goalX, goalY);
+    while (curr != -1) {
+        int ly = curr / boxW;
+        int lx = curr % boxW;
+        outPath.push_back({minX + lx, minY + ly});
+        if (curr == startLocal) break;
+        curr = cameFrom[curr];
+    }
+    std::reverse(outPath.begin(), outPath.end());
+    return true;
+}
+
+int CMapInstance::FindFurthestVisibleWaypoint(int curX, int curY, const std::vector<std::pair<int, int>>& path) const {
+    if (path.empty()) return -1;
+    // 逆向回溯检测：从终点或前探 15 格向后逐一检测直通视线（String-Pulling 绳拉直平滑）
+    int checkLimit = (std::min)((int)path.size() - 1, 15);
+    for (int i = checkLimit; i >= 0; --i) {
+        if (HasLineOfSight(curX, curY, path[i].first, path[i].second)) {
+            return i;
+        }
+    }
+    return 0;
 }
 
 void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
@@ -989,7 +1185,36 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
         obj.dwTargetID = 0;
     }
 
-    if (!obj.bIsReturning && !isFeared && !isBlinded && ((obj.dwAttackPattern & 1) != 0 || targetId != 0)) {
+    bestPlayer = nullptr;
+    targetId = obj.dwTargetID;
+
+    // 1. 如果怪物已有仇恨目标（正在追击中）：优先直接在地图全局玩家列表中追踪该目标
+    // 坚决不使用局部 AOI 九宫格，彻底消灭因玩家跑出 100 格网格边界导致的“追击中途被误拉回”
+    if (targetId != 0 && !obj.bIsReturning && !isFeared && !isBlinded) {
+        auto it = m_players.find(targetId);
+        if (it != m_players.end()) {
+            PlayerData& p = it->second;
+            if (p.dwHpCur > 0 && p.dwInvulnerableUntil <= tick &&
+                p.activeBuffs.count(130) == 0 && p.activeBuffs.count(178) == 0) 
+            {
+                float dx = (float)p.wPosX - (float)obj.wPosX;
+                float dy = (float)p.wPosY - (float)obj.wPosY;
+                float curDist = std::sqrt(dx * dx + dy * dy);
+
+                // 仇恨脱离距离（Chase Range）：只要玩家未跑离怪物 80 格（或视野*3.5）开外，仇恨绝不丢失
+                float maxChaseRange = (float)obj.wSightRange * 3.5f;
+                if (maxChaseRange < 80.0f) maxChaseRange = 80.0f;
+                if (maxChaseRange > 120.0f) maxChaseRange = 120.0f;
+
+                if (curDist <= maxChaseRange) {
+                    bestPlayer = &p;
+                }
+            }
+        }
+    }
+
+    // 2. 如果怪物当前无仇恨目标（空闲巡逻状态），才在当前 AOI 网格内扫描进入视野的敌对玩家
+    if (!bestPlayer && !obj.bIsReturning && !isFeared && !isBlinded && ((obj.dwAttackPattern & 1) != 0)) {
         std::vector<PlayerData*> nearbyPlayers = GetPlayersInAOI(obj.wPosX, obj.wPosY);
         for (PlayerData* playerPtr : nearbyPlayers) {
             if (!playerPtr) continue;
@@ -998,22 +1223,11 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
             if (player.dwInvulnerableUntil > tick) continue; // Death/respawn protection
             if (player.activeBuffs.count(130) > 0) continue; // Ignore players under Turtle Breath (130)
             if (player.activeBuffs.count(178) > 0) continue; // Ignore players under Stealth (178)
-            if (targetId != 0 && player.dwObjectID != targetId) continue;
 
             float dx = (float)player.wPosX - (float)obj.wPosX;
             float dy = (float)player.wPosY - (float)obj.wPosY;
             float distSq = (dx*dx + dy*dy);
-            
-            // If monster already has aggro (was hit), use larger chase range
-            // If scanning for new targets, use normal sight range
-            float maxRangeSq;
-            if (obj.dwTargetID != 0) {
-                float chaseBase = (float)obj.wSightRange * 3.0f;
-                float chaseRange = (chaseBase > 100.0f) ? chaseBase : 100.0f;
-                maxRangeSq = chaseRange * chaseRange;
-            } else {
-                maxRangeSq = (float)(obj.wSightRange * obj.wSightRange);
-            }
+            float maxRangeSq = (float)(obj.wSightRange * obj.wSightRange);
             
             if (distSq < maxRangeSq && distSq < (minDist * minDist)) {
                 minDist = std::sqrt(distSq);
@@ -1040,15 +1254,58 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
     }
 
     if (bestPlayer == nullptr) {
+        if (targetId != 0 || obj.dwTargetID != 0) {
+            float distToSpawn = std::sqrt(std::pow((float)obj.wPosX - obj.wSpawnX, 2) + std::pow((float)obj.wPosY - obj.wSpawnY, 2));
+            if (distToSpawn > 1.0f) {
+                obj.bIsReturning = true;
+                obj.dwReturnStartTime = tick;
+                obj.bInAttackRange = false;
+                obj.fPosX = (float)obj.wPosX;
+                obj.fPosY = (float)obj.wPosY;
+                obj.wDestX = obj.wSpawnX;
+                obj.wDestY = obj.wSpawnY;
+                obj.wLastSentDestX = 0;
+                obj.wLastSentDestY = 0;
+                obj.wLastSentPosX = 0;
+                obj.wLastSentPosY = 0;
+                obj.dwHpCur = obj.dwHpMax;
+
+                // 脱战刹车站定：广播停步包，使客户端模型自然刹车结束追击奔跑转为待机
+                std::vector<BYTE> stopBuf; stopBuf.resize(4); stopBuf.push_back(0);
+                DWORD oid = obj.dwObjectID; stopBuf.push_back(oid&0xFF); stopBuf.push_back((oid>>8)&0xFF); stopBuf.push_back((oid>>16)&0xFF); stopBuf.push_back(oid>>24);
+                stopBuf.push_back(obj.bObjectType); 
+                stopBuf.push_back(obj.wPosX & 0xFF); stopBuf.push_back(obj.wPosX >> 8);
+                stopBuf.push_back(obj.wPosY & 0xFF); stopBuf.push_back(obj.wPosY >> 8);
+                stopBuf.push_back(obj.bHeight);
+                stopBuf.push_back(0); 
+                PACKET_HEADER* stopHead = (PACKET_HEADER*)stopBuf.data(); stopHead->id = 0x350C; stopHead->payloadSize = stopBuf.size() - sizeof(PACKET_HEADER);
+                EncryptPacket(stopBuf.data(), 0x42); 
+                BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, stopBuf);
+
+                LOG("[MonsterAI] Target lost/dead. Trigger return: ObjID=" + std::to_string(obj.dwObjectID) + " returning to spawn (" + std::to_string(obj.wSpawnX) + "," + std::to_string(obj.wSpawnY) + ")");
+            }
+        }
         targetId = 0;
         obj.dwTargetID = 0;
+        obj.dwChaseStartTime = 0;
     }
 
     // Chase Leash Check: if pulled too far from spawn point, break aggro and return
     if (targetId && bestPlayer) {
+        if (obj.dwTargetID != targetId) {
+            // Target acquired/switched: reset previous wander/move destination
+            obj.wLastSentDestX = 0;
+            obj.wLastSentDestY = 0;
+            obj.wDestX = 0;
+            obj.wDestY = 0;
+            obj.dwChaseStartTime = tick; // 锁定新目标，记录追击起跑时刻
+            obj.dwLastAttackTime = 0;    // 进入战斗，起手第一刀蓄力就绪
+        }
+
         float distToSpawn = std::sqrt(std::pow((float)obj.wPosX - obj.wSpawnX, 2) + std::pow((float)obj.wPosY - obj.wSpawnY, 2));
-        float leashRange = (float)(obj.wWanderRange * 3);
-        if (leashRange < 40.0f) leashRange = 40.0f;
+        float leashRange = (float)(obj.wWanderRange * 6);
+        if (leashRange < 180.0f) leashRange = 180.0f; // 保底拉脱距离提升至 180 格，提供充裕引怪与拉扯空间
+        if (leashRange > 250.0f) leashRange = 250.0f;
         
         if (distToSpawn > leashRange) {
             char dbgLeash[256];
@@ -1058,8 +1315,11 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
             
             targetId = 0;
             obj.dwTargetID = 0;
+            obj.dwChaseStartTime = 0;
             bestPlayer = nullptr;
             obj.bIsReturning = true; // Enter returning state
+            obj.dwReturnStartTime = tick;
+            obj.bInAttackRange = false;
             obj.dwHpCur = obj.dwHpMax; // Heal to full immediately
             
             // Force destination to spawn point and reset move tracking
@@ -1067,54 +1327,164 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
             obj.wDestY = obj.wSpawnY;
             obj.wLastSentDestX = 0;
             obj.wLastSentDestY = 0;
+            obj.wLastSentPosX = 0;
+            obj.wLastSentPosY = 0;
+            obj.fPosX = (float)obj.wPosX;
+            obj.fPosY = (float)obj.wPosY;
+
+            // 脱战刹车站定：广播停步包，使客户端模型自然刹车结束追击奔跑转为待机
+            std::vector<BYTE> stopBuf; stopBuf.resize(4); stopBuf.push_back(0);
+            DWORD oid = obj.dwObjectID; stopBuf.push_back(oid&0xFF); stopBuf.push_back((oid>>8)&0xFF); stopBuf.push_back((oid>>16)&0xFF); stopBuf.push_back(oid>>24);
+            stopBuf.push_back(obj.bObjectType); 
+            stopBuf.push_back(obj.wPosX & 0xFF); stopBuf.push_back(obj.wPosX >> 8);
+            stopBuf.push_back(obj.wPosY & 0xFF); stopBuf.push_back(obj.wPosY >> 8);
+            stopBuf.push_back(obj.bHeight);
+            stopBuf.push_back(0); 
+            PACKET_HEADER* stopHead = (PACKET_HEADER*)stopBuf.data(); stopHead->id = 0x350C; stopHead->payloadSize = stopBuf.size() - sizeof(PACKET_HEADER);
+            EncryptPacket(stopBuf.data(), 0x42); 
+            BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, stopBuf);
         }
     }
 
     WORD oldX = obj.wPosX;
     WORD oldY = obj.wPosY;
-    
-
 
     if (targetId && bestPlayer) {
         obj.dwTargetID = targetId;
-        float atkRange = (obj.wShotAtkRange > 0) ? obj.wShotAtkRange : obj.wMeleeAtkRange;
-        
+        // 修复1：普通物理近战肉搏射程（严禁使用 wShotAtkRange，防止远程配置使怪物在数十格外提前刹车站定）
+        float atkRange = 2.5f;
+        if (obj.wMeleeAtkRange > 0) {
+            atkRange = (float)obj.wMeleeAtkRange;
+            if (atkRange > 3.2f) atkRange = 3.2f; // 近战普通肉搏上限封顶 3.2 格，杜绝隔空撕咬
+            if (atkRange < 2.0f) atkRange = 2.0f; // 保底 2.0 格，避免穿模贴脸
+        }
 
-        
-        if (minDist <= atkRange) {
+        // 攻击范围迟滞判断（Hysteresis），防止在攻击临界距离高频反复起步/停步造成模型抽搐
+        float enterRange = atkRange;
+        float exitRange = atkRange + 1.0f;
+
+        float targetX = (float)bestPlayer->wPosX;
+        float targetY = (float)bestPlayer->wPosY;
+        int iTargetX = (int)(targetX + 0.5f);
+        int iTargetY = (int)(targetY + 0.5f);
+        float tdx = targetX - (float)obj.wPosX;
+        float tdy = targetY - (float)obj.wPosY;
+        float curDist = std::sqrt(tdx * tdx + tdy * tdy);
+
+        // 视线判定：近战贴身距离（<=2.5格或<=攻击距离）直接视为通畅，防止地表微小障碍（如摊位、桌角）导致近身发呆
+        bool hasDirectLOS = (curDist <= 2.5f || curDist <= atkRange) ? true : HasLineOfSight(obj.wPosX, obj.wPosY, iTargetX, iTargetY);
+
+        if (!obj.bInAttackRange) {
+            if (curDist <= enterRange && hasDirectLOS) {
+                obj.bInAttackRange = true;
+                
+                // 修复2：冲入射程瞬间无条件出刀！重置攻击CD为0，保证冲到面前同tick立即斩出第一刀，杜绝任何发呆
+                obj.dwLastAttackTime = 0;
+                LOG("[MonsterAI] RUSH ATTACK: Mon=" + std::to_string(obj.dwObjectID) + " rushed into range (dist=" + std::to_string(curDist) + "). Immediate first strike ready!");
+                obj.dwChaseStartTime = 0;
+            }
+        } else {
+            if (curDist > exitRange || !hasDirectLOS) {
+                obj.bInAttackRange = false;
+                // 玩家跑开拉开距离，重新记录追击起跑时刻
+                obj.dwChaseStartTime = tick;
+            }
+        }
+
+        // 进身攻击调试日志：距离 <= 10 格时限频监控状态
+        if (curDist <= 10.0f && (tick % 1000 < 100)) {
+            char dbgBuf[256];
+            sprintf(dbgBuf, "[AtkDebug] Mon=%u pos=(%d,%d) P=(%d,%d) dist=%.2f atkRange=%.2f inRange=%d waitTime=%d cd=%u hasLOS=%d",
+                obj.dwObjectID, obj.wPosX, obj.wPosY, bestPlayer->wPosX, bestPlayer->wPosY,
+                curDist, atkRange, (int)obj.bInAttackRange, 
+                (int)(tick - obj.dwLastAttackTime), tpl.wAtkInterval, (int)hasDirectLOS);
+            LOG(std::string(dbgBuf));
+        }
+
+        if (obj.bInAttackRange) {
             // Guard: don't attack dead or invulnerable players
             if (bestPlayer->dwHpCur == 0 || bestPlayer->dwInvulnerableUntil > tick) {
                 obj.dwTargetID = 0;
+                obj.bInAttackRange = false;
+                float dist = std::sqrt(std::pow((float)obj.wPosX - obj.wSpawnX, 2) + std::pow((float)obj.wPosY - obj.wSpawnY, 2));
+                if (dist > 1.0f) {
+                    obj.bIsReturning = true;
+                    obj.dwReturnStartTime = tick;
+                    obj.fPosX = (float)obj.wPosX;
+                    obj.fPosY = (float)obj.wPosY;
+                    obj.wDestX = obj.wSpawnX;
+                    obj.wDestY = obj.wSpawnY;
+                    obj.wLastSentDestX = 0;
+                    obj.wLastSentDestY = 0;
+                    obj.wLastSentPosX = 0;
+                    obj.wLastSentPosY = 0;
+                    obj.dwHpCur = obj.dwHpMax;
+
+                    // 脱战刹车站定：广播停步包，使客户端模型自然刹车结束追击奔跑转为待机
+                    std::vector<BYTE> stopBuf; stopBuf.resize(4); stopBuf.push_back(0);
+                    DWORD oid = obj.dwObjectID; stopBuf.push_back(oid&0xFF); stopBuf.push_back((oid>>8)&0xFF); stopBuf.push_back((oid>>16)&0xFF); stopBuf.push_back(oid>>24);
+                    stopBuf.push_back(obj.bObjectType); 
+                    stopBuf.push_back(obj.wPosX & 0xFF); stopBuf.push_back(obj.wPosX >> 8);
+                    stopBuf.push_back(obj.wPosY & 0xFF); stopBuf.push_back(obj.wPosY >> 8);
+                    stopBuf.push_back(obj.bHeight);
+                    stopBuf.push_back(0); 
+                    PACKET_HEADER* stopHead = (PACKET_HEADER*)stopBuf.data(); stopHead->id = 0x350C; stopHead->payloadSize = stopBuf.size() - sizeof(PACKET_HEADER);
+                    EncryptPacket(stopBuf.data(), 0x42); 
+                    BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, stopBuf);
+
+                    LOG("[MonsterAI] Target dead/invulnerable in attack range. Trigger return: ObjID=" + std::to_string(obj.dwObjectID));
+                }
             } else {
             if (obj.wLastSentDestX != 0 || obj.wLastSentDestY != 0) {
+                // 怪物冲锋到达攻击距离刹车站定：保持当前真实模拟物理坐标，不跳越至陈旧预判目的地
                 obj.wLastSentDestX = 0;
                 obj.wLastSentDestY = 0;
                 obj.wLastSentPosX = 0;
                 obj.wLastSentPosY = 0;
+                obj.wDestX = 0;
+                obj.wDestY = 0;
                 
+                // 停步时立即调整朝向面对玩家
+                float fdx = targetX - (float)obj.wPosX;
+                float fdy = targetY - (float)obj.wPosY;
+                float fAngle = std::atan2(fdy, fdx) * 180.0f / 3.14159265f;
+                if (fAngle < 0) fAngle += 360.0f;
+                WORD wFaceDir = (WORD)fAngle;
+                obj.wLastSentDirection = wFaceDir;
+
                 std::vector<BYTE> stopBuf; stopBuf.resize(4); stopBuf.push_back(0); 
                 DWORD oid = obj.dwObjectID; stopBuf.push_back(oid&0xFF); stopBuf.push_back((oid>>8)&0xFF); stopBuf.push_back((oid>>16)&0xFF); stopBuf.push_back(oid>>24);
                 stopBuf.push_back(obj.bObjectType); 
-                stopBuf.push_back(oldX & 0xFF); stopBuf.push_back(oldX >> 8);
-                stopBuf.push_back(oldY & 0xFF); stopBuf.push_back(oldY >> 8);
+                stopBuf.push_back(obj.wPosX & 0xFF); stopBuf.push_back(obj.wPosX >> 8);
+                stopBuf.push_back(obj.wPosY & 0xFF); stopBuf.push_back(obj.wPosY >> 8);
                 stopBuf.push_back(obj.bHeight);
                 stopBuf.push_back(0); 
                 
                 PACKET_HEADER* stopHead = (PACKET_HEADER*)stopBuf.data(); stopHead->id = 0x350C; stopHead->payloadSize = stopBuf.size() - sizeof(PACKET_HEADER);
                 EncryptPacket(stopBuf.data(), 0x42); 
-                BroadcastPacketAOI_NoLock(oldX, oldY, stopBuf); // Changed to AOI
+                BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, stopBuf);
             }
             
-            if (tpl.wAtkInterval > 0 && tick - obj.dwLastAttackTime > tpl.wAtkInterval) { 
+            DWORD atkCooldown = (tpl.wAtkInterval > 0) ? tpl.wAtkInterval : 1500;
+            if (tick - obj.dwLastAttackTime >= atkCooldown) { 
                 obj.dwLastAttackTime = tick;
                 DWORD oid = obj.dwObjectID;
+                LOG("[AtkDebug] TRIGGER ATTACK! Monster=" + std::to_string(oid) + " Target=" + std::to_string(targetId) + " at (" + std::to_string(obj.wPosX) + "," + std::to_string(obj.wPosY) + ")");
+
+                // 攻击前确保朝向面对玩家
+                float fdx = targetX - (float)obj.wPosX;
+                float fdy = targetY - (float)obj.wPosY;
+                float fAngle = std::atan2(fdy, fdx) * 180.0f / 3.14159265f;
+                if (fAngle < 0) fAngle += 360.0f;
+                WORD wFaceDir = (WORD)fAngle;
+                obj.wLastSentDirection = wFaceDir;
                 
                 // 1. PREATTACK_ACK
                 std::vector<BYTE> preBuf; preBuf.reserve(32);
                 preBuf.push_back(obj.bObjectType);
                 preBuf.push_back(oid&0xFF); preBuf.push_back((oid>>8)&0xFF); preBuf.push_back((oid>>16)&0xFF); preBuf.push_back(oid>>24);
-                preBuf.push_back(oldX & 0xFF); preBuf.push_back(oldX >> 8);
-                preBuf.push_back(oldY & 0xFF); preBuf.push_back(oldY >> 8);
+                preBuf.push_back(obj.wPosX & 0xFF); preBuf.push_back(obj.wPosX >> 8);
+                preBuf.push_back(obj.wPosY & 0xFF); preBuf.push_back(obj.wPosY >> 8);
                 preBuf.push_back(obj.bHeight);
                 preBuf.push_back(1); 
                 preBuf.push_back(targetId&0xFF); preBuf.push_back((targetId>>8)&0xFF); preBuf.push_back((targetId>>16)&0xFF); preBuf.push_back(targetId>>24);
@@ -1122,15 +1492,15 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                 std::vector<BYTE> preFull; preFull.resize(4); preFull.insert(preFull.end(), preBuf.begin(), preBuf.end());
                 PACKET_HEADER* preHead = (PACKET_HEADER*)preFull.data(); preHead->id = 0x4004; preHead->payloadSize = preBuf.size();
                 EncryptPacket(preFull.data(), 0x42); 
-                BroadcastPacketAOI_NoLock(oldX, oldY, preFull); // Changed to AOI
+                BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, preFull);
                 
                 // 2. ATTACK_ACK 
                 std::vector<BYTE> ackBuf; ackBuf.reserve(64);
                 ackBuf.push_back(0); // placeholder for bResult, will be overwritten
                 ackBuf.push_back(obj.bObjectType);
                 ackBuf.push_back(oid&0xFF); ackBuf.push_back((oid>>8)&0xFF); ackBuf.push_back((oid>>16)&0xFF); ackBuf.push_back(oid>>24);
-                ackBuf.push_back(oldX & 0xFF); ackBuf.push_back(oldX >> 8);
-                ackBuf.push_back(oldY & 0xFF); ackBuf.push_back(oldY >> 8);
+                ackBuf.push_back(obj.wPosX & 0xFF); ackBuf.push_back(obj.wPosX >> 8);
+                ackBuf.push_back(obj.wPosY & 0xFF); ackBuf.push_back(obj.wPosY >> 8);
                 ackBuf.push_back(obj.bHeight);
                 ackBuf.push_back(1); 
                 ackBuf.push_back(targetId&0xFF); ackBuf.push_back((targetId>>8)&0xFF); ackBuf.push_back((targetId>>16)&0xFF); ackBuf.push_back(targetId>>24);
@@ -1256,7 +1626,7 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
 
                     // bType=4, bKind=1（天魔护体）：被命中时反弹伤害
                     if (bResult == 2 && damage > 0) {
-                        LOG("[MonsterAtk] HIT player " + std::to_string(targetId) + " for " + std::to_string(damage) + " dmg. activeBuffs count=" + std::to_string(player.activeBuffs.size()) + " has101=" + std::to_string(player.activeBuffs.count(101)));
+                        LOG("[MonsterAtk] Monster " + std::to_string(obj.dwObjectID) + " at (" + std::to_string(obj.wPosX) + "," + std::to_string(obj.wPosY) + ") HIT player " + std::to_string(targetId) + " for " + std::to_string(damage) + " dmg. activeBuffs count=" + std::to_string(player.activeBuffs.size()) + " has101=" + std::to_string(player.activeBuffs.count(101)));
 
                         for (auto& bf : player.activeBuffs) {
                             sMugongTemplate* bfTpl = MugongManager::GetInstance()->GetTemplate(bf.second.dwMugongID);
@@ -1348,16 +1718,51 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                 }
 
                 if (playerHpCur == 0) {
+                    auto triggerReturn = [&](MonsterData& m) {
+                        m.dwTargetID = 0;
+                        m.bInAttackRange = false;
+                        float dist = std::sqrt(std::pow((float)m.wPosX - m.wSpawnX, 2) + std::pow((float)m.wPosY - m.wSpawnY, 2));
+                        if (dist > 1.0f) {
+                            m.bIsReturning = true;
+                            m.dwReturnStartTime = tick;
+                            m.fPosX = (float)m.wPosX;
+                            m.fPosY = (float)m.wPosY;
+                            m.wDestX = m.wSpawnX;
+                            m.wDestY = m.wSpawnY;
+                            m.wLastSentDestX = 0;
+                            m.wLastSentDestY = 0;
+                            m.wLastSentPosX = 0;
+                            m.wLastSentPosY = 0;
+                            m.dwHpCur = m.dwHpMax;
+
+                            // 广播停步刹车包
+                            std::vector<BYTE> stopBuf; stopBuf.resize(4); stopBuf.push_back(0);
+                            DWORD oid = m.dwObjectID; stopBuf.push_back(oid&0xFF); stopBuf.push_back((oid>>8)&0xFF); stopBuf.push_back((oid>>16)&0xFF); stopBuf.push_back(oid>>24);
+                            stopBuf.push_back(m.bObjectType); 
+                            stopBuf.push_back(m.wPosX & 0xFF); stopBuf.push_back(m.wPosX >> 8);
+                            stopBuf.push_back(m.wPosY & 0xFF); stopBuf.push_back(m.wPosY >> 8);
+                            stopBuf.push_back(m.bHeight);
+                            stopBuf.push_back(0); 
+                            PACKET_HEADER* stopHead = (PACKET_HEADER*)stopBuf.data(); stopHead->id = 0x350C; stopHead->payloadSize = stopBuf.size() - sizeof(PACKET_HEADER);
+                            EncryptPacket(stopBuf.data(), 0x42); 
+                            BroadcastPacketAOI_NoLock(m.wPosX, m.wPosY, stopBuf);
+                        } else {
+                            m.bIsReturning = false;
+                            m.wDestX = 0;
+                            m.wDestY = 0;
+                        }
+                    };
+
                     if (m_players.count(targetId) && m_players[targetId].bIsBunsin) {
                         // 分身死亡：广播 DIE + 从地图和追踪表中清理
                         DWORD ownerCharID = m_players[targetId].dwOwnerID;
                         CleanupSingleBunsin(ownerCharID, targetId, m_dwMapID);
                         RemovePlayer(targetId);
-                        obj.dwTargetID = 0;
+                        triggerReturn(obj);
                         for (auto& mPair : m_monsters) {
-                            if (mPair.second.dwTargetID == targetId) mPair.second.dwTargetID = 0;
+                            if (mPair.second.dwTargetID == targetId) triggerReturn(mPair.second);
                         }
-                        LOG("[BunsinDeath] Bunsin " + std::to_string(targetId) + " killed by monster.");
+                        LOG("[BunsinDeath] Bunsin " + std::to_string(targetId) + " killed by monster. Released locks & set return.");
                     } else {
                         // [业务设计意图]
                         // 真正的玩家遭受怪物物理攻击死亡时，必须立刻在服务端清理其召唤的所有分身，防止分身残留。
@@ -1374,84 +1779,145 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                         // Mark player for deferred death broadcast (sent in next Update tick)
                         m_players[targetId].dwDeadTime = tick;
                         m_players[targetId].dwInvulnerableUntil = tick + 15000; // 15s death protection
-                        obj.dwTargetID = 0;
+                        triggerReturn(obj);
                     
-                    // Release ALL monsters that were targeting this dead player
-                    for (auto& mPair : m_monsters) {
-                        if (mPair.second.dwTargetID == targetId) {
-                            mPair.second.dwTargetID = 0;
+                        // Release ALL monsters that were targeting this dead player and set return
+                        for (auto& mPair : m_monsters) {
+                            if (mPair.second.dwTargetID == targetId) {
+                                triggerReturn(mPair.second);
+                            }
                         }
-                    }
                     
-                    LOG("[PlayerDeath] Player " + std::to_string(targetId) + " HP=0, deferred death. Released all monster locks.");
+                        LOG("[PlayerDeath] Player " + std::to_string(targetId) + " HP=0, deferred death. Released all monster locks and set return state.");
                     } // end else (real player death)
                 }
             }
             } // end invulnerability else
         } else if (!isRooted) {
             // Move Towards (CHASE) —— 定身状态跳过移动
-            float dx = (float)bestPlayer->wPosX - (float)obj.wPosX;
-            float dy = (float)bestPlayer->wPosY - (float)obj.wPosY;
-            float dirX = dx / minDist;
-            float dirY = dy / minDist;
-            
-            float angle = std::atan2(dy, dx) * 180.0f / 3.14159265f;
-            if (angle < 0) angle += 360.0f;
-            WORD wDirection = (WORD)angle;
-            
-            float dbSpeed = (float)tpl.wWalkSpeed100 / 100.0f; 
-            if (dbSpeed < 1.0f) dbSpeed = 3.0f; 
-            float step = dbSpeed / 10.0f; 
-            
-            obj.fPosX += dirX * step;
-            obj.fPosY += dirY * step;
-            
-            WORD nx = (WORD)obj.fPosX;
-            WORD ny = (WORD)obj.fPosY;
-            
-            auto Walkable = [&](WORD tx, WORD ty) -> bool {
-                if (m_collisionGrid.empty()) return true;
-                if (tx >= m_width || ty >= m_height) return false;
-                return m_collisionGrid[ty * m_width + tx] == 0;
-            };
-
-            bool canMove = Walkable(nx, ny);
-            
-            // DEBUG: log chase movement for type 187
-            if (obj.bPropType == 187) {
-                char dbg4[256]; sprintf(dbg4, "[MonsterAI] CHASE: pos(%.1f,%.1f)->(%d,%d) step=%.2f speed=%.1f canMove=%d collGridSize=%d",
-                    obj.fPosX, obj.fPosY, nx, ny, step, dbSpeed, canMove ? 1 : 0, (int)m_collisionGrid.size());
-                LOG(std::string(dbg4));
+            if (obj.dwChaseStartTime == 0) {
+                obj.dwChaseStartTime = tick;
             }
-            
+            // 追击速度平滑拟合：与客户端 NPC Run 骨骼动画位移速率 1:1 咬合
+            // 客户端所有普通 NPC 播放 eLAT_Run 奔跑动画时，动画位移速率均约为 18.0 ~ 20.0 格/秒
+            // 若怪物的 wRunSpeed100 配置较小(如野兔651=6.5格/秒、恶狼815=8.1格/秒)，服务端会落后客户端整整数倍，导致怪物在客户端早早到达站定发呆
+            // 因此保底速度设为 18.5 格/秒，与引路犬(19.64)及客户端奔跑动画完全同频，冲到面前同tick立即出刀
+            float dbSpeed = (tpl.wRunSpeed100 > 0) ? ((float)tpl.wRunSpeed100 / 100.0f) : 19.0f;
+            if (dbSpeed < 18.5f) dbSpeed = 18.5f;
+            if (dbSpeed > 25.0f) dbSpeed = 25.0f;
+            float step = dbSpeed / 10.0f; 
+
+            // 智能避障与平滑移动：统一使用玩家当前真实物理坐标
+            float targetX = (float)bestPlayer->wPosX;
+            float targetY = (float)bestPlayer->wPosY;
+            int iTargetX = (int)(targetX + 0.5f);
+            int iTargetY = (int)(targetY + 0.5f);
+
+            bool hasLos = HasLineOfSight(obj.wPosX, obj.wPosY, iTargetX, iTargetY);
+            float moveDirX = 0.0f;
+            float moveDirY = 0.0f;
+
+            if (hasLos) {
+                // 视线通畅：直接向玩家前进
+                float dx = targetX - (float)obj.wPosX;
+                float dy = targetY - (float)obj.wPosY;
+                float dLen = std::sqrt(dx * dx + dy * dy);
+                if (dLen > 0.001f) {
+                    moveDirX = dx / dLen;
+                    moveDirY = dy / dLen;
+                }
+            } else {
+                // 视线受阻：局部 A* 搜索绕障路径
+                std::vector<std::pair<int, int>> path;
+                if (FindPath(obj.wPosX, obj.wPosY, iTargetX, iTargetY, path, 35) && path.size() >= 2) {
+                    // String-Pulling 绳拉直：前探获取最远可视路标
+                    int wpIdx = FindFurthestVisibleWaypoint(obj.wPosX, obj.wPosY, path);
+                    int nextWp = (wpIdx > 0) ? wpIdx : 1;
+                    float dx = (float)path[nextWp].first - (float)obj.wPosX;
+                    float dy = (float)path[nextWp].second - (float)obj.wPosY;
+                    float dLen = std::sqrt(dx * dx + dy * dy);
+                    if (dLen > 0.001f) {
+                        moveDirX = dx / dLen;
+                        moveDirY = dy / dLen;
+                    }
+                } else {
+                    // A* 未找到完整路径时：不拉脱！沿目标方向贪心前进
+                    float dx = targetX - (float)obj.wPosX;
+                    float dy = targetY - (float)obj.wPosY;
+                    float dLen = std::sqrt(dx * dx + dy * dy);
+                    if (dLen > 0.001f) {
+                        moveDirX = dx / dLen;
+                        moveDirY = dy / dLen;
+                    }
+                }
+            }
+
+            obj.fPosX += moveDirX * step;
+            obj.fPosY += moveDirY * step;
+            int nextX = (int)(obj.fPosX + 0.5f);
+            int nextY = (int)(obj.fPosY + 0.5f);
+
+            bool canMove = IsWalkable(nextX, nextY);
+            if (!canMove) {
+                // 滑动碰撞：尝试单轴移动 (X或Y) 绕开障碍
+                if (IsWalkable(nextX, obj.wPosY)) {
+                    nextY = obj.wPosY;
+                    obj.fPosY = (float)obj.wPosY;
+                    canMove = true;
+                } else if (IsWalkable(obj.wPosX, nextY)) {
+                    nextX = obj.wPosX;
+                    obj.fPosX = (float)obj.wPosX;
+                    canMove = true;
+                }
+            }
+
             if (canMove) {
                 int ox = obj.wPosX, oy = obj.wPosY;
-                obj.wPosX = nx; obj.wPosY = ny;
-                UpdateMonsterGrid(obj.dwObjectID, ox, oy, nx, ny);
-                
-                // 投射目的地：不使用玩家坐标（太近导致客户端提前到达停步），
-                // 而是沿追击方向投射 40 像素远的虚拟终点，让客户端持续行走
-                WORD projDestX = (WORD)(obj.wPosX + dirX * 40.0f);
-                WORD projDestY = (WORD)(obj.wPosY + dirY * 40.0f);
-                obj.wDestX = projDestX;
-                obj.wDestY = projDestY;
+                obj.wPosX = (WORD)nextX; 
+                obj.wPosY = (WORD)nextY;
+                UpdateMonsterGrid(obj.dwObjectID, ox, oy, obj.wPosX, obj.wPosY);
 
-                // 追击发包策略（配合客户端动画防重入，彻底消除小碎步）：
-                //   条件1: 首次开始移动（之前是停步状态）→ 立即发包触发 Walk 动画
-                //   条件2: 方向变化超过 25° → 立即发包更新追击方向
-                //   条件3: 距上次发包 ≥800ms → 定时校正（位置+方向同步）
+                // 追击目的地：停在距玩家攻击距离边缘处，而非直接冲入玩家身体
+                float toMonX = (float)obj.wPosX - targetX;
+                float toMonY = (float)obj.wPosY - targetY;
+                float toMonDist = std::sqrt(toMonX * toMonX + toMonY * toMonY);
+                // 追击停靠点：停在攻击距离的 75% 处（确保必定处于攻击距离 enterRange 之内，绝对触发攻击）
+                float standDist = atkRange * 0.75f;
+                if (standDist < 1.2f) standDist = 1.2f;
+
+                WORD targetDestX, targetDestY;
+                if (toMonDist > standDist && toMonDist > 0.001f) {
+                    float nx = toMonX / toMonDist;
+                    float ny = toMonY / toMonDist;
+                    targetDestX = (WORD)(targetX + nx * standDist + 0.5f);
+                    targetDestY = (WORD)(targetY + ny * standDist + 0.5f);
+                } else {
+                    targetDestX = obj.wPosX;
+                    targetDestY = obj.wPosY;
+                }
+                obj.wDestX = targetDestX;
+                obj.wDestY = targetDestY;
+
+                float angle = std::atan2(moveDirY, moveDirX) * 180.0f / 3.14159265f;
+                if (angle < 0) angle += 360.0f;
+                WORD wDirection = (WORD)angle;
+
                 bool isFirstMove = (obj.wLastSentDestX == 0 && obj.wLastSentDestY == 0);
-
-                // 方向变化判定：计算当前方向与上次发包方向的角度差（处理 0°/360° 跨界）
-                int angleDiff = abs((int)wDirection - (int)obj.wLastSentDirection);
+                int angleDiff = std::abs((int)wDirection - (int)obj.wLastSentDirection);
                 if (angleDiff > 180) angleDiff = 360 - angleDiff;
-                bool directionChanged = (angleDiff > 25);
 
-                bool timePassed = (tick - obj.dwLastMoveSendTime >= 800);
+                // 目标位置变化检测：玩家走位 >= 1.5 格且满 250ms 冷却时，即时重定向
+                float destDelta = std::sqrt(
+                    std::pow((float)targetDestX - (float)obj.wLastSentDestX, 2) +
+                    std::pow((float)targetDestY - (float)obj.wLastSentDestY, 2)
+                );
+                bool targetMoved = (destDelta >= 1.5f && (tick - obj.dwLastMoveSendTime >= 250));
+                bool directionChanged = (angleDiff > 35 && destDelta >= 1.0f && (tick - obj.dwLastMoveSendTime >= 350));
 
-                if (isFirstMove || directionChanged || timePassed) {
-                    obj.wLastSentDestX = obj.wDestX;
-                    obj.wLastSentDestY = obj.wDestY;
+                // 仅在初次起步、目标位移或显著转向时发包，取消 800ms 盲目重发以防打断客户端寻路
+                if (isFirstMove || targetMoved || directionChanged) {
+                    obj.wLastSentDestX = targetDestX;
+                    obj.wLastSentDestY = targetDestY;
                     obj.wLastSentPosX = obj.wPosX;
                     obj.wLastSentPosY = obj.wPosY;
                     obj.dwLastMoveSendTime = tick;
@@ -1463,128 +1929,219 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                     ackBuf.push_back(obj.wPosX & 0xFF); ackBuf.push_back(obj.wPosX >> 8);
                     ackBuf.push_back(obj.wPosY & 0xFF); ackBuf.push_back(obj.wPosY >> 8);
                     ackBuf.push_back(obj.bHeight);
-                    ackBuf.push_back(projDestX & 0xFF); ackBuf.push_back(projDestX >> 8);
-                    ackBuf.push_back(projDestY & 0xFF); ackBuf.push_back(projDestY >> 8);
+                    ackBuf.push_back(targetDestX & 0xFF); ackBuf.push_back(targetDestX >> 8);
+                    ackBuf.push_back(targetDestY & 0xFF); ackBuf.push_back(targetDestY >> 8);
                     ackBuf.push_back(obj.bHeight); 
                     ackBuf.push_back(wDirection & 0xFF); ackBuf.push_back(wDirection >> 8); 
-                    ackBuf.push_back(20); 
-                    ackBuf.push_back((BYTE)dbSpeed); 
+                    ackBuf.push_back(21); // NPCSTATUS_RUN (21) 追击全面启用跑步，播放 eLAT_Run 奔跑动作
+                    BYTE chaseSpeedByte = tpl.bRunSpeed > 0 ? tpl.bRunSpeed : (obj.bRunSpeedByte > 0 ? obj.bRunSpeedByte : 10);
+                    ackBuf.push_back(chaseSpeedByte); 
                     
                     PACKET_HEADER* ackHead = (PACKET_HEADER*)ackBuf.data(); ackHead->id = 0x3508; ackHead->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);
                     EncryptPacket(ackBuf.data(), 0x42); 
                     BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, ackBuf);
                 }
             } else {
-                // Slide Collision Option B
-                bool slid = false;
-                // Try X-only slide
-                WORD testX = (WORD)(obj.wPosX + (dirX > 0 ? 1 : (dirX < 0 ? -1 : 0)));
-                WORD testY = obj.wPosY;
-                if (testX != obj.wPosX && Walkable(testX, testY)) {
-                    int ox = obj.wPosX, oy = obj.wPosY;
-                    obj.wPosX = testX;
-                    obj.fPosX = (float)testX;
-                    obj.fPosY = (float)obj.wPosY; // clamp Y
-                    UpdateMonsterGrid(obj.dwObjectID, ox, oy, testX, testY);
-                    slid = true;
-                }
-                // Try Y-only slide
-                else {
-                    testX = obj.wPosX;
-                    testY = (WORD)(obj.wPosY + (dirY > 0 ? 1 : (dirY < 0 ? -1 : 0)));
-                    if (testY != obj.wPosY && Walkable(testX, testY)) {
-                        int ox = obj.wPosX, oy = obj.wPosY;
-                        obj.wPosY = testY;
-                        obj.fPosY = (float)testY;
-                        obj.fPosX = (float)obj.wPosX; // clamp X
-                        UpdateMonsterGrid(obj.dwObjectID, ox, oy, testX, testY);
-                        slid = true;
-                    }
-                }
-
-                if (slid) {
-                    WORD projDestX = (WORD)(obj.wPosX + dirX * 40.0f);
-                    WORD projDestY = (WORD)(obj.wPosY + dirY * 40.0f);
-                    obj.wDestX = projDestX;
-                    obj.wDestY = projDestY;
-
-                    // 滑行追击发包：与正常追击使用一致的方向变化+时间门控
-                    int angleDiff2 = abs((int)wDirection - (int)obj.wLastSentDirection);
-                    if (angleDiff2 > 180) angleDiff2 = 360 - angleDiff2;
-                    bool dirChanged = (angleDiff2 > 25);
-                    bool tPassed = (tick - obj.dwLastMoveSendTime >= 800);
-                    bool firstMove = (obj.wLastSentDestX == 0 && obj.wLastSentDestY == 0);
-
-                    if (firstMove || dirChanged || tPassed) {
-                        obj.wLastSentDestX = obj.wDestX;
-                        obj.wLastSentDestY = obj.wDestY;
-                        obj.wLastSentPosX = obj.wPosX;
-                        obj.wLastSentPosY = obj.wPosY;
-                        obj.dwLastMoveSendTime = tick;
-                        obj.wLastSentDirection = wDirection;
-
-                        std::vector<BYTE> ackBuf; ackBuf.resize(4); ackBuf.push_back(0); 
-                        DWORD oid = obj.dwObjectID; ackBuf.push_back(oid&0xFF); ackBuf.push_back((oid>>8)&0xFF); ackBuf.push_back((oid>>16)&0xFF); ackBuf.push_back(oid>>24);
-                        ackBuf.push_back(obj.bObjectType); 
-                        ackBuf.push_back(obj.wPosX & 0xFF); ackBuf.push_back(obj.wPosX >> 8);
-                        ackBuf.push_back(obj.wPosY & 0xFF); ackBuf.push_back(obj.wPosY >> 8);
-                        ackBuf.push_back(obj.bHeight);
-                        ackBuf.push_back(projDestX & 0xFF); ackBuf.push_back(projDestX >> 8);
-                        ackBuf.push_back(projDestY & 0xFF); ackBuf.push_back(projDestY >> 8);
-                        ackBuf.push_back(obj.bHeight); 
-                        ackBuf.push_back(wDirection & 0xFF); ackBuf.push_back(wDirection >> 8); 
-                        ackBuf.push_back(20); 
-                        ackBuf.push_back((BYTE)dbSpeed); 
-                        
-                        PACKET_HEADER* ackHead = (PACKET_HEADER*)ackBuf.data(); ackHead->id = 0x3508; ackHead->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);
-                        EncryptPacket(ackBuf.data(), 0x42); 
-                        BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, ackBuf);
-                    }
-                } else {
-                    // Fully blocked: clamp float coords back to grid cell
-                    obj.fPosX = (float)obj.wPosX;
-                    obj.fPosY = (float)obj.wPosY;
-                }
+                obj.fPosX = (float)obj.wPosX;
+                obj.fPosY = (float)obj.wPosY;
             }
         }
     } else {
         // Return to Spawn or Wander
-        if (obj.bPropType >= 224 && obj.bPropType <= 231) return; 
-        if (obj.bPropType == 255) return; 
-        if (obj.dwMovePattern == 1) return; 
-
-        int range = obj.wWanderRange;
-        if (range <= 0) return; 
-
         float distToSpawn = std::sqrt(std::pow((float)obj.wPosX - obj.wSpawnX, 2) + std::pow((float)obj.wPosY - obj.wSpawnY, 2));
 
         if (obj.bIsReturning) {
-            // Force destination to spawn point
-            obj.wDestX = obj.wSpawnX;
-            obj.wDestY = obj.wSpawnY;
-            
-            // If we have returned close to spawn (within 2 tiles), clear returning state
-            if (distToSpawn <= 2.0f) {
+            // 刹车站定缓冲：脱战后先原地站定 300ms（由脱战瞬间广播的 0x350C 维持待机姿态），平滑过渡后再起步掉头回程
+            if (tick - obj.dwReturnStartTime < 300) {
+                return;
+            }
+
+            // 动态超时保护：根据拉脱距离动态分配充裕时间，避免回程走到一半强行瞬移
+            DWORD returnTimeoutMs = (DWORD)(distToSpawn * 600);
+            if (returnTimeoutMs < 20000) returnTimeoutMs = 20000;
+            bool returnTimeout = (obj.dwReturnStartTime > 0 && tick - obj.dwReturnStartTime >= returnTimeoutMs);
+
+            // 1. 到达出生点（保底1.5格内平滑完成回程）或极端卡死超时
+            if (distToSpawn <= 1.5f || returnTimeout) {
+                int oldX = obj.wPosX, oldY = obj.wPosY;
+                if (obj.wPosX != obj.wSpawnX || obj.wPosY != obj.wSpawnY) {
+                    if (IsWalkable(obj.wSpawnX, obj.wSpawnY)) {
+                        obj.wPosX = obj.wSpawnX;
+                        obj.wPosY = obj.wSpawnY;
+                        obj.fPosX = (float)obj.wSpawnX;
+                        obj.fPosY = (float)obj.wSpawnY;
+                        UpdateMonsterGrid(obj.dwObjectID, oldX, oldY, obj.wPosX, obj.wPosY);
+                    }
+                }
+
                 obj.bIsReturning = false;
+                obj.dwReturnStartTime = 0;
                 obj.wDestX = 0;
                 obj.wDestY = 0;
                 obj.wLastSentDestX = 0;
                 obj.wLastSentDestY = 0;
-                
-                LOG("[MonsterAI] LEASH RETURN COMPLETED: ObjID=" + std::to_string(obj.dwObjectID) + " returned to spawn.");
+                obj.wLastSentPosX = 0;
+                obj.wLastSentPosY = 0;
+                obj.dwLastAttackTime = 0;
+                obj.dwLastWanderTime = tick;
+                obj.dwChaseStartTime = 0;
+
+                std::vector<BYTE> stopBuf; stopBuf.resize(4); stopBuf.push_back(0);
+                DWORD oid = obj.dwObjectID; stopBuf.push_back(oid&0xFF); stopBuf.push_back((oid>>8)&0xFF); stopBuf.push_back((oid>>16)&0xFF); stopBuf.push_back(oid>>24);
+                stopBuf.push_back(obj.bObjectType); 
+                stopBuf.push_back(obj.wPosX & 0xFF); stopBuf.push_back(obj.wPosX >> 8);
+                stopBuf.push_back(obj.wPosY & 0xFF); stopBuf.push_back(obj.wPosY >> 8);
+                stopBuf.push_back(obj.bHeight);
+                stopBuf.push_back(0); 
+                PACKET_HEADER* stopHead = (PACKET_HEADER*)stopBuf.data(); stopHead->id = 0x350C; stopHead->payloadSize = stopBuf.size() - sizeof(PACKET_HEADER);
+                EncryptPacket(stopBuf.data(), 0x42); 
+                BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, stopBuf);
+
+                LOG("[MonsterAI] RETURN COMPLETED: ObjID=" + std::to_string(obj.dwObjectID) + " returned to spawn (" + std::to_string(obj.wSpawnX) + "," + std::to_string(obj.wSpawnY) + ")");
+                return;
             }
+
+            // 2. 回程路线避障：直通路则直接回出生点，否则使用 A* 寻找回程路标
+            WORD targetDestX = obj.wSpawnX;
+            WORD targetDestY = obj.wSpawnY;
+            if (!HasLineOfSight(obj.wPosX, obj.wPosY, obj.wSpawnX, obj.wSpawnY)) {
+                std::vector<std::pair<int, int>> path;
+                if (FindPath(obj.wPosX, obj.wPosY, obj.wSpawnX, obj.wSpawnY, path, 80) && path.size() >= 2) {
+                    int wpIdx = FindFurthestVisibleWaypoint(obj.wPosX, obj.wPosY, path);
+                    if (wpIdx > 0) {
+                        targetDestX = (WORD)path[wpIdx].first;
+                        targetDestY = (WORD)path[wpIdx].second;
+                    }
+                }
+            }
+            obj.wDestX = targetDestX;
+            obj.wDestY = targetDestY;
+
+            // 3. 回程移动步长计算（与客户端奔跑动画 1:1 咬合，平滑疾奔返回出生点）
+            float distToDest = std::sqrt(std::pow((float)obj.wPosX - obj.wDestX, 2) + std::pow((float)obj.wPosY - obj.wDestY, 2));
+            float returnSpeed = (tpl.wRunSpeed100 > 0) ? ((float)tpl.wRunSpeed100 / 100.0f) : 19.0f;
+            if (returnSpeed < 18.5f) returnSpeed = 18.5f;
+            if (returnSpeed > 25.0f) returnSpeed = 25.0f;
+            float step = returnSpeed / 10.0f;
+
+            float dirX = (distToDest > 0.001f) ? (((float)obj.wDestX - (float)obj.wPosX) / distToDest) : 0.0f;
+            float dirY = (distToDest > 0.001f) ? (((float)obj.wDestY - (float)obj.wPosY) / distToDest) : 0.0f;
+            
+            float angle = std::atan2(dirY, dirX) * 180.0f / 3.14159265f;
+            if (angle < 0) angle += 360.0f;
+            WORD wDirection = (WORD)angle;
+
+            obj.fPosX += dirX * step;
+            obj.fPosY += dirY * step;
+
+            WORD nx = (WORD)(obj.fPosX + 0.5f);
+            WORD ny = (WORD)(obj.fPosY + 0.5f);
+
+            bool canMove = IsWalkable(nx, ny);
+            if (!canMove) {
+                // 单轴滑动避障：沿障碍边缘滑行，坚决不下发 0x350C 避免客户端急刹抽搐
+                if (IsWalkable(nx, obj.wPosY)) {
+                    ny = obj.wPosY;
+                    obj.fPosY = (float)obj.wPosY;
+                    canMove = true;
+                } else if (IsWalkable(obj.wPosX, ny)) {
+                    nx = obj.wPosX;
+                    obj.fPosX = (float)obj.wPosX;
+                    canMove = true;
+                }
+            }
+
+            if (canMove) {
+                int ox = obj.wPosX, oy = obj.wPosY;
+                obj.wPosX = nx; obj.wPosY = ny;
+                UpdateMonsterGrid(obj.dwObjectID, ox, oy, nx, ny);
+            } else {
+                obj.fPosX = (float)obj.wPosX;
+                obj.fPosY = (float)obj.wPosY;
+            }
+
+            // 4. 发包控制：仅在初次起步或目标拐点显著改变时下发 0x3508，彻底消灭 1500ms 盲目重发导致的闪跳与拉扯
+            bool isFirstMove = (obj.wLastSentDestX == 0 && obj.wLastSentDestY == 0);
+            float destDelta = std::sqrt(
+                std::pow((float)obj.wDestX - (float)obj.wLastSentDestX, 2) +
+                std::pow((float)obj.wDestY - (float)obj.wLastSentDestY, 2)
+            );
+            bool destChanged = (destDelta >= 2.0f && (tick - obj.dwLastMoveSendTime >= 500));
+
+            if (isFirstMove || destChanged) {
+                obj.wLastSentDestX = obj.wDestX;
+                obj.wLastSentDestY = obj.wDestY;
+                obj.wLastSentPosX = obj.wPosX;
+                obj.wLastSentPosY = obj.wPosY;
+                obj.dwLastMoveSendTime = tick;
+                obj.wLastSentDirection = wDirection;
+
+                std::vector<BYTE> ackBuf; ackBuf.resize(4); ackBuf.push_back(0); 
+                DWORD oid = obj.dwObjectID; ackBuf.push_back(oid&0xFF); ackBuf.push_back((oid>>8)&0xFF); ackBuf.push_back((oid>>16)&0xFF); ackBuf.push_back(oid>>24);
+                ackBuf.push_back(obj.bObjectType); 
+                ackBuf.push_back(obj.wPosX & 0xFF); ackBuf.push_back(obj.wPosX >> 8);
+                ackBuf.push_back(obj.wPosY & 0xFF); ackBuf.push_back(obj.wPosY >> 8);
+                ackBuf.push_back(obj.bHeight);
+                ackBuf.push_back(obj.wDestX & 0xFF); ackBuf.push_back(obj.wDestX >> 8);
+                ackBuf.push_back(obj.wDestY & 0xFF); ackBuf.push_back(obj.wDestY >> 8);
+                ackBuf.push_back(obj.bHeight); 
+                ackBuf.push_back(wDirection & 0xFF); ackBuf.push_back(wDirection >> 8); 
+                ackBuf.push_back(21); // NPCSTATUS_RUN (21) 脱战回程使用跑步，疾奔返回出生点
+                BYTE retSpeedByte = tpl.bRunSpeed > 0 ? tpl.bRunSpeed : (obj.bRunSpeedByte > 0 ? obj.bRunSpeedByte : 10);
+                ackBuf.push_back(retSpeedByte); 
+                
+                PACKET_HEADER* ackHead = (PACKET_HEADER*)ackBuf.data(); ackHead->id = 0x3508; ackHead->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);
+                EncryptPacket(ackBuf.data(), 0x42); 
+                BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, ackBuf);
+            }
+            return;
         } else {
+            // Idle wander: stationary monsters or monsters with no wander range stay still
+            if (obj.dwMovePattern == 1) return; 
+
+            int range = obj.wWanderRange;
+            if (range <= 0) return; 
+
             if (distToSpawn > range) {
-                obj.wDestX = obj.wSpawnX;
-                obj.wDestY = obj.wSpawnY;
+                // 超出漫游范围拉回
+                WORD targetDestX = obj.wSpawnX;
+                WORD targetDestY = obj.wSpawnY;
+                if (!HasLineOfSight(obj.wPosX, obj.wPosY, obj.wSpawnX, obj.wSpawnY)) {
+                    std::vector<std::pair<int, int>> path;
+                    if (FindPath(obj.wPosX, obj.wPosY, obj.wSpawnX, obj.wSpawnY, path, 30) && path.size() >= 2) {
+                        int wpIdx = FindFurthestVisibleWaypoint(obj.wPosX, obj.wPosY, path);
+                        if (wpIdx > 0) {
+                            targetDestX = (WORD)path[wpIdx].first;
+                            targetDestY = (WORD)path[wpIdx].second;
+                        }
+                    }
+                }
+                obj.wDestX = targetDestX;
+                obj.wDestY = targetDestY;
             } else if (obj.wDestX == 0 && obj.wDestY == 0) {
-                if (tick - obj.dwLastAttackTime > (DWORD)(2000 + rand() % 3000)) { 
+                if (tick - obj.dwLastWanderTime > (DWORD)(2000 + rand() % 3000)) { 
                     if (tpl.bIdleRatio > 0 && (rand() % 100) < tpl.bIdleRatio) {
-                        obj.dwLastAttackTime = tick; 
+                        obj.dwLastWanderTime = tick; 
                     } else {
-                        obj.wDestX = obj.wSpawnX + (rand() % (range * 2)) - range;
-                        obj.wDestY = obj.wSpawnY + (rand() % (range * 2)) - range;
-                        obj.dwLastAttackTime = tick;
+                        // 寻找合法可通行的巡逻游荡点（必须具备直通视线，杜绝撞墙）
+                        WORD candX = obj.wSpawnX;
+                        WORD candY = obj.wSpawnY;
+                        bool foundCand = false;
+                        for (int attempt = 0; attempt < 8; ++attempt) {
+                            int rx = (int)obj.wSpawnX + (rand() % (range * 2 + 1)) - range;
+                            int ry = (int)obj.wSpawnY + (rand() % (range * 2 + 1)) - range;
+                            if (rx >= 0 && ry >= 0 && IsWalkable(rx, ry) && HasLineOfSight(obj.wPosX, obj.wPosY, rx, ry)) {
+                                candX = (WORD)rx;
+                                candY = (WORD)ry;
+                                foundCand = true;
+                                break;
+                            }
+                        }
+                        if (foundCand && (candX != obj.wPosX || candY != obj.wPosY)) {
+                            obj.wDestX = candX;
+                            obj.wDestY = candY;
+                        }
+                        obj.dwLastWanderTime = tick;
                     }
                 }
             }
@@ -1592,8 +2149,9 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
 
         if (obj.wDestX != 0 || obj.wDestY != 0) {
             float distToDest = std::sqrt(std::pow((float)obj.wPosX - obj.wDestX, 2) + std::pow((float)obj.wPosY - obj.wDestY, 2));
-            float dbSpeed = (float)tpl.wWalkSpeed100 / 100.0f;
-            if (dbSpeed < 1.0f) dbSpeed = 3.0f;
+            float dbSpeed = (tpl.wWalkSpeed100 > 0) ? ((float)tpl.wWalkSpeed100 / 100.0f) : 2.0f;
+            if (dbSpeed < 1.5f) dbSpeed = 1.5f;
+            if (dbSpeed > 4.5f) dbSpeed = 4.5f;
             float step = dbSpeed / 10.0f;
             
             if (distToDest <= step) {
@@ -1609,7 +2167,7 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                 obj.wLastSentDestY = 0;
                 obj.wLastSentPosX = 0;
                 obj.wLastSentPosY = 0;
-                obj.dwLastAttackTime = tick; 
+                obj.dwLastWanderTime = tick; 
                 
                 std::vector<BYTE> stopBuf; stopBuf.resize(4); stopBuf.push_back(0);
                 DWORD oid = obj.dwObjectID; stopBuf.push_back(oid&0xFF); stopBuf.push_back((oid>>8)&0xFF); stopBuf.push_back((oid>>16)&0xFF); stopBuf.push_back(oid>>24);
@@ -1620,7 +2178,7 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                 stopBuf.push_back(0); 
                 PACKET_HEADER* stopHead = (PACKET_HEADER*)stopBuf.data(); stopHead->id = 0x350C; stopHead->payloadSize = stopBuf.size() - sizeof(PACKET_HEADER);
                 EncryptPacket(stopBuf.data(), 0x42); 
-                BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, stopBuf); // Changed to AOI
+                BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, stopBuf);
             } else {
                 float dirX = ((float)obj.wDestX - (float)obj.wPosX) / distToDest;
                 float dirY = ((float)obj.wDestY - (float)obj.wPosY) / distToDest;
@@ -1632,25 +2190,16 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                 obj.fPosX += dirX * step;
                 obj.fPosY += dirY * step;
                 
-                WORD nx = (WORD)obj.fPosX;
-                WORD ny = (WORD)obj.fPosY;
+                WORD nx = (WORD)(obj.fPosX + 0.5f);
+                WORD ny = (WORD)(obj.fPosY + 0.5f);
                 
-                auto Walkable = [&](WORD tx, WORD ty) -> bool {
-                    if (m_collisionGrid.empty()) return true;
-                    if (tx >= m_width || ty >= m_height) return false;
-                    return m_collisionGrid[ty * m_width + tx] == 0;
-                };
-
-                bool canMove = Walkable(nx, ny);
-                
+                bool canMove = IsWalkable(nx, ny);
                 if (canMove) {
                     int ox = obj.wPosX, oy = obj.wPosY;
                     obj.wPosX = nx; obj.wPosY = ny;
                     UpdateMonsterGrid(obj.dwObjectID, ox, oy, nx, ny);
                     
-                    // 漫游发包：目的地固定，只在首次设定或目的地变化时发一次起步包
-                    // 客户端自行按速度插值走到终点，中间不需要额外包
-                    bool wanderNeedSend = (obj.wDestX != obj.wLastSentDestX || obj.wDestY != obj.wLastSentDestY);
+                    bool wanderNeedSend = (obj.wDestX != obj.wLastSentDestX || obj.wDestY != obj.wLastSentDestY || (tick - obj.dwLastMoveSendTime > 1500));
                     if (wanderNeedSend) {
                         obj.wLastSentDestX = obj.wDestX;
                         obj.wLastSentDestY = obj.wDestY;
@@ -1669,21 +2218,33 @@ void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
                         ackBuf.push_back(obj.wDestY & 0xFF); ackBuf.push_back(obj.wDestY >> 8);
                         ackBuf.push_back(obj.bHeight); 
                         ackBuf.push_back(wDirection & 0xFF); ackBuf.push_back(wDirection >> 8); 
-                        ackBuf.push_back(20); 
-                        ackBuf.push_back((BYTE)dbSpeed); 
+                        ackBuf.push_back(20); // NPCSTATUS_WALK (20) 巡逻游荡保持散步
+                        BYTE wanderSpeedByte = tpl.bWalkSpeed > 0 ? tpl.bWalkSpeed : (obj.bWalkSpeedByte > 0 ? obj.bWalkSpeedByte : 8);
+                        ackBuf.push_back(wanderSpeedByte); 
                         
                         PACKET_HEADER* ackHead = (PACKET_HEADER*)ackBuf.data(); ackHead->id = 0x3508; ackHead->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);
                         EncryptPacket(ackBuf.data(), 0x42); 
                         BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, ackBuf);
                     }
                 } else {
+                    // 漫游或回程遇阻：停步并发送停止包
                     obj.wDestX = 0;
                     obj.wDestY = 0;
                     obj.wLastSentDestX = 0;
                     obj.wLastSentDestY = 0;
-                    // Clamp float coords to grid to prevent drift on wander collision
                     obj.fPosX = (float)obj.wPosX;
                     obj.fPosY = (float)obj.wPosY;
+
+                    std::vector<BYTE> stopBuf; stopBuf.resize(4); stopBuf.push_back(0);
+                    DWORD oid = obj.dwObjectID; stopBuf.push_back(oid&0xFF); stopBuf.push_back((oid>>8)&0xFF); stopBuf.push_back((oid>>16)&0xFF); stopBuf.push_back(oid>>24);
+                    stopBuf.push_back(obj.bObjectType); 
+                    stopBuf.push_back(obj.wPosX & 0xFF); stopBuf.push_back(obj.wPosX >> 8);
+                    stopBuf.push_back(obj.wPosY & 0xFF); stopBuf.push_back(obj.wPosY >> 8);
+                    stopBuf.push_back(obj.bHeight);
+                    stopBuf.push_back(0); 
+                    PACKET_HEADER* stopHead = (PACKET_HEADER*)stopBuf.data(); stopHead->id = 0x350C; stopHead->payloadSize = stopBuf.size() - sizeof(PACKET_HEADER);
+                    EncryptPacket(stopBuf.data(), 0x42); 
+                    BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, stopBuf);
                 }
             }
         }

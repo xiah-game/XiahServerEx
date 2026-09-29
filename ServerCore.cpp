@@ -6,6 +6,7 @@
 #include "GameObjects/DropManager.h"
 #include "GameObjects/MugongManager.h"
 #include "GameObjects/MapInstance.h"
+#include "GameObjects/QuestManager.h"
 #include <unordered_map>
 #include <memory>
 
@@ -179,6 +180,9 @@ void LoadGameData() {
     // Load NPC_MUGONGTEMPLATE
     dao.LoadNpcMugongTemplates(g_NpcTemplates);
 
+    // Load Quest System Templates
+    QuestManager::GetInstance().Initialize();
+
     // Write debug info for ranged NPCs
     for (auto& pair : g_NpcTemplates) {
         auto& tpl = pair.second;
@@ -215,11 +219,21 @@ void LoadGameData() {
                 ifs.read((char*)&pixelOffset, 4);
                 
                 ifs.seekg(pixelOffset, std::ios::beg);
-                sWorldMap wm; wm.dwMapID = mapId; wm.width = width; wm.height = height;
-                wm.collisionGrid.resize(width * height);
-                ifs.read((char*)wm.collisionGrid.data(), width * height);
+                bool isBottomUp = (height > 0);
+                int absHeight = std::abs(height);
+                sWorldMap wm; wm.dwMapID = mapId; wm.width = width; wm.height = absHeight;
+                wm.collisionGrid.resize(width * absHeight);
+                int rowPadding = (4 - (width & 3)) & 3;
+
+                for (int r = 0; r < absHeight; ++r) {
+                    int targetRow = isBottomUp ? (absHeight - 1 - r) : r;
+                    ifs.read((char*)&wm.collisionGrid[targetRow * width], width);
+                    if (rowPadding > 0) {
+                        ifs.seekg(rowPadding, std::ios::cur);
+                    }
+                }
                 g_WorldMaps[mapId] = wm;
-                g_MapInstances[mapId] = new CMapInstance(mapId, width, height, wm.collisionGrid);
+                g_MapInstances[mapId] = new CMapInstance(mapId, width, absHeight, wm.collisionGrid);
                 ifs.close();
             }
         } while (FindNextFileA(hFind, &fd));

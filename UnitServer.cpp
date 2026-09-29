@@ -173,10 +173,10 @@ void RunUnitSvr() {
                             break;
                         }
                         
-                        // Validate timestamp (prevent long-term replay, 300s tolerance for clock drift)
+                        // Validate timestamp (relative clock offset calibration per session with 300s drift window)
                         uint32_t now = (uint32_t)time(nullptr);
-                        if (timestamp > now + 300 || now > timestamp + 300) {
-                            LOG("[UnitServer] SECURITY ALERT: Packet timestamp expired! now=" + std::to_string(now) + " ts=" + std::to_string(timestamp) + " Kicking client.");
+                        if (!SessionMgr::GetInstance().ValidateTimestamp(clientSocket, timestamp, now)) {
+                            LOG("[UnitServer] SECURITY ALERT: Packet timestamp drift exceeded! now=" + std::to_string(now) + " ts=" + std::to_string(timestamp) + " Kicking client.");
                             closesocket(clientSocket);
                             break;
                         }

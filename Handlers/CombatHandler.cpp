@@ -84,16 +84,6 @@ void OnPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                         LOG("[CombatHandler] Player " + std::to_string(atkId) + " pre-attacked. Expiring Stealth.");
                     }
                     // wAtkSpeed not in PlayerData; use default 9
-                    // Sync position from attack packet (client may not send ENDMOVE when auto-walking to target)
-                    if (atkPosX > 0 && atkPosX < 2048 && atkPosY > 0 && atkPosY < 2048) {
-                        int oldX = pAtk->wPosX, oldY = pAtk->wPosY;
-                        pAtk->wPosX = atkPosX;
-                        pAtk->wPosY = atkPosY;
-                        pAtk->fPosX = (float)atkPosX;
-                        pAtk->fPosY = (float)atkPosY;
-                        pAtk->bIsMoving = false;
-                        g_MapInstances[pMapID]->UpdatePlayerGrid(atkId, oldX, oldY, atkPosX, atkPosY);
-                    }
                 }
             }
         }
@@ -124,9 +114,9 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
         if (!g_MapInstances.count(playerMapID)) return;
         CMapInstance* mapInst = g_MapInstances[playerMapID];
         
-        DWORD finalDmg = 50;
-        DWORD dwHpMax = 60000, dwHpCur = 60000;
-        BYTE bResult = 2; // Hit Success
+        DWORD finalDmg = 0;
+        DWORD dwHpMax = 0, dwHpCur = 0;
+        BYTE bResult = 1; // Default Miss
         BYTE bHitFlag = 0; // 0 = Normal, 1 = Critical
         bool monsterDied = false;
         bool needStatusRefresh = false;
@@ -191,8 +181,21 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
             }
             
             MonsterData* pTarget = mapInst->GetMonster(targetId);
-            if (pTarget && pTarget->dwHpCur > 0) {
-                if (pTarget->bIsReturning) {
+            if (pTarget) {
+                if (pTarget->dwHpCur == 0 || pTarget->dwDeadTime > 0) {
+                    // 目标怪物已在先前的攻击中死亡：杜绝二次致死、重复加经验与重复爆装备
+                    dwHpMax = pTarget->dwHpMax;
+                    dwHpCur = 0;
+                    finalDmg = 0;
+                    bResult = 1; // 1 = Miss
+                    // 补发一次 0x3510 死亡包以唤醒客户端脱离锁定，不触发掉落与经验
+                    monsterDied = true;
+                    deadObjType = pTarget->bObjectType;
+                    deadObjID = pTarget->dwObjectID;
+                    deadPropType = pTarget->bPropType;
+                    deadExp = 0;
+                    hasDeadMonsterCopy = false;
+                } else if (pTarget->bIsReturning) {
                     bResult = 1; // Miss during leash return
                     finalDmg = 0;
                 } else {
@@ -239,6 +242,7 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                         bResult = 1; // 1 = Miss
                         finalDmg = 0;
                     } else {
+                        bResult = 2; // 2 = Hit
                         // Damage variance +/-10%
                         float dmgFloat = (float)finalDmg;
                         float variance = 0.9f + ((float)(rand() % 2000) / 10000.0f);
@@ -255,6 +259,8 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                         if (finalDmg > monsterDef) finalDmg -= monsterDef;
                         else finalDmg = 1; 
                     }
+                    LOG("[CombatHandler] PvE Hit Check: AtkRating=" + std::to_string(playerAtkRating) + " MonAvoid=" + std::to_string(monsterAvoid) + " HitChance=" + std::to_string(hitChance) + " Roll=" + std::to_string(roll) + " -> Result=" + (bResult == 2 ? "HIT" : "MISS"));
+
                     
                     pTarget->dwHpCur = (pTarget->dwHpCur > finalDmg) ? (pTarget->dwHpCur - finalDmg) : 0;
 
@@ -264,19 +270,26 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                         if (pAttacker->dwFiveElmGauge > 5000) pAttacker->dwFiveElmGauge = 5000;
                         SyncFiveElmStatus(clientSocket, pAttacker->dwObjectID - 400000000, pAttacker);
                     }
-                }
                 
                 // Xiah AI Bitmask - NON-COMBAT (0) vs PASSIVE/ACTIVE
-                // Only set aggro if the monster is not completely passive (0) and not returning
-                if (pTarget->dwAttackPattern != 0 && !pTarget->bIsReturning) {
-                    pTarget->dwTargetID = attackerId; // Set aggro (Even if it is Passive (2), it will fight back now)
+                // Only set aggro if the monster is not completely passive (0) and not returning, and attacker is alive
+                if (pTarget->dwAttackPattern != 0 && !pTarget->bIsReturning && pAttacker && pAttacker->dwHpCur > 0 && pAttacker->dwDeadTime == 0) {
+                    if (pTarget->dwTargetID != attackerId) {
+                        pTarget->dwTargetID = attackerId; // Set aggro (Even if it is Passive (2), it will fight back now)
+                        pTarget->wLastSentDestX = 0;
+                        pTarget->wLastSentDestY = 0;
+                        pTarget->wDestX = 0;
+                        pTarget->wDestY = 0;
+                        pTarget->dwChaseStartTime = GetTickCount();
+                        pTarget->dwLastAttackTime = 0;
+                    }
                     LOG("[CombatHandler] SET AGGRO: Monster ObjID=" + std::to_string(targetId) + " -> targetID=" + std::to_string(attackerId) + " mapID=" + std::to_string(playerMapID));
                     
                     // Xiah AI Bitmask - ASSIST AGGRO / LINK AGGRO (Bit 3 / 8)
                     if ((pTarget->dwAttackPattern & 8) != 0) {
                         for (auto& pPair : mapInst->GetMonsters()) {
                             auto& friendObj = pPair.second;
-                            if (friendObj.bObjectType == 3 && friendObj.dwHpCur > 0 && friendObj.dwTargetID == 0) {
+                            if (friendObj.bObjectType == 3 && friendObj.dwHpCur > 0 && friendObj.dwTargetID == 0 && !friendObj.bIsReturning) {
                                 if (friendObj.bPropType == pTarget->bPropType) {
                                     float dx = (float)friendObj.wPosX - (float)pTarget->wPosX;
                                     float dy = (float)friendObj.wPosY - (float)pTarget->wPosY;
@@ -289,7 +302,7 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                         }
                     }
                 }
-                if (pTarget->dwHpCur == 0) {
+                if (pTarget->dwHpCur == 0 && pTarget->dwDeadTime == 0) {
                     pTarget->dwDeadTime = GetTickCount();
                     pTarget->dwTargetID = 0;
                     monsterDied = true;
@@ -389,24 +402,19 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                 }
                 
                 
-                // Hit Stagger: push attack timer forward by wStaggerTime, but don't fully reset
-                // This gives a brief hit reaction without permanently preventing attacks
-                WORD staggerMs = g_NpcTemplates[pTarget->bPropType].wStaggerTime;
-                if (staggerMs > 0) {
-                    WORD atkInterval = g_NpcTemplates[pTarget->bPropType].wAtkInterval;
-                    if (atkInterval > staggerMs) {
-                        DWORD staggerTime = GetTickCount() - (atkInterval - staggerMs);
-                        if (staggerTime > pTarget->dwLastAttackTime) {
-                            pTarget->dwLastAttackTime = staggerTime;
-                        }
-                    }
-                }
+                // 完全移除受击硬直对怪物攻击冷却的推退，怪物的攻击节奏完全独立，彻底杜绝任何受击被打断或罚站现象
                 dwHpMax = pTarget->dwHpMax;
                 dwHpCur = pTarget->dwHpCur;
+                }
             }
 
             PlayerData* pTargetPlayer = mapInst->GetPlayer(targetId);
             if (pTargetPlayer) {
+                if (pTargetPlayer->dwHpCur == 0) {
+                    bResult = 1; // MISS
+                    finalDmg = 0;
+                    goto APPLY_PHYSICAL_DAMAGE;
+                }
                 // 物理 PvP 伤害与命中判定分支
                 if (pAttacker) {
                     // A. 组队（队友）免伤保护 (最高级硬核保护)
@@ -502,6 +510,29 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                         extern void ClearPlayerBuffsOnDeath(PlayerData& player, DWORD mapID);
                         ClearPlayerBuffsOnDeath(*pTargetPlayer, playerMapID);
 
+                        // Release any monsters targeting this dead player and return to spawn
+                        DWORD deadPlayerOID = pTargetPlayer->dwObjectID;
+                        for (auto& mPair : mapInst->GetMonsters()) {
+                            if (mPair.second.dwTargetID == deadPlayerOID) {
+                                mPair.second.dwTargetID = 0;
+                                mPair.second.bInAttackRange = false;
+                                float dist = std::sqrt(std::pow((float)mPair.second.wPosX - mPair.second.wSpawnX, 2) + std::pow((float)mPair.second.wPosY - mPair.second.wSpawnY, 2));
+                                if (dist > 1.0f) {
+                                    mPair.second.bIsReturning = true;
+                                    mPair.second.dwReturnStartTime = GetTickCount();
+                                    mPair.second.fPosX = (float)mPair.second.wPosX;
+                                    mPair.second.fPosY = (float)mPair.second.wPosY;
+                                    mPair.second.wDestX = mPair.second.wSpawnX;
+                                    mPair.second.wDestY = mPair.second.wSpawnY;
+                                    mPair.second.wLastSentDestX = 0;
+                                    mPair.second.wLastSentDestY = 0;
+                                    mPair.second.wLastSentPosX = 0;
+                                    mPair.second.wLastSentPosY = 0;
+                                    mPair.second.dwHpCur = mPair.second.dwHpMax;
+                                }
+                            }
+                        }
+
                         LOG("[CombatHandler] Player " + pTargetPlayer->szName + " died from physical attack by " + (pAttacker ? pAttacker->szName : "Unknown"));
                     }
                 }
@@ -589,30 +620,32 @@ APPLY_PHYSICAL_DAMAGE:
             
             // Send CS_BT_KILLSUCCESS_ACK (0x4034) to trigger EXP acquire VFX
             DWORD displayExp = deadExp;
-            if (!partyExpMembers.empty()) {
-                displayExp = deadExp / (DWORD)partyExpMembers.size();
-                if (displayExp == 0) displayExp = 1;
-                // Send to all party members on same map
-                for (DWORD memberCharID : partyExpMembers) {
-                    SOCKET mSock = SessionMgr::GetInstance().GetSocketByCharID(memberCharID);
-                    if (mSock != INVALID_SOCKET) {
-                        std::vector<BYTE> killBuf; killBuf.resize(4);
-                        killBuf.push_back(deadObjType);
-                        pushDWord(killBuf, deadObjID);
-                        pushDWord(killBuf, displayExp);
-                        PACKET_HEADER* killHead = (PACKET_HEADER*)killBuf.data(); killHead->id = 0x4034; killHead->payloadSize = killBuf.size() - sizeof(PACKET_HEADER);
-                        EncryptPacket(killBuf.data(), 0x42);
-                        SafeSend(mSock, (char*)killBuf.data(), killBuf.size(), 0);
+            if (displayExp > 0) {
+                if (!partyExpMembers.empty()) {
+                    displayExp = deadExp / (DWORD)partyExpMembers.size();
+                    if (displayExp == 0) displayExp = 1;
+                    // Send to all party members on same map
+                    for (DWORD memberCharID : partyExpMembers) {
+                        SOCKET mSock = SessionMgr::GetInstance().GetSocketByCharID(memberCharID);
+                        if (mSock != INVALID_SOCKET) {
+                            std::vector<BYTE> killBuf; killBuf.resize(4);
+                            killBuf.push_back(deadObjType);
+                            pushDWord(killBuf, deadObjID);
+                            pushDWord(killBuf, displayExp);
+                            PACKET_HEADER* killHead = (PACKET_HEADER*)killBuf.data(); killHead->id = 0x4034; killHead->payloadSize = killBuf.size() - sizeof(PACKET_HEADER);
+                            EncryptPacket(killBuf.data(), 0x42);
+                            SafeSend(mSock, (char*)killBuf.data(), killBuf.size(), 0);
+                        }
                     }
+                } else {
+                    std::vector<BYTE> killBuf; killBuf.resize(4);
+                    killBuf.push_back(deadObjType);
+                    pushDWord(killBuf, deadObjID);
+                    pushDWord(killBuf, displayExp);
+                    PACKET_HEADER* killHead = (PACKET_HEADER*)killBuf.data(); killHead->id = 0x4034; killHead->payloadSize = killBuf.size() - sizeof(PACKET_HEADER);
+                    EncryptPacket(killBuf.data(), 0x42);
+                    SafeSend(clientSocket, (char*)killBuf.data(), killBuf.size(), 0);
                 }
-            } else {
-                std::vector<BYTE> killBuf; killBuf.resize(4);
-                killBuf.push_back(deadObjType);
-                pushDWord(killBuf, deadObjID);
-                pushDWord(killBuf, displayExp);
-                PACKET_HEADER* killHead = (PACKET_HEADER*)killBuf.data(); killHead->id = 0x4034; killHead->payloadSize = killBuf.size() - sizeof(PACKET_HEADER);
-                EncryptPacket(killBuf.data(), 0x42);
-                SafeSend(clientSocket, (char*)killBuf.data(), killBuf.size(), 0);
             }
         }
 

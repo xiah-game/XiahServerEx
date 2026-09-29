@@ -1719,9 +1719,9 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
     
 
-    DWORD dwDefHpMax = 60000;
+    DWORD dwDefHpMax = 0;
 
-    DWORD dwDefHpCur = 60000;
+    DWORD dwDefHpCur = 0;
 
     WORD  dwDefIpMax = 0;
 
@@ -1836,7 +1836,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
     // PvP ������� Debuff ���졤��
 
-    if (bDefenseType == 1 && dwDefenseID > 0) {
+    if (!bNoRealTarget && dwDefenseID != dwAttackID && bDefenseType == 1 && dwDefenseID > 0 && dwDefHpMax > 0) {
 
         DWORD defenderCharID = dwDefenseID - 400000000;
 
@@ -1874,7 +1874,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
             // ���쨦���쨦 Debuff 
 
-            PlayerManager::GetInstance().RecalculateStats(defenderCharID, true);
+            PlayerManager::GetInstance().RecalculateStats(defenderCharID, false);
 
         }
 

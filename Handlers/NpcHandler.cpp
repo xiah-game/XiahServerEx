@@ -5,6 +5,7 @@
 #include <unordered_set>
 #include "../Network/SessionMgr.h"
 #include "../GameObjects/MapInstance.h"
+#include "../GameObjects/QuestManager.h"
 
 extern std::map<DWORD, CMapInstance*> g_MapInstances;
 
@@ -155,6 +156,10 @@ void OnFunctionalNpcItemListReq(SOCKET clientSocket, DWORD charID, BYTE* payload
         std::lock_guard<std::mutex> lock(mapInst->GetMutex());
         MonsterData* pObj = mapInst->GetMonster(reqObjectID);
         if (pObj) {
+            DWORD npcID = (reqObjectID >= 100000) ? (reqObjectID - 100000) : reqObjectID;
+            BYTE npcType = pObj->bPropType;
+            QuestManager::GetInstance().OnNpcTalk(charID, npcType, npcID);
+
             for (auto& it : pObj->npcItems) {
                 if (it.bSackCnt == bSackCnt) {
                     if (g_ItemTemplates.count(it.dwItemID)) {

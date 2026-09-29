@@ -231,6 +231,8 @@ struct MonsterData : EntityBase {
     WORD  wAtkRatio = 0, wAvoidRatio = 0;
     DWORD dwTargetID = 0;
     DWORD dwLastAttackTime = 0;
+    DWORD dwChaseStartTime = 0;   // 追击起跑时刻，用于冲锋到达时触发起手无CD攻击
+    DWORD dwLastWanderTime = 0;   // 巡逻漫游与发呆计时器（与攻击CD彻底解耦）
     DWORD dwMovePattern = 0, dwAttackPattern = 0;
     DWORD dwExp = 0;
     // Movement tracking
@@ -241,10 +243,15 @@ struct MonsterData : EntityBase {
     // Display
     BYTE  bGroupOrder = 0;
     BYTE  bWalkSpeedByte = 8;
+    BYTE  bRunSpeedByte = 10;
+    WORD  wWalkSpeed100 = 400;
+    WORD  wRunSpeed100 = 650;
     // Drop rates
     WORD  wRootItem = 0, wRootMoney = 0, wRootRes = 0, wRootBook = 0;
     DWORD dwLastHealTime = 0;
     bool  bIsReturning = false; // Leash return state
+    DWORD dwReturnStartTime = 0; // Timestamp when leash return started, used for anti-stuck fallback
+    bool  bInAttackRange = false; // Hysteresis state for attack range to prevent high-frequency vibration
     // NPC skills
     std::map<DWORD, DWORD> mugongLastCastTime;
     // Functional NPC items (bObjectType=5 only)
@@ -294,14 +301,16 @@ struct sNpcTemplate {
     WORD wRegen; // AI: Respawn time in seconds
     WORD wAtkInterval; // Attack cooldown in ms (default 1500)
     WORD wStaggerTime; // Hit stagger duration in ms (default 500)
+    BYTE bRunSpeed = 10; // Client-facing run speed byte
+    WORD wRunSpeed100 = 0; // Run speed in grids/sec * 100
     std::vector<sNpcMugong> mugongs;
 
     // 五行属性与经验
     BYTE bFiveElm = 0;
     WORD wFiveElmExp = 0;
 
-    sNpcTemplate() : bType(0), bLevel(1), bWalkSpeed(8), dwHpInit(0), dwPwrInit(0), dwDefInit(0), dwExpInit(0),
-                     wAtkRatio(0), wAvoidRatio(0), wHealPoint(0), bIdleRatio(50), wWalkSpeed100(0),
+    sNpcTemplate() : bType(0), bLevel(1), bWalkSpeed(8), bRunSpeed(10), dwHpInit(0), dwPwrInit(0), dwDefInit(0), dwExpInit(0),
+                     wAtkRatio(0), wAvoidRatio(0), wHealPoint(0), bIdleRatio(50), wWalkSpeed100(0), wRunSpeed100(0),
                      wSightRangeInit(0), wWanderRangeInit(0), wMeleeAtkRangeInit(0), wShotAtkRangeInit(0),
                      wRegen(10), wAtkInterval(1500), wStaggerTime(500), bFiveElm(0), wFiveElmExp(0) {}
 };

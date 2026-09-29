@@ -535,10 +535,8 @@
 
                         
 
-                        if (pSplashMon->dwAttackPattern != 0 && pSplashMon->dwHpCur > 0) {
-
+                        if (pSplashMon->dwAttackPattern != 0 && pSplashMon->dwHpCur > 0 && !pSplashMon->bIsReturning && pAttacker && pAttacker->dwHpCur > 0 && pAttacker->dwDeadTime == 0) {
                             pSplashMon->dwTargetID = dwAttackID;
-
                         }
 
                         

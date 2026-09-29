@@ -52,8 +52,10 @@ set(SOURCES
     Handlers/MunpaHandler.cpp
     Handlers/FiveElmHandler.cpp
     Handlers/WorldTimeHandler.cpp
+    Handlers/QuestHandler.cpp
     GameObjects/DropManager.cpp
     GameObjects/ExpSystem.cpp
+    GameObjects/QuestManager.cpp
     DB/CharacterDB.cpp
     DB/ItemDB.cpp
     DB/GameDataDB.cpp

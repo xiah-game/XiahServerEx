@@ -14,6 +14,10 @@ void SendWorldTimeToSocket(SOCKET s);
 void LoadMapWeatherConfig();
 
 int main() {
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+#endif
     // Clear log file
     std::ofstream ofs("server_debug.log", std::ios::trunc);
     ofs.close();

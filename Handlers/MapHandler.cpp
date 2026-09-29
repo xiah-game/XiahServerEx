@@ -81,18 +81,6 @@ void OnMapLoadingSequenceReq(SOCKET clientSocket, DWORD charID, BYTE* payload, W
 
         EncryptPacket(ackBuf.data(), 0x42); SafeSend(clientSocket, (const char*)ackBuf.data(), ackBuf.size(), 0);
 
-    } else if (headerId == 0x3203) { 
-
-        std::vector<BYTE> ackBuf; ackBuf.resize(4); 
-
-        ackBuf.push_back(0); ackBuf.push_back(0); ackBuf.push_back(0); ackBuf.push_back(0); 
-
-        ackBuf.push_back(0); 
-
-        PACKET_HEADER* ackHead = (PACKET_HEADER*)ackBuf.data(); ackHead->id = 0x3204; ackHead->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);
-
-        EncryptPacket(ackBuf.data(), 0x42); SafeSend(clientSocket, (const char*)ackBuf.data(), ackBuf.size(), 0);
-
     } else if (headerId == 0x3903) { 
 
         std::vector<BYTE> ackBuf; ackBuf.resize(4); 

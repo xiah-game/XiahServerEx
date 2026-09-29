@@ -7,6 +7,8 @@
 #include "../Network/SystemMessage.h"
 #include "MapInstance.h"
 #include "../GameObjects/MugongManager.h"
+#include "QuestManager.h"
+#include "../Handlers/PartyHandler.h"
 #include <iostream>
 
 extern std::map<DWORD, CMapInstance*> g_MapInstances;
@@ -355,6 +357,27 @@ void DropManager::GenerateDrops(DWORD killerID, const MonsterData& obj) {
     auto tplIt = g_NpcTemplates.find(obj.bPropType);
     if (tplIt == g_NpcTemplates.end()) return;
     
+    // 任务系统：通知怪物击杀事件（杀怪计数与奇缘推进）
+    DWORD actualCharID = killerID;
+    if (actualCharID >= 800000000) {
+        actualCharID -= 400000000;
+    }
+    DWORD dwNpcListID = 0;
+    if (obj.dwObjectID >= 200000) {
+        dwNpcListID = (obj.dwObjectID % 1000000) - 200000;
+    }
+    QuestManager::GetInstance().OnMonsterKilled(actualCharID, obj.bPropType, dwNpcListID);
+
+    DWORD partyID = PartyManager::GetInstance().GetPartyID(actualCharID);
+    if (partyID > 0) {
+        auto members = PartyManager::GetInstance().GetMembers(partyID);
+        for (const auto& m : members) {
+            if (m.dwCharID != actualCharID && m.dwMapID == obj.dwMapID) {
+                QuestManager::GetInstance().OnMonsterKilled(m.dwCharID, obj.bPropType, dwNpcListID);
+            }
+        }
+    }
+
     // 获取 VIP 爆率加倍缩减系数
     int vipLevel = CharacterDB::GetInstance().GetVipLevel(killerID);
     double multiplier = 1.0;

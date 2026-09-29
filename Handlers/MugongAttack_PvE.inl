@@ -8,9 +8,30 @@
 
             MonsterData* pTarget = mapInst->GetMonster(dwDefenseID);
 
-            if (pTarget && pTarget->dwHpCur > 0) {
+            if (pTarget) {
+                if (pTarget->dwHpCur == 0 || pTarget->dwDeadTime > 0) {
+                    // 目标怪物已死亡：杜绝回传虚假血量与伤害
+                    dwDefHpMax = pTarget->dwHpMax;
+                    dwDefHpCur = 0;
+                    finalDmg = 0;
+                    p[0] = 1; // 1 = Miss
 
-                bool sIsReturning = pTarget->bIsReturning;
+                    // 补发死亡状态包 0x3510 强制客户端清除选中状态
+                    std::vector<BYTE> animBuf; animBuf.resize(4);
+                    animBuf.push_back(pTarget->bObjectType);
+                    animBuf.push_back(pTarget->dwObjectID & 0xFF);
+                    animBuf.push_back((pTarget->dwObjectID >> 8) & 0xFF);
+                    animBuf.push_back((pTarget->dwObjectID >> 16) & 0xFF);
+                    animBuf.push_back(pTarget->dwObjectID >> 24);
+                    animBuf.push_back(3); // bStatus = 3 (Dead)
+                    animBuf.push_back(0); animBuf.push_back(0); animBuf.push_back(0xFF);
+                    PACKET_HEADER* animHead = (PACKET_HEADER*)animBuf.data();
+                    animHead->id = 0x3510;
+                    animHead->payloadSize = animBuf.size() - sizeof(PACKET_HEADER);
+                    EncryptPacket(animBuf.data(), 0x42);
+                    mapInst->BroadcastPacket(animBuf);
+                } else {
+                    bool sIsReturning = pTarget->bIsReturning;
 
                 // Use template defense since MonsterData doesn't store wWepDef
 
@@ -285,40 +306,31 @@
                         pTarget->dwHpCur -= finalDmg;
 
                     } else {
-
                         finalDmg = pTarget->dwHpCur;
-
                         pTarget->dwHpCur = 0;
-
-                        isDead = true;
-
-                        pTarget->dwDeadTime = GetTickCount();
-
-                        pTarget->dwTargetID = 0;
-
-                        deadExp = pTarget->dwExp; // Use computed Init+Inc value
-
-                        DWORD targetFiveElmExp = g_NpcTemplates.count(pTarget->bPropType) ? g_NpcTemplates[pTarget->bPropType].wFiveElmExp : 0;
-                        targetFiveElmExp += pTarget->wIncFiveElmExp;
-
-                        deadEntities.push_back({dwDefenseID, deadExp, g_NpcTemplates[pTarget->bPropType].szName, targetFiveElmExp});
-
-                        // 妙手空空(bKind=23)：击杀时暴率翻倍
-                        WORD origRootItem = pTarget->wRootItem;
-                        if (tpl && tpl->bType == 4 && tpl->bKind == 23 && pMugongData) {
-                            WORD successRate = pMugongData->wSuccessRatePerc;
-                            bool luckyKill = (successRate >= 100) || ((WORD)(rand() % 100) < successRate);
-                            if (luckyKill && pTarget->wRootItem > 1) {
-                                pTarget->wRootItem = pTarget->wRootItem / 2;
-                                if (pTarget->wRootItem < 1) pTarget->wRootItem = 1;
-                                LOG("[MugongHandler] MiaoShouKongKong: drop rate doubled! wRootItem " + std::to_string(origRootItem) + " -> " + std::to_string(pTarget->wRootItem));
+                        if (pTarget->dwDeadTime == 0) {
+                            isDead = true;
+                            pTarget->dwDeadTime = GetTickCount();
+                            pTarget->dwTargetID = 0;
+                            deadExp = pTarget->dwExp; // Use computed Init+Inc value
+                            DWORD targetFiveElmExp = g_NpcTemplates.count(pTarget->bPropType) ? g_NpcTemplates[pTarget->bPropType].wFiveElmExp : 0;
+                            targetFiveElmExp += pTarget->wIncFiveElmExp;
+                            deadEntities.push_back({dwDefenseID, deadExp, g_NpcTemplates[pTarget->bPropType].szName, targetFiveElmExp});
+                            // 妙手空空(bKind=23)：击杀时暴率翻倍
+                            WORD origRootItem = pTarget->wRootItem;
+                            if (tpl && tpl->bType == 4 && tpl->bKind == 23 && pMugongData) {
+                                WORD successRate = pMugongData->wSuccessRatePerc;
+                                bool luckyKill = (successRate >= 100) || ((WORD)(rand() % 100) < successRate);
+                                if (luckyKill && pTarget->wRootItem > 1) {
+                                    pTarget->wRootItem = pTarget->wRootItem / 2;
+                                    if (pTarget->wRootItem < 1) pTarget->wRootItem = 1;
+                                    LOG("[MugongHandler] MiaoShouKongKong: drop rate doubled! wRootItem " + std::to_string(origRootItem) + " -> " + std::to_string(pTarget->wRootItem));
+                                }
                             }
+                            DropManager::GetInstance()->GenerateDrops(dwAttackID, *pTarget);
+                            pTarget->wRootItem = origRootItem; // 恢复原值
+                            LOG("[MugongHandler] Monster " + g_NpcTemplates[pTarget->bPropType].szName + " died from skill " + std::to_string(dwMugongID) + "!");
                         }
-                        DropManager::GetInstance()->GenerateDrops(dwAttackID, *pTarget);
-                        pTarget->wRootItem = origRootItem; // 恢复原值（虽然怪物已死但保持数据一致性）
-
-                        LOG("[MugongHandler] Monster " + g_NpcTemplates[pTarget->bPropType].szName + " died from skill " + std::to_string(dwMugongID) + "!");
-
                     }
 
                 }
@@ -629,10 +641,8 @@
 
                         
 
-                        if (pSplashMon->dwAttackPattern != 0 && pSplashMon->dwHpCur > 0) {
-
+                        if (pSplashMon->dwAttackPattern != 0 && pSplashMon->dwHpCur > 0 && !pSplashMon->bIsReturning && pAttacker && pAttacker->dwHpCur > 0 && pAttacker->dwDeadTime == 0) {
                             pSplashMon->dwTargetID = dwAttackID;
-
                         }
 
                         
@@ -794,15 +804,15 @@
 
                 
 
-                if (pTarget->dwAttackPattern != 0 && pTarget->dwHpCur > 0 && !pTarget->bIsReturning) {
-
+                if (pTarget->dwAttackPattern != 0 && pTarget->dwHpCur > 0 && !pTarget->bIsReturning && pAttacker && pAttacker->dwHpCur > 0 && pAttacker->dwDeadTime == 0) {
                     pTarget->dwTargetID = dwAttackID;
-
                 }
 
                 dwDefHpMax = pTarget->dwHpMax;
 
                 dwDefHpCur = pTarget->dwHpCur;
+
+                }
 
             }
 

@@ -184,3 +184,20 @@ bool SessionMgr::AcceptSequence(SOCKET s, uint32_t seq) {
     sec.seqWindow |= mask;
     return true;
 }
+
+bool SessionMgr::ValidateTimestamp(SOCKET s, uint32_t timestamp, uint32_t now) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto& sec = m_socketSecurity[s];
+    if (!sec.offsetInitialized) {
+        sec.clockOffset = (int64_t)now - (int64_t)timestamp;
+        sec.offsetInitialized = true;
+        return true;
+    }
+    int64_t expectedNow = (int64_t)timestamp + sec.clockOffset;
+    int64_t drift = expectedNow - (int64_t)now;
+    if (drift < -300 || drift > 300) {
+        return false;
+    }
+    return true;
+}
+

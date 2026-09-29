@@ -22,6 +22,7 @@
 #include "RepairHandler.h"
 #include "MunpaHandler.h"
 #include "FiveElmHandler.h"
+#include "QuestHandler.h"
 #include "MugongAttackContext.h"
 
 void InitPacketHandlers() {
@@ -163,8 +164,13 @@ void InitPacketHandlers() {
 
     // Map & Loading Handlers
     RegisterHandler(0x3A55, [](SOCKET s, BYTE* p, WORD size) { OnMapLoadingSequenceReq(s, SessionMgr::GetInstance().GetCharID(s), p, size, 0x3A55); });
-    RegisterHandler(0x3203, [](SOCKET s, BYTE* p, WORD size) { OnMapLoadingSequenceReq(s, SessionMgr::GetInstance().GetCharID(s), p, size, 0x3203); });
     RegisterHandler(0x3903, [](SOCKET s, BYTE* p, WORD size) { OnMapLoadingSequenceReq(s, SessionMgr::GetInstance().GetCharID(s), p, size, 0x3903); });
+
+    // Quest Handlers (CS_QS family)
+    RegisterHandler(0x3203, [](SOCKET s, BYTE* p, WORD size) { OnQuestListReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
+    RegisterHandler(0x3205, [](SOCKET s, BYTE* p, WORD size) { OnQuestStartReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
+    RegisterHandler(0x3207, [](SOCKET s, BYTE* p, WORD size) { OnQuestStopReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
+    RegisterHandler(0x3209, [](SOCKET s, BYTE* p, WORD size) { OnQuestDeleteReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
     
     RegisterHandler(0x4413, [](SOCKET s, BYTE* p, WORD size) { 
         OnCharStatusInfoReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); 
@@ -238,4 +244,5 @@ void InitPacketHandlers() {
     RegisterShopHandlers();
     RegisterRepairHandlers();
     RegisterMunpaHandlers();
+    RegisterQuestHandlers();
 }

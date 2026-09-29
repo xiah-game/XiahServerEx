@@ -177,11 +177,11 @@ void GameDataDB::LoadItemTemplates(std::map<WORD, sItemTemplate>& out) {
 
 void GameDataDB::LoadNpcTemplates(std::map<BYTE, sNpcTemplate>& out) {
     out.clear();
-    std::string q = "SELECT bType, dwHpInit, dwPwrInit, dwDefInit, wWalkSpeed100, wSightRangeInit, wWanderRangeInit, wMeleeAtkRangeInit, wShotAtkRangeInit, szName, wAtkRatio, wAvoidRatio, wRegen, dwExpInit, wHealPoint, bIdleRatio, bLevel, bWalkSpeed, wAtkInterval, wStaggerTime, bFiveElm, wFiveElmExp FROM NPCTEMPLATE";
+    std::string q = "SELECT bType, dwHpInit, dwPwrInit, dwDefInit, wWalkSpeed100, wSightRangeInit, wWanderRangeInit, wMeleeAtkRangeInit, wShotAtkRangeInit, szName, wAtkRatio, wAvoidRatio, wRegen, dwExpInit, wHealPoint, bIdleRatio, bLevel, bWalkSpeed, wAtkInterval, wStaggerTime, bFiveElm, wFiveElmExp, bRunSpeed, wRunSpeed100 FROM NPCTEMPLATE";
     DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
         int t=0,hp=0,pwr=0,def1=0,wspeed=0,sight=0,wander=0,melee=0,shot=0,atkratio=0,avoidratio=0,regen=0,expinit=0,healpoint=0,idleratio=0,lvl=0,walkspdbyte=0,atkinterval=1500,staggertime=500;
-        int fiveElm=0, fiveElmExp=0;
-        char nameBuf[64] = {0}; SQLLEN c[22] = {0};
+        int fiveElm=0, fiveElmExp=0, runspdbyte=10, runspeed=0;
+        char nameBuf[64] = {0}; SQLLEN c[24] = {0};
         SQLGetData(hStmt,1,SQL_C_SLONG,&t,0,&c[0]); SQLGetData(hStmt,2,SQL_C_SLONG,&hp,0,&c[1]);
         SQLGetData(hStmt,3,SQL_C_SLONG,&pwr,0,&c[2]); SQLGetData(hStmt,4,SQL_C_SLONG,&def1,0,&c[3]);
         SQLGetData(hStmt,5,SQL_C_SLONG,&wspeed,0,&c[4]); SQLGetData(hStmt,6,SQL_C_SLONG,&sight,0,&c[5]);
@@ -193,19 +193,23 @@ void GameDataDB::LoadNpcTemplates(std::map<BYTE, sNpcTemplate>& out) {
         SQLGetData(hStmt,17,SQL_C_SLONG,&lvl,0,&c[16]); SQLGetData(hStmt,18,SQL_C_SLONG,&walkspdbyte,0,&c[17]);
         SQLGetData(hStmt,19,SQL_C_SLONG,&atkinterval,0,&c[18]); SQLGetData(hStmt,20,SQL_C_SLONG,&staggertime,0,&c[19]);
         SQLGetData(hStmt,21,SQL_C_SLONG,&fiveElm,0,&c[20]); SQLGetData(hStmt,22,SQL_C_SLONG,&fiveElmExp,0,&c[21]);
+        SQLGetData(hStmt,23,SQL_C_SLONG,&runspdbyte,0,&c[22]); SQLGetData(hStmt,24,SQL_C_SLONG,&runspeed,0,&c[23]);
         sNpcTemplate tpl;
         tpl.bType = t; tpl.dwHpInit = hp; tpl.dwPwrInit = pwr; tpl.dwDefInit = def1;
         tpl.bLevel = (c[16]!=SQL_NULL_DATA) ? lvl : 1;
         tpl.bWalkSpeed = (c[17]!=SQL_NULL_DATA) ? walkspdbyte : 8;
+        tpl.bRunSpeed = (c[22]!=SQL_NULL_DATA) ? (BYTE)runspdbyte : 10;
         tpl.dwExpInit = (c[13]!=SQL_NULL_DATA) ? expinit : 0;
-        tpl.wWalkSpeed100 = wspeed; tpl.wSightRangeInit = sight; tpl.wWanderRangeInit = wander;
+        tpl.wWalkSpeed100 = wspeed; 
+        tpl.wRunSpeed100 = (c[23]!=SQL_NULL_DATA && runspeed > 0) ? (WORD)runspeed : (WORD)(wspeed * 1.5f);
+        tpl.wSightRangeInit = sight; tpl.wWanderRangeInit = wander;
         tpl.wMeleeAtkRangeInit = melee; tpl.wShotAtkRangeInit = shot;
         tpl.wAtkRatio = (c[10]!=SQL_NULL_DATA) ? atkratio : 0;
         tpl.wAvoidRatio = (c[11]!=SQL_NULL_DATA) ? avoidratio : 0;
         tpl.wRegen = (c[12]!=SQL_NULL_DATA) ? regen : 10;
         tpl.wHealPoint = (c[14]!=SQL_NULL_DATA) ? healpoint : 0;
         tpl.bIdleRatio = (c[15]!=SQL_NULL_DATA) ? idleratio : 50;
-        tpl.wAtkInterval = (c[18]!=SQL_NULL_DATA) ? atkinterval : 1500;
+        tpl.wAtkInterval = (c[18]!=SQL_NULL_DATA && atkinterval > 0) ? atkinterval : 1500;
         tpl.wStaggerTime = (c[19]!=SQL_NULL_DATA) ? staggertime : 500;
         tpl.bFiveElm = (c[20]!=SQL_NULL_DATA) ? (BYTE)fiveElm : 0;
         tpl.wFiveElmExp = (c[21]!=SQL_NULL_DATA) ? (WORD)fiveElmExp : 0;
@@ -324,6 +328,9 @@ void GameDataDB::LoadNpcList(std::vector<MonsterData>& out, const std::map<BYTE,
                 obj.wAtkRatio = tpl.wAtkRatio + (c[24]!=SQL_NULL_DATA?atkRatioInc:0);
                 obj.wAvoidRatio = tpl.wAvoidRatio + (c[25]!=SQL_NULL_DATA?avoidRatioInc:0);
                 obj.bWalkSpeedByte = tpl.bWalkSpeed;
+                obj.bRunSpeedByte = tpl.bRunSpeed;
+                obj.wWalkSpeed100 = tpl.wWalkSpeed100;
+                obj.wRunSpeed100 = tpl.wRunSpeed100;
                 
                 // 加载五行属性与增量经验
                 if (c[26]!=SQL_NULL_DATA) obj.bFiveElm=(BYTE)fiveElm; else obj.bFiveElm=tpl.bFiveElm;

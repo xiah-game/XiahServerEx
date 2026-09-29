@@ -1,4 +1,4 @@
-// MugongPreAttack.cpp — OnSelMugongReq / OnMugongPreAttackReq / IsAoeSkill
+﻿// MugongPreAttack.cpp — OnSelMugongReq / OnMugongPreAttackReq / IsAoeSkill
 // 从 MugongHandler.cpp 拆分而来，纯搬迁不改逻辑
 #include <unordered_map>
 #include "MugongHandler.h"
@@ -157,33 +157,7 @@ void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
         }
     }
 
-    // === 统一内功 (IP) 校验 ===
-    if (pd && pd->dwCostMp > 0) {
-        if (g_MapInstances.count(playerMapID)) {
-            CMapInstance* mapInst = g_MapInstances[playerMapID];
-            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-            sServerObject* pObj = mapInst->GetPlayer(dwAttackID);
-            if (pObj) {
-                LOG("[MugongPreAttack] CasterObj ID=" + std::to_string(dwAttackID) + " Skill=" + std::to_string(dwMugongID) + " IP=" + std::to_string(pObj->wIpCur) + " Cost=" + std::to_string(pd->dwCostMp));
-            } else {
-                LOG("[MugongPreAttack] CasterObj NOT FOUND for ID=" + std::to_string(dwAttackID));
-            }
-            if (pObj && pObj->wIpCur < pd->dwCostMp) {
-                LOG("[MugongPreAttack] Skill " + std::to_string(dwMugongID) + " blocked: IP " 
-                    + std::to_string(pObj->wIpCur) + " < cost " + std::to_string(pd->dwCostMp));
-                // 发送失败包 (bResult = 1, 代表内功/蓄力不足)
-                std::vector<BYTE> failBuf(4 + 29, 0);
-                failBuf[4] = 1; // bResult = 1
-                *(DWORD*)(failBuf.data() + 5) = dwMugongID;
-                PACKET_HEADER* head = (PACKET_HEADER*)failBuf.data();
-                head->id = 0x4014; // CS_BT_MUGONGPREATTACK_ACK
-                head->payloadSize = failBuf.size() - 4;
-                EncryptPacket(failBuf.data(), 0x42);
-                SafeSend(clientSocket, (const char*)failBuf.data(), failBuf.size(), 0);
-                return;
-            }
-        }
-    }
+
 
 
     // 检查五行必杀蓄气?
@@ -286,134 +260,17 @@ void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
 
 
 
-    if (isBuff) {
-
+    // 闈?Buff 鎶€鑳斤紙鏀诲嚮/浼ゅ绫伙級鍦ㄩ鏂芥硶闃舵鎻愬墠瑙ｉ櫎娼滆 (178)
+    if (!isBuff) {
         if (g_MapInstances.count(playerMapID)) {
-
             CMapInstance* mapInst = g_MapInstances[playerMapID];
-
             std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-
             sServerObject* pObj = mapInst->GetPlayer(dwAttackID);
-
-            if (pObj) {
-
-                // Deduct IP
-
-                pObj->wIpCur -= pd->dwCostMp;
-
-                
-
-                // Send 0x3B0D to update client HP/IP bars
-
-                std::vector<BYTE> hpBuf(4);
-
-                auto push4 = [&](DWORD d) { hpBuf.push_back(d&0xFF); hpBuf.push_back((d>>8)&0xFF); hpBuf.push_back((d>>16)&0xFF); hpBuf.push_back((d>>24)&0xFF); };
-
-                auto push2 = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
-
-                push4(pObj->dwHpMax);
-
-                push4(pObj->dwHpCur);
-
-                push4(pObj->wIpMax);
-
-                push4(pObj->wIpCur);
-
-                hpBuf.push_back(0); // bType
-
-                PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
-
-                hpHead->id = 0x3B0D;
-
-                hpHead->payloadSize = hpBuf.size() - 4;
-
-                EncryptPacket(hpBuf.data(), 0x42);
-
-                SafeSend(clientSocket, (const char*)hpBuf.data(), hpBuf.size(), 0);
-
-
-
-                // Add or update buff
-
-                sServerObject::sActiveBuff newBuff;
-
-                newBuff.dwMugongID = dwMugongID;
-
-                newBuff.bLevel = bMugongLevel;
-
-                newBuff.dwEndTime = GetTickCount() + pd->dwKeepUpTime * 1000;
-
-                newBuff.bIsDebuff = false;
-
-                pObj->activeBuffs[dwMugongID] = newBuff;
-
-            }
-
-        }
-
-
-
-        // Broadcast 0x402C KeepUpMugongStartAck
-
-        std::vector<BYTE> buffAck(4 + 11);
-
-        BYTE* bp = buffAck.data() + 4;
-
-        bp[0] = 0; // bResult
-
-        *(DWORD*)(bp + 1) = dwAttackID;
-
-        bp[5] = 1; // bObjectType (Player)
-
-        *(DWORD*)(bp + 6) = dwMugongID;
-
-        bp[10] = bMugongLevel;
-
-        
-
-        PACKET_HEADER* headB = (PACKET_HEADER*)buffAck.data();
-
-        headB->id = 0x402C;
-
-        headB->payloadSize = 11;
-
-        EncryptPacket(buffAck.data(), 0x42);
-
-        BroadcastPacketToMap(playerMapID, buffAck);
-
-
-
-        LOG("[MugongHandler] Applied BUFF " + std::to_string(dwMugongID) + " to player " + std::to_string(dwAttackID) + " in PreAttackReq");
-
-
-
-        // Immediately recalculate stats so buff bonuses take effect (do NOT send 0x4414 to prevent clearing client visuals)
-
-        PlayerManager::GetInstance().RecalculateStats(charID, false);
-
-    } else {
-
-        // �� Buff ������������������쨦�訦�?178
-
-        if (g_MapInstances.count(playerMapID)) {
-
-            CMapInstance* mapInst = g_MapInstances[playerMapID];
-
-            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-
-            sServerObject* pObj = mapInst->GetPlayer(dwAttackID);
-
             if (pObj && pObj->activeBuffs.count(178) > 0) {
-
                 pObj->activeBuffs[178].dwEndTime = 0; // Mark for instant expiry
-
                 LOG("[MugongHandler] Player " + std::to_string(dwAttackID) + " pre-attacked with damage skill " + std::to_string(dwMugongID) + ". Expiring Stealth.");
-
             }
-
         }
-
     }
 
 

@@ -121,13 +121,8 @@ void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize,
             }
             pObj->bMoveState = moveState;
             *(BYTE*)(payload + 16) = moveState;
-            char dbg[256]; sprintf(dbg, "[MoveTrack] Player %u START/SYNC: pos(%d,%d) -> des(%d,%d) speed=%d bIsMoving=true",
-                pObj->dwObjectID, pObj->wPosX, pObj->wPosY, pObj->wMoveDesX, pObj->wMoveDesY, pObj->wWalkSpeed);
-            LOG(std::string(dbg));
         } else if (headerId == 0x430F) { // ENDMOVE
             pObj->bIsMoving = false;
-            char dbg[256]; sprintf(dbg, "[MoveTrack] Player %u ENDMOVE: pos(%d,%d) bIsMoving=false", pObj->dwObjectID, pObj->wPosX, pObj->wPosY);
-            LOG(std::string(dbg));
         }
     }
     
