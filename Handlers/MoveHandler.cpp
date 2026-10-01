@@ -469,3 +469,225 @@ void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize,
         }
     }
 }
+
+// =========================================================================
+// 战宠与灵宠移动及状态同步协议族 (CS_NC family)
+// =========================================================================
+
+void OnPetMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize, WORD headerId) {
+    if (!payload || totalSize < 4) return;
+    DWORD dwPetID = *(DWORD*)payload;
+
+    DWORD pMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+    CMapInstance* mapInst = nullptr;
+    if (g_MapInstances.count(pMapID)) mapInst = g_MapInstances[pMapID];
+    if (!mapInst) return;
+
+    std::vector<BYTE> ackBuf;
+    WORD ackId = 0;
+    WORD pX = 0, pY = 0;
+
+    {
+        std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+        sServerObject* pObj = mapInst->GetPlayer(dwPetID);
+        if (!pObj) {
+            LOG("[PetMove] Pet object not found in map: dwPetID=" + std::to_string(dwPetID));
+            return;
+        }
+
+        int oldX = pObj->wPosX;
+        int oldY = pObj->wPosY;
+
+        if (headerId == 0x3507 || headerId == 0x3509) { // STARTMOVE (0x3507) or SYNCMOVE (0x3509)
+            if (totalSize < 18) return;
+            WORD wPosX = *(WORD*)(payload + 4);
+            WORD wPosY = *(WORD*)(payload + 6);
+            BYTE bHeight = *(BYTE*)(payload + 8);
+            WORD wDesPosX = *(WORD*)(payload + 9);
+            WORD wDesPosY = *(WORD*)(payload + 11);
+            BYTE bDesHeight = *(BYTE*)(payload + 13);
+            WORD wDirection = *(WORD*)(payload + 14);
+            BYTE bState = *(BYTE*)(payload + 16);
+            BYTE bSpeed = *(BYTE*)(payload + 17);
+
+            pObj->wPosX = wPosX;
+            pObj->wPosY = wPosY;
+            pObj->fPosX = (float)wPosX;
+            pObj->fPosY = (float)wPosY;
+            pObj->bHeight = bHeight;
+            pObj->wMoveDesX = wDesPosX;
+            pObj->wMoveDesY = wDesPosY;
+            pObj->bMoveDesH = bDesHeight;
+            pObj->wMoveDirection = wDirection;
+            pObj->bMoveState = bState;
+            pObj->bIsMoving = true;
+            pX = wPosX;
+            pY = wPosY;
+
+            mapInst->UpdatePlayerGrid(dwPetID, oldX, oldY, wPosX, wPosY);
+
+            ackBuf.resize(4, 0);
+            ackBuf.push_back(0); // bResult
+            // dwObjectID
+            ackBuf.push_back(dwPetID & 0xFF); ackBuf.push_back((dwPetID >> 8) & 0xFF);
+            ackBuf.push_back((dwPetID >> 16) & 0xFF); ackBuf.push_back((dwPetID >> 24) & 0xFF);
+            ackBuf.push_back(pObj->bObjectType); // 4 = OBJTYPE_PET
+            // wPosX, wPosY, bHeight
+            ackBuf.push_back(wPosX & 0xFF); ackBuf.push_back(wPosX >> 8);
+            ackBuf.push_back(wPosY & 0xFF); ackBuf.push_back(wPosY >> 8);
+            ackBuf.push_back(bHeight);
+            // wDesPosX, wDesPosY, bDesHeight
+            ackBuf.push_back(wDesPosX & 0xFF); ackBuf.push_back(wDesPosX >> 8);
+            ackBuf.push_back(wDesPosY & 0xFF); ackBuf.push_back(wDesPosY >> 8);
+            ackBuf.push_back(bDesHeight);
+            // wDirection, bStatus, bSpeed
+            ackBuf.push_back(wDirection & 0xFF); ackBuf.push_back(wDirection >> 8);
+            ackBuf.push_back(bState);
+            ackBuf.push_back(bSpeed);
+
+            if (headerId == 0x3507) {
+                ackId = 0x3508; // CS_NC_STARTMOVE_ACK
+            } else {
+                ackId = 0x350A; // CS_NC_SYNCMOVE_ACK
+                ackBuf.push_back(0); ackBuf.push_back(0); // wDiffTime
+            }
+
+            LOG("[PetMove] " + std::string(headerId == 0x3507 ? "STARTMOVE" : "SYNCMOVE") + " for Pet " + std::to_string(dwPetID) + " from (" + std::to_string(wPosX) + "," + std::to_string(wPosY) + ") to (" + std::to_string(wDesPosX) + "," + std::to_string(wDesPosY) + ")");
+
+        } else if (headerId == 0x350B) { // ENDMOVE (0x350B)
+            if (totalSize < 12) return;
+            WORD wPosX = *(WORD*)(payload + 4);
+            WORD wPosY = *(WORD*)(payload + 6);
+            BYTE bHeight = *(BYTE*)(payload + 8);
+            WORD wDirection = *(WORD*)(payload + 9);
+            BYTE bState = *(BYTE*)(payload + 11);
+
+            pObj->wPosX = wPosX;
+            pObj->wPosY = wPosY;
+            pObj->fPosX = (float)wPosX;
+            pObj->fPosY = (float)wPosY;
+            pObj->bHeight = bHeight;
+            pObj->wMoveDirection = wDirection;
+            pObj->bMoveState = bState;
+            pObj->bIsMoving = false;
+            pX = wPosX;
+            pY = wPosY;
+
+            mapInst->UpdatePlayerGrid(dwPetID, oldX, oldY, wPosX, wPosY);
+
+            ackBuf.resize(4, 0);
+            ackBuf.push_back(0); // bResult
+            ackBuf.push_back(dwPetID & 0xFF); ackBuf.push_back((dwPetID >> 8) & 0xFF);
+            ackBuf.push_back((dwPetID >> 16) & 0xFF); ackBuf.push_back((dwPetID >> 24) & 0xFF);
+            ackBuf.push_back(pObj->bObjectType); // 4 = OBJTYPE_PET
+            ackBuf.push_back(wPosX & 0xFF); ackBuf.push_back(wPosX >> 8);
+            ackBuf.push_back(wPosY & 0xFF); ackBuf.push_back(wPosY >> 8);
+            ackBuf.push_back(bHeight);
+            ackBuf.push_back(bState);
+
+            ackId = 0x350C; // CS_NC_ENDMOVE_ACK
+            LOG("[PetMove] ENDMOVE for Pet " + std::to_string(dwPetID) + " at (" + std::to_string(wPosX) + "," + std::to_string(wPosY) + ")");
+        }
+    }
+
+    if (ackId != 0 && ackBuf.size() > 4) {
+        PACKET_HEADER* head = (PACKET_HEADER*)ackBuf.data();
+        head->id = ackId;
+        head->payloadSize = (WORD)(ackBuf.size() - 4);
+        EncryptPacket(ackBuf.data(), 0x42);
+        std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+        mapInst->BroadcastPacketAOI_NoLock(pX, pY, ackBuf);
+    }
+}
+
+void OnPetStatusChangeReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
+    if (!payload || totalSize < 8) return;
+    BYTE bObjectType = payload[0];
+    DWORD dwObjectID = *(DWORD*)(payload + 1);
+    BYTE bStatus = payload[5];
+    WORD wDirection = *(WORD*)(payload + 6);
+
+    DWORD pMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+    CMapInstance* mapInst = nullptr;
+    if (g_MapInstances.count(pMapID)) mapInst = g_MapInstances[pMapID];
+    if (!mapInst) return;
+
+    WORD pX = 0, pY = 0;
+    std::vector<BYTE> ackBuf;
+
+    {
+        std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+        sServerObject* pObj = mapInst->GetPlayer(dwObjectID);
+        if (!pObj) return;
+
+        pObj->bMoveState = bStatus;
+        pObj->wMoveDirection = wDirection;
+        pX = pObj->wPosX;
+        pY = pObj->wPosY;
+
+        ackBuf.resize(4, 0);
+        ackBuf.push_back(bObjectType);
+        ackBuf.push_back(dwObjectID & 0xFF); ackBuf.push_back((dwObjectID >> 8) & 0xFF);
+        ackBuf.push_back((dwObjectID >> 16) & 0xFF); ackBuf.push_back((dwObjectID >> 24) & 0xFF);
+        ackBuf.push_back(bStatus);
+        ackBuf.push_back(wDirection & 0xFF); ackBuf.push_back(wDirection >> 8);
+        ackBuf.push_back(0); // bSubType
+    }
+
+    PACKET_HEADER* head = (PACKET_HEADER*)ackBuf.data();
+    head->id = 0x3510; // CS_NC_STATUSCHANGE_ACK
+    head->payloadSize = (WORD)(ackBuf.size() - 4);
+    EncryptPacket(ackBuf.data(), 0x42);
+
+    std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+    mapInst->BroadcastPacketAOI_NoLock(pX, pY, ackBuf);
+    LOG("[PetStatus] Status changed for Object " + std::to_string(dwObjectID) + " to status " + std::to_string(bStatus));
+}
+
+void OnPetMapEnterReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
+    if (!payload || totalSize < 8) return;
+    DWORD dwObjectID = *(DWORD*)payload;
+    DWORD dwMapID = *(DWORD*)(payload + 4);
+
+    DWORD pMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+    CMapInstance* mapInst = nullptr;
+    if (g_MapInstances.count(pMapID)) mapInst = g_MapInstances[pMapID];
+    if (!mapInst) return;
+
+    std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+    sServerObject* pPet = mapInst->GetPlayer(dwObjectID);
+    sServerObject* pOwner = mapInst->GetPlayer(charID + 400000000);
+    if (pPet && pOwner) {
+        int oldX = pPet->wPosX;
+        int oldY = pPet->wPosY;
+        pPet->wPosX = pOwner->wPosX;
+        pPet->wPosY = pOwner->wPosY;
+        pPet->fPosX = (float)pPet->wPosX;
+        pPet->fPosY = (float)pPet->wPosY;
+        pPet->bIsMoving = false;
+        mapInst->UpdatePlayerGrid(dwObjectID, oldX, oldY, pPet->wPosX, pPet->wPosY);
+        LOG("[PetMapEnter] Synced pet " + std::to_string(dwObjectID) + " position to master (" + std::to_string(pPet->wPosX) + "," + std::to_string(pPet->wPosY) + ")");
+    }
+}
+
+void OnPetSackListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
+    if (!payload || totalSize < 9) return;
+    DWORD dwOwnerID = *(DWORD*)payload;
+    DWORD dwPetID = *(DWORD*)(payload + 4);
+    BYTE bSackID = payload[8];
+
+    std::vector<BYTE> ackBuf;
+    ackBuf.resize(4, 0);
+    ackBuf.push_back(dwPetID & 0xFF); ackBuf.push_back((dwPetID >> 8) & 0xFF);
+    ackBuf.push_back((dwPetID >> 16) & 0xFF); ackBuf.push_back((dwPetID >> 24) & 0xFF);
+    ackBuf.push_back(bSackID);
+    ackBuf.push_back(0); // bNumItem = 0
+
+    PACKET_HEADER* head = (PACKET_HEADER*)ackBuf.data();
+    head->id = 0x355E; // CS_NC_PETSACKLIST_ACK
+    head->payloadSize = (WORD)(ackBuf.size() - 4);
+    EncryptPacket(ackBuf.data(), 0x42);
+    SafeSend(clientSocket, (const char*)ackBuf.data(), (int)ackBuf.size(), 0);
+    LOG("[PetSack] Sent PETSACKLIST_ACK for Pet " + std::to_string(dwPetID) + " Sack=" + std::to_string(bSackID));
+}
+

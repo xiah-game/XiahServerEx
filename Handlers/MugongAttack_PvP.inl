@@ -501,7 +501,7 @@
                                 DWORD splashFiveElmExp2 = g_NpcTemplates.count(pSplashMon->bPropType) ? g_NpcTemplates[pSplashMon->bPropType].wFiveElmExp : 0;
                                 splashFiveElmExp2 += pSplashMon->wIncFiveElmExp;
 
-                                deadEntities.push_back({pSplashMon->dwObjectID, pSplashMon->dwExp, g_NpcTemplates[pSplashMon->bPropType].szName, splashFiveElmExp2});
+                                deadEntities.push_back({pSplashMon->dwObjectID, pSplashMon->dwExp, g_NpcTemplates[pSplashMon->bPropType].szName, splashFiveElmExp2, pSplashMon->wPosX, pSplashMon->wPosY});
 
                                 DropManager::GetInstance()->GenerateDrops(dwAttackID, *pSplashMon);
 

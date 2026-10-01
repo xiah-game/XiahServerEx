@@ -8,6 +8,7 @@
 #include "GameObjects/DropManager.h"
 #include "GameObjects/MugongManager.h"
 #include "Handlers/MugongHandler.h"
+#include "DB/CharacterDB.h"
 #include <cmath>
 #include <thread>
 #include <time.h>
@@ -410,7 +411,13 @@ void MonsterAIWorker(int workerId, int totalWorkers) {
                             std::lock_guard<std::mutex> mlock(mapPair.second->GetMutex());
                             sServerObject* pl = mapPair.second->GetPlayer(mp.dwObjID);
                             if (pl) {
-                                mp.wLevel = pl->wLevel;
+                                if (pl->wLevel == 0) {
+                                    CharacterDB::CharPower cp;
+                                    if (CharacterDB::GetInstance().GetCharData(mp.dwCharID, cp)) {
+                                        pl->wLevel = (cp.wLevel > 0) ? cp.wLevel : 1;
+                                    }
+                                }
+                                mp.wLevel = (pl->wLevel > 0) ? pl->wLevel : 1;
                                 mp.dwHpCur = pl->dwHpCur;
                                 mp.dwHpMax = pl->dwHpMax;
                                 mp.dwMapID = pl->dwMapID;

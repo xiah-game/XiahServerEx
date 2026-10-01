@@ -368,6 +368,12 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
     if (g_MapInstances.count(playerMapID)) {
         CMapInstance* mapInst = g_MapInstances[playerMapID];
         std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+        if (bDefenseType == 3) {
+            MonsterData* pMon = mapInst->GetMonster(dwDefenseID);
+            if (pMon && IsGatherResource(pMon->bPropType)) {
+                return; // 拦截对采集资源的武功施法
+            }
+        }
         PlayerData* pObj = mapInst->GetPlayer(charID + 400000000);
         if (pObj && pObj->dwHpCur == 0) {
             LOG("[MugongHandler] Blocked skill attack for dead player charID=" + std::to_string(charID));
@@ -780,7 +786,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                 std::vector<MonsterData*> aoiMonsters = mapInst->GetMonstersInAOI(cx, cy);
                 int fearedCount = 0;
                 for (MonsterData* pMon : aoiMonsters) {
-                    if (!pMon || pMon->dwHpCur == 0) continue;
+                    if (!pMon || pMon->dwHpCur == 0 || IsGatherResource(pMon->bPropType)) continue;
                     float dx = (float)pMon->wPosX - (float)cx;
                     float dy = (float)pMon->wPosY - (float)cy;
                     if (sqrtf(dx * dx + dy * dy) > fearRange) continue;
@@ -861,7 +867,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                 std::vector<MonsterData*> aoiMonsters = mapInst->GetMonstersInAOI(cx, cy);
                 int blindedCount = 0;
                 for (MonsterData* pMon : aoiMonsters) {
-                    if (!pMon || pMon->dwHpCur == 0) continue;
+                    if (!pMon || pMon->dwHpCur == 0 || IsGatherResource(pMon->bPropType)) continue;
                     float dx = (float)pMon->wPosX - (float)cx;
                     float dy = (float)pMon->wPosY - (float)cy;
                     if (sqrtf(dx * dx + dy * dy) > blindRange) continue;
@@ -1020,7 +1026,7 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
                 std::vector<MonsterData*> aoiMonsters = mapInst->GetMonstersInAOI(cx, cy);
                 int rootedCount = 0;
                 for (MonsterData* pMon : aoiMonsters) {
-                    if (!pMon || pMon->dwHpCur == 0) continue;
+                    if (!pMon || pMon->dwHpCur == 0 || IsGatherResource(pMon->bPropType)) continue;
                     float dx = (float)pMon->wPosX - (float)cx;
                     float dy = (float)pMon->wPosY - (float)cy;
                     if (sqrtf(dx * dx + dy * dy) > rootRange) continue;
@@ -1740,15 +1746,12 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
     // Struct to store dead monsters to process EXP/animations outside the map lock safely
 
     struct sDeadEntity {
-
         DWORD dwObjectID;
-
         DWORD dwExp;
-
         std::string szName;
-
         DWORD dwFiveElmExp;
-
+        WORD wPosX;
+        WORD wPosY;
     };
 
     std::vector<sDeadEntity> deadEntities;
@@ -1888,83 +1891,8 @@ void OnMugongAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
 
         DWORD attackerCharID = dwAttackID - 400000000; // 800000301 -> 400000301 (matches DB/SessionMgr format)
 
-        bool needRefresh = GrantExpToPlayer(attackerCharID, de.dwExp, de.dwFiveElmExp);
-
-        if (needRefresh) {
-
-            UpdatePlayerStatsAndSend(clientSocket, attackerCharID);
-
-            
-
-            // Restore HP/IP to max after level-up
-
-            DWORD dwObjID = attackerCharID + 400000000;
-
-            CMapInstance* mapInst2 = g_MapInstances.count(playerMapID) ? g_MapInstances[playerMapID] : nullptr;
-
-            if (mapInst2) {
-
-                {
-
-                    std::lock_guard<std::mutex> lock2(mapInst2->GetMutex());
-
-                    sServerObject* pObj = mapInst2->GetPlayer(dwObjID);
-
-                    if (pObj) {
-
-                        pObj->dwHpCur = pObj->dwHpMax;
-
-                        pObj->wIpCur = pObj->wIpMax;
-
-                    }
-
-                }
-
-                CharacterDB::GetInstance().RestoreHpIpToMax(attackerCharID);
-
-                
-
-                {
-
-                    std::lock_guard<std::mutex> lock3(mapInst2->GetMutex());
-
-                    sServerObject* pObj = mapInst2->GetPlayer(dwObjID);
-
-                    if (pObj) {
-
-                        std::vector<BYTE> hpBuf(4);
-
-                        auto push4 = [&](DWORD d) { hpBuf.push_back(d&0xFF); hpBuf.push_back((d>>8)&0xFF); hpBuf.push_back((d>>16)&0xFF); hpBuf.push_back((d>>24)&0xFF); };
-
-                        auto push2 = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
-
-                        push4(pObj->dwHpMax);
-
-                        push4(pObj->dwHpCur);
-
-                        push4(pObj->wIpMax);
-
-                        push4(pObj->wIpCur);
-
-                        hpBuf.push_back(1);
-
-                        PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
-
-                        hpHead->id = 0x3B0D;
-
-                        hpHead->payloadSize = hpBuf.size() - 4;
-
-                        EncryptPacket(hpBuf.data(), 0x42);
-
-                        SafeSend(clientSocket, (char*)hpBuf.data(), hpBuf.size(), 0);
-
-                    }
-
-                }
-
-            }
-
-        }
+        // 统一调用队伍经验分配逻辑（包含同地图与50格距离严格校验，以及升级广播）
+        DistributePartyExp(attackerCharID, de.dwExp, de.dwFiveElmExp, playerMapID, de.wPosX, de.wPosY, false /* callerHoldsMapLock */);
 
 
 

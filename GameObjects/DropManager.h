@@ -82,6 +82,12 @@ public:
     
     // Roll and generate drops for a killed monster
     void GenerateDrops(DWORD killerID, const MonsterData& deadMonster);
+
+    // 采集资源专用掉落逻辑：物品直接放入玩家背包，不掉落到地图地面
+    void GenerateGatherDrops(SOCKET clientSocket, DWORD playerID, const MonsterData& obj);
+
+    // 将物品直接放入玩家背包，并发送 0x420A 背包更新包及系统提示
+    bool GiveItemDirectlyToBag(SOCKET clientSocket, DWORD charID, DWORD itemRefID, WORD amount = 1);
     
     // Process CS_IM_PICK_REQ (0x4201)
     void HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payload, WORD size);

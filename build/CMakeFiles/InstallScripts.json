@@ -1,7 +1,7 @@
 {
 	"InstallScripts" : 
 	[
-		"D:/xiahold/XiahServerEx/build/cmake_install.cmake"
+		"D:/xiah/XiahServerEx/build/cmake_install.cmake"
 	],
 	"Parallel" : false
 }

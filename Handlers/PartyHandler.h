@@ -39,6 +39,8 @@ void OnPartyShareReq(SOCKET clientSocket, DWORD dwCharID, BYTE* pPayload, WORD w
 // =========================================================
 // PartyManager - In-memory party system
 // =========================================================
+#define MAX_PARTY_MEMBERS 8
+
 struct PartyMemberInfo {
     DWORD dwCharID;         // 400M format (from GetCharID)
     DWORD dwObjectID;       // 800M format (map key)
@@ -89,6 +91,9 @@ public:
     void SetShareMode(DWORD dwPartyID, BYTE byExpMode, BYTE byFEMode);
     BYTE GetExpShareMode(DWORD dwPartyID);
     BYTE GetFEShareMode(DWORD dwPartyID);
+
+    // Broadcast member position/level/HP to other party members
+    void BroadcastMemberPosition(DWORD dwCharID, WORD wLevel, DWORD dwHpCur, DWORD dwHpMax, DWORD dwMapID, WORD wPosX, WORD wPosY);
 
 private:
     PartyManager() : m_nextPartyID(1) {}

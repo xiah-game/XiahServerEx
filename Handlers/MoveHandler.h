@@ -6,3 +6,7 @@
 #include "../GameObjects/PlayerManager.h"
 
 void OnMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize, WORD headerId);
+void OnPetMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize, WORD headerId);
+void OnPetStatusChangeReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);
+void OnPetMapEnterReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);
+void OnPetSackListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);

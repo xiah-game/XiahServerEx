@@ -1,154 +1,160 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <ClCompile Include="D:\xiahold\XiahServerEx\main.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\ServerCore.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\ServerCore.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\AuthServer.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\AuthServer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\UnitServer.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\UnitServer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\MonsterAI.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\MonsterAI.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\DBHelper.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\DBHelper.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Network\PacketRouter.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Network\PacketRouter.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Network\SessionMgr.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Network\SessionMgr.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Network\SystemMessage.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Network\SystemMessage.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Network\PacketBuilder.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Network\PacketBuilder.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Network\AuthCenter.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Network\AuthCenter.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\InitHandlers.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\InitHandlers.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\LoginHandler.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\LoginHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\ItemHandler.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\ItemHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\SlotHandler.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\SlotHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\CharHandler.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\CharHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\MapHandler.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\MapHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\MoveHandler.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\MoveHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\CombatHandler.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\CombatHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\NpcHandler.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\NpcHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\MugongHandler.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\MugongHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\MugongPreAttack.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\MugongPreAttack.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\MugongSkill_Summon.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\MugongSkill_Summon.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\MugongSkill_FiveElm.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\MugongSkill_FiveElm.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\MugongSkill_PetCapture.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\MugongSkill_PetCapture.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\PetGiveItemHandler.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\PetGiveItemHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\ChatHandler.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\ChatHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\PartyHandler.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\PartyHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\RebuildItemHandler.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\RebuildItemHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\ItemSerializer.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\ItemSerializer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\BankHandler.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\BankHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\StatHandler.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\StatHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\TradeHandler.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\TradeHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\ShopHandler.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\ShopHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\RepairHandler.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\RepairHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\MunpaHandler.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\MunpaHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\FiveElmHandler.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\FiveElmHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\Handlers\WorldTimeHandler.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\WorldTimeHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\GameObjects\DropManager.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\Handlers\QuestHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\GameObjects\ExpSystem.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\GameObjects\DropManager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\DB\CharacterDB.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\GameObjects\ExpSystem.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\DB\ItemDB.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\GameObjects\QuestManager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\DB\GameDataDB.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\DB\CharacterDB.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\GameObjects\MugongManager.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\DB\ItemDB.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\GameObjects\PlayerManager.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\DB\GameDataDB.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\GameObjects\TitleManager.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\GameObjects\MugongManager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="D:\xiahold\XiahServerEx\GameObjects\MapInstance.cpp">
+    <ClCompile Include="D:\xiah\XiahServerEx\GameObjects\PlayerManager.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\xiah\XiahServerEx\GameObjects\TitleManager.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\xiah\XiahServerEx\GameObjects\MapInstance.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <CustomBuild Include="D:\xiahold\XiahServerEx\CMakeLists.txt" />
+    <CustomBuild Include="D:\xiah\XiahServerEx\CMakeLists.txt" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="Source Files">
-      <UniqueIdentifier>{654BD7C5-C0D9-394E-8230-5B49E61EF629}</UniqueIdentifier>
+      <UniqueIdentifier>{EFDFC3CD-0DB3-3B56-8F06-EF2E8860DB5F}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>

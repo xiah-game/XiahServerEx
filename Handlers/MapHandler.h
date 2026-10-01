@@ -12,6 +12,7 @@ void OnMapInfoReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
 void OnImReadyReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);
 void OnCharStatusInfoReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);
 void OnCharInfoReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);
+void SendSingleCharInfo(SOCKET clientSocket, DWORD reqObjectID, DWORD reqMapID);
 void OnCharInfoListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);
 void OnMapMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize);
 

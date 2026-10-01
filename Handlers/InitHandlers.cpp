@@ -202,6 +202,14 @@ void InitPacketHandlers() {
     RegisterHandler(0x430D, [](SOCKET s, BYTE* p, WORD size) { OnMoveReq(s, SessionMgr::GetInstance().GetCharID(s), p, size, 0x430D); });
     RegisterHandler(0x430F, [](SOCKET s, BYTE* p, WORD size) { OnMoveReq(s, SessionMgr::GetInstance().GetCharID(s), p, size, 0x430F); });
 
+    // 战宠与灵宠移动及状态同步 (CS_NC family)
+    RegisterHandler(0x3501, [](SOCKET s, BYTE* p, WORD size) { OnPetMapEnterReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
+    RegisterHandler(0x3507, [](SOCKET s, BYTE* p, WORD size) { OnPetMoveReq(s, SessionMgr::GetInstance().GetCharID(s), p, size, 0x3507); });
+    RegisterHandler(0x3509, [](SOCKET s, BYTE* p, WORD size) { OnPetMoveReq(s, SessionMgr::GetInstance().GetCharID(s), p, size, 0x3509); });
+    RegisterHandler(0x350B, [](SOCKET s, BYTE* p, WORD size) { OnPetMoveReq(s, SessionMgr::GetInstance().GetCharID(s), p, size, 0x350B); });
+    RegisterHandler(0x350F, [](SOCKET s, BYTE* p, WORD size) { OnPetStatusChangeReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
+    RegisterHandler(0x355D, [](SOCKET s, BYTE* p, WORD size) { OnPetSackListReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
+
     // 宠物封印与解封（BONGIN）
     RegisterHandler(0x3547, [](SOCKET s, BYTE* p, WORD size) { OnPetBongInReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });
     RegisterHandler(0x3549, [](SOCKET s, BYTE* p, WORD size) { OnPetBongOutReq(s, SessionMgr::GetInstance().GetCharID(s), p, size); });

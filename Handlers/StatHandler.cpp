@@ -27,11 +27,13 @@ namespace StatHandler {
         auto sendFail = [&]() {
             std::vector<BYTE> ackBuf(7, 0);
             ackBuf[0] = 1; // bResult=1 (fail)
-            PACKET_HEADER* head = (PACKET_HEADER*)ackBuf.data();
+            std::vector<BYTE> fullBuf(ackBuf.size() + 4);
+            memcpy(fullBuf.data() + 4, ackBuf.data(), ackBuf.size());
+            PACKET_HEADER* head = (PACKET_HEADER*)fullBuf.data();
             head->id = 0x401E; 
-            head->payloadSize = 3; // minimal size
-            EncryptPacket(ackBuf.data(), 0x42);
-            SafeSend(clientSocket, (const char*)ackBuf.data(), ackBuf.size(), 0);
+            head->payloadSize = (WORD)ackBuf.size();
+            EncryptPacket(fullBuf.data(), 0x42);
+            SafeSend(clientSocket, (const char*)fullBuf.data(), fullBuf.size(), 0);
         };
 
         if (!bFound || wRemainSp < bSpValue) {

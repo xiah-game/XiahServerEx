@@ -1,13 +1,13 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <CustomBuild Include="D:\xiahold\XiahServerEx\build\CMakeFiles\6d6f6e02d9d7299162e3f69d33470be2\generate.stamp.rule">
+    <CustomBuild Include="D:\xiah\XiahServerEx\build\CMakeFiles\20671aad5c6cfc2e9bb48e324a936b6f\generate.stamp.rule">
       <Filter>CMake Rules</Filter>
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="CMake Rules">
-      <UniqueIdentifier>{6805AA0D-6733-3FF5-887A-CC76BED7C628}</UniqueIdentifier>
+      <UniqueIdentifier>{1B4DB887-9931-31FD-B85A-FB49FF0BB640}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>

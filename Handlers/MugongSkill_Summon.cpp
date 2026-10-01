@@ -205,37 +205,63 @@ void OnPetInfoReq(SOCKET clientSocket, BYTE* payload, WORD payloadSize)
     if (!g_MapInstances.count(dwMapID)) return;
     CMapInstance* mapInst = g_MapInstances[dwMapID];
 
-    std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-    PlayerData* pPet = mapInst->GetPlayer(dwObjectID);
-    if (!pPet) {
-        LOG("[PetInfo] Object " + std::to_string(dwObjectID) + " not found in map " + std::to_string(dwMapID));
-        return;
-    }
+    PlayerData petCopy;
+    bool isRealPet = false;
+    {
+        std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+        PlayerData* pPet = mapInst->GetPlayer(dwObjectID);
+        if (!pPet) {
+            LOG("[PetInfo] Object " + std::to_string(dwObjectID) + " not found in map " + std::to_string(dwMapID));
+            return;
+        }
 
-    bool isRealPet = (dwObjectID >= 800000000 && dwObjectID < 850000000);
-    if (!isRealPet && !pPet->bIsBunsin) {
-        LOG("[PetInfo] Object " + std::to_string(dwObjectID) + " is neither real pet nor bunsin");
-        return;
-    }
+        isRealPet = (dwObjectID >= 800000000 && dwObjectID < 850000000);
+        if (!isRealPet && !pPet->bIsBunsin) {
+            LOG("[PetInfo] Object " + std::to_string(dwObjectID) + " is neither real pet nor bunsin");
+            return;
+        }
+
+        petCopy = *pPet;
+    } // 此处锁必须释放，避免后续调用 SendSingleCharInfo 时重入死锁！
 
     std::string szPetName = "";
     if (isRealPet) {
-        DWORD dwPetID = dwObjectID - 800000000;
-        std::string q = "SELECT szName FROM CHAR_PET WHERE dwID = " + std::to_string(dwPetID);
-        DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
-            char nameBuf[32] = {0};
-            SQLGetData(hStmt, 1, SQL_C_CHAR, nameBuf, sizeof(nameBuf), NULL);
-            szPetName = nameBuf;
-        });
-        szPetName.erase(std::remove_if(szPetName.begin(), szPetName.end(), ::isspace), szPetName.end());
-        if (szPetName.empty()) szPetName = "Pet";
+        if (!petCopy.szName.empty()) {
+            szPetName = petCopy.szName;
+        } else {
+            DWORD dwPetID = dwObjectID - 800000000;
+            std::string q = "SELECT szName FROM CHAR_PET WHERE dwID = " + std::to_string(dwPetID);
+            DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+                char nameBuf[32] = {0};
+                SQLGetData(hStmt, 1, SQL_C_CHAR, nameBuf, sizeof(nameBuf), NULL);
+                szPetName = nameBuf;
+            });
+            szPetName.erase(std::remove_if(szPetName.begin(), szPetName.end(), ::isspace), szPetName.end());
+            if (szPetName.empty()) szPetName = "Pet";
+        }
     } else {
-        if (pPet->bNpcType == 250) {
+        if (petCopy.bNpcType == 250) {
             szPetName = "\xbb\xc3\xca\xde"; // "幻兽" 的 GBK 编码
         } else {
             szPetName = "Clone";
         }
     }
+
+    DWORD ownerClientObjID = petCopy.dwOwnerID;
+    if (ownerClientObjID < 800000000) {
+        if (ownerClientObjID < 400000000) {
+            ownerClientObjID += 800000000;
+        } else {
+            ownerClientObjID += 400000000;
+        }
+    }
+
+    // 关键时序保证：在向 clientSocket 发送 PETINFO_ACK 前，先推送主人的 CHARINFO
+    // 利用 TCP 的 FIFO 队列特性，确保客户端在收到并解析 PETINFO_ACK 时，
+    // 其本地对象管理器（g_XiahObjectManager）中已完整构建了主人 PC 实体，
+    // 从而防止客户端触发 if (!pOwner) return 0; 导致宠物模型被永久丢弃。
+    extern void SendSingleCharInfo(SOCKET clientSocket, DWORD reqObjectID, DWORD reqMapID);
+    SendSingleCharInfo(clientSocket, ownerClientObjID, dwMapID);
 
     // 组装 PETINFO_ACK (0x3538)
     std::vector<BYTE> buf(4);
@@ -250,47 +276,51 @@ void OnPetInfoReq(SOCKET clientSocket, BYTE* payload, WORD payloadSize)
 
     pushByte(0);                         // bResult = 0
     pushDWord(dwObjectID);               // dwID
-    pushByte(pPet->bNpcType);            // bNpcType
+    pushByte(petCopy.bNpcType);          // bNpcType
     pushDWord(dwMapID);                  // dwMapID
-    pushWord(pPet->wPosX);               // wPosX
-    pushWord(pPet->wPosY);               // wPosY
-    pushByte(pPet->bHeight);             // bHeight
+    pushWord(petCopy.wPosX);             // wPosX
+    pushWord(petCopy.wPosY);             // wPosY
+    pushByte(petCopy.bHeight);           // bHeight
     pushWord(0);                         // wDirection
     pushString(szPetName);               // szName
     pushByte(0);                         // bStatus = Stand
-    pushWord(pPet->wPosX);               // wDesPosX
-    pushWord(pPet->wPosY);               // wDesPosY
-    pushByte(pPet->bHeight);             // bDesHeight
-    pushDWord(pPet->dwHpMax);            // dwHpMax
-    pushDWord(pPet->dwHpCur);            // dwHpCur
-    pushByte(pPet->wWalkSpeed & 0xFF);   // bSpeed
-    pushDWord(pPet->dwOwnerID + 400000000); // dwOwnerID (转回800M格式)
-    pushByte(pPet->bRebirth);            // bRevolutionStep
+    pushWord(petCopy.wPosX);             // wDesPosX
+    pushWord(petCopy.wPosY);             // wDesPosY
+    pushByte(petCopy.bHeight);           // bDesHeight
+    pushDWord(petCopy.dwHpMax);          // dwHpMax
+    pushDWord(petCopy.dwHpCur);          // dwHpCur
+    pushByte(petCopy.wWalkSpeed & 0xFF); // bSpeed
+    pushDWord(ownerClientObjID);         // dwOwnerID (800M格式，匹配 client OBJTYPE_PC)
+    pushByte(petCopy.bRebirth);          // bRevolutionStep
 
     // wVisualID[6] —— 外观装备。如果是真实野生宠物，强制全充 0，避免客户端崩溃
     for (int i = 0; i < 6; i++) {
         if (isRealPet) {
             pushWord(0);
         } else {
-            pushWord(pPet->wBunsinVisualID[i]);
+            pushWord(petCopy.wBunsinVisualID[i]);
         }
     }
 
     PACKET_HEADER* head = (PACKET_HEADER*)buf.data();
     head->id = 0x3538; // CS_NC_PETINFO_ACK = OFFSET_CS_NC + 55
-    head->payloadSize = buf.size() - sizeof(PACKET_HEADER);
+    head->payloadSize = (WORD)(buf.size() - sizeof(PACKET_HEADER));
     EncryptPacket(buf.data(), 0x42);
     SafeSend(clientSocket, (const char*)buf.data(), buf.size(), 0);
 
-    if (isRealPet && pPet->bNeedTamingAck) {
+    DWORD clientCharID = SessionMgr::GetInstance().GetCharID(clientSocket);
+    if (isRealPet && petCopy.bNeedTamingAck && clientCharID == petCopy.dwOwnerID) {
         extern void SendTamingAck(SOCKET clientSocket, BYTE bResult, DWORD dwObjectID, BYTE bType);
         SendTamingAck(clientSocket, 0, dwObjectID, 0);
-        pPet->bNeedTamingAck = false; // 发送完立即抹除，保证一生只发送一次
+
+        std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+        PlayerData* pPet = mapInst->GetPlayer(dwObjectID);
+        if (pPet) pPet->bNeedTamingAck = false; // 发送完立即抹除，保证一生只发送一次
     }
 
     LOG("[PetInfo] Sent PETINFO_ACK for " + std::string(isRealPet ? "RealPet" : "Bunsin") + " ObjID=" + std::to_string(dwObjectID)
-        + " Name=" + szPetName + " HP=" + std::to_string(pPet->dwHpCur) + "/" + std::to_string(pPet->dwHpMax)
-        + " Owner=" + std::to_string(pPet->dwOwnerID));
+        + " Name=" + szPetName + " HP=" + std::to_string(petCopy.dwHpCur) + "/" + std::to_string(petCopy.dwHpMax)
+        + " Owner=" + std::to_string(ownerClientObjID));
 }
 
 void OnPetInfoListReq(SOCKET clientSocket, BYTE* payload, WORD payloadSize)
@@ -301,13 +331,121 @@ void OnPetInfoListReq(SOCKET clientSocket, BYTE* payload, WORD payloadSize)
     WORD wNumObject = *(WORD*)(payload + 4);
 
     if (payloadSize < 6 + wNumObject * 4) return;
+    if (!g_MapInstances.count(dwMapID)) return;
+    CMapInstance* mapInst = g_MapInstances[dwMapID];
 
+    std::vector<DWORD> reqObjIDs;
     for (WORD i = 0; i < wNumObject; ++i) {
-        DWORD dwObjectID = *(DWORD*)(payload + 6 + i * 4);
-        
-        BYTE tempPayload[8];
-        *(DWORD*)(tempPayload) = dwObjectID;
-        *(DWORD*)(tempPayload + 4) = dwMapID;
-        OnPetInfoReq(clientSocket, tempPayload, 8);
+        reqObjIDs.push_back(*(DWORD*)(payload + 6 + i * 4));
     }
+
+    struct PetEntry {
+        PlayerData pet;
+        std::string szName;
+        bool isRealPet;
+    };
+    std::vector<PetEntry> validPets;
+
+    {
+        std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+        for (DWORD dwObjectID : reqObjIDs) {
+            PlayerData* pPet = mapInst->GetPlayer(dwObjectID);
+            if (!pPet) continue;
+
+            bool isRealPet = (dwObjectID >= 800000000 && dwObjectID < 850000000);
+            if (!isRealPet && !pPet->bIsBunsin) continue;
+
+            PetEntry entry;
+            entry.pet = *pPet;
+            entry.isRealPet = isRealPet;
+            if (isRealPet) {
+                if (!pPet->szName.empty()) {
+                    entry.szName = pPet->szName;
+                } else {
+                    DWORD dwPetID = dwObjectID - 800000000;
+                    std::string q = "SELECT szName FROM CHAR_PET WHERE dwID = " + std::to_string(dwPetID);
+                    DBHelper::GetInstance().ExecuteQuery(q, [&](SQLHSTMT hStmt) {
+                        char nameBuf[32] = {0};
+                        SQLGetData(hStmt, 1, SQL_C_CHAR, nameBuf, sizeof(nameBuf), NULL);
+                        entry.szName = nameBuf;
+                    });
+                    entry.szName.erase(std::remove_if(entry.szName.begin(), entry.szName.end(), ::isspace), entry.szName.end());
+                    if (entry.szName.empty()) entry.szName = "Pet";
+                }
+            } else {
+                entry.szName = (pPet->bNpcType == 250) ? "\xbb\xc3\xca\xde" : "Clone";
+            }
+            validPets.push_back(entry);
+        }
+    }
+
+    // 先行推送战宠主人的 CHARINFO，确保客户端在收到战宠列表时已建立主人实体
+    extern void SendSingleCharInfo(SOCKET clientSocket, DWORD reqObjectID, DWORD reqMapID);
+    for (const auto& entry : validPets) {
+        DWORD ownerClientObjID = entry.pet.dwOwnerID;
+        if (ownerClientObjID < 800000000) {
+            if (ownerClientObjID < 400000000) ownerClientObjID += 800000000;
+            else ownerClientObjID += 400000000;
+        }
+        SendSingleCharInfo(clientSocket, ownerClientObjID, dwMapID);
+    }
+
+    // 组装并发送 CS_NC_PETINFOLIST_ACK (0x353C)
+    std::vector<BYTE> buf(4);
+    auto pushByte = [&](BYTE b) { buf.push_back(b); };
+    auto pushWord = [&](WORD w) { buf.push_back(w & 0xFF); buf.push_back((w >> 8) & 0xFF); };
+    auto pushDWord = [&](DWORD d) { buf.push_back(d & 0xFF); buf.push_back((d >> 8) & 0xFF); buf.push_back((d >> 16) & 0xFF); buf.push_back((d >> 24) & 0xFF); };
+    auto pushString = [&](const std::string& s) {
+        WORD len = (WORD)s.size();
+        pushWord(len);
+        buf.insert(buf.end(), s.begin(), s.end());
+    };
+
+    pushByte(0); // bResult = 0
+    pushDWord(dwMapID); // dwMapID
+    pushWord((WORD)validPets.size()); // wNumID
+
+    for (const auto& entry : validPets) {
+        const PlayerData& pet = entry.pet;
+        pushDWord(pet.dwObjectID);
+        pushByte(pet.bNpcType);
+        pushDWord(dwMapID);
+        pushWord(pet.wPosX);
+        pushWord(pet.wPosY);
+        pushByte(pet.bHeight);
+        pushWord(0); // wDirection
+        pushString(entry.szName);
+        pushByte(0); // bStatus
+        pushWord(pet.wPosX); // wDesPosX
+        pushWord(pet.wPosY); // wDesPosY
+        pushByte(pet.bHeight); // bDesHeight
+        pushDWord(pet.dwHpMax);
+        pushDWord(pet.dwHpCur);
+        pushByte(pet.wWalkSpeed & 0xFF);
+
+        DWORD ownerClientObjID = pet.dwOwnerID;
+        if (ownerClientObjID < 800000000) {
+            if (ownerClientObjID < 400000000) ownerClientObjID += 800000000;
+            else ownerClientObjID += 400000000;
+        }
+        pushDWord(ownerClientObjID);
+
+        pushByte(pet.bRebirth);
+        for (int v = 0; v < 6; v++) {
+            if (entry.isRealPet) {
+                pushWord(0);
+            } else {
+                pushWord(pet.wBunsinVisualID[v]);
+            }
+        }
+    }
+
+    PACKET_HEADER* head = (PACKET_HEADER*)buf.data();
+    head->id = 0x353C; // CS_NC_PETINFOLIST_ACK = OFFSET_CS_NC + 59
+    head->payloadSize = (WORD)(buf.size() - sizeof(PACKET_HEADER));
+    EncryptPacket(buf.data(), 0x42);
+    SafeSend(clientSocket, (const char*)buf.data(), buf.size(), 0);
+
+    LOG("[PetInfo] Sent PETINFOLIST_ACK (0x353C) with " + std::to_string(validPets.size()) + " pets for map " + std::to_string(dwMapID));
 }
+

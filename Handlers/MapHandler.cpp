@@ -219,13 +219,15 @@ void OnMapEnterReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
 
             dbIpCur = cpMap.wIpCur; dbIpMax = cpMap.wIpMax;
 
+            pObj->wLevel = (cpMap.wLevel > 0) ? cpMap.wLevel : 1;
+
         }
 
         pObj->dwHpMax = (dbHpMax > 0) ? dbHpMax : 60000;
         pObj->dwHpCur = (dbHpCur > 0) ? dbHpCur : pObj->dwHpMax;
         pObj->wIpMax = (dbIpMax > 0) ? dbIpMax : 100;
         pObj->wIpCur = (dbIpCur > 0) ? dbIpCur : pObj->wIpMax;
-        LOG("[MapHandler] Initialized player HP/IP from DB: HpCur=" + std::to_string(pObj->dwHpCur) + "/" + std::to_string(pObj->dwHpMax) + " IpCur=" + std::to_string(pObj->wIpCur) + "/" + std::to_string(pObj->wIpMax));
+        LOG("[MapHandler] Initialized player HP/IP/Level from DB: Lvl=" + std::to_string(pObj->wLevel) + " HpCur=" + std::to_string(pObj->dwHpCur) + "/" + std::to_string(pObj->dwHpMax) + " IpCur=" + std::to_string(pObj->wIpCur) + "/" + std::to_string(pObj->wIpMax));
 
         // 从 DB 加载五行数据到内存玩家实体
         CharacterDB::ExpData expData;
@@ -464,6 +466,7 @@ void OnMapEnterReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
 
             // Broadcast MAPENTER_ACK (0x3502) to the map so the client draws it
             std::vector<BYTE> enterBuf(4);
+            enterBuf.push_back(0); // bResult = 0
             auto pushDWord = [&](DWORD d) { enterBuf.push_back(d&0xFF); enterBuf.push_back((d>>8)&0xFF); enterBuf.push_back((d>>16)&0xFF); enterBuf.push_back(d>>24); };
             auto pushWord = [&](WORD w) { enterBuf.push_back(w&0xFF); enterBuf.push_back(w>>8); };
             
@@ -1088,199 +1091,117 @@ void OnImReadyReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSi
 
 
 void OnCharStatusInfoReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
-
     DWORD dwActualCharID = SessionMgr::GetInstance().GetCharID(clientSocket);
-
     LOG("[MapHandler] Received CS_IT_CHARSTATUSINFO_REQ (0x442B) for charID: " + std::to_string(dwActualCharID));
-
     if (dwActualCharID != 0) {
-
         UpdatePlayerStatsAndSend(clientSocket, dwActualCharID);
-
     }
-
 }
 
-
-
-// Handler for CS_IT_CHARINFO_REQ (0x440F) 锟?single character info request
-
-// Client sends this via ValidateObject when it sees a movement packet for an unknown player.
-
-// We respond with CHARINFOLIST_ACK (0x4412) format containing 1 player, since that format is proven to work.
-
-void OnCharInfoReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
-
-    if (totalSize < 8) return;
-
-    DWORD reqObjectID = *(DWORD*)(payload);
-
-    DWORD reqMapID = *(DWORD*)(payload + 4);
-
-    
-
-    LOG("[MapHandler] OnCharInfoReq: client requesting info for ObjectID=" + std::to_string(reqObjectID) + " map=" + std::to_string(reqMapID));
-
-    
+void SendSingleCharInfo(SOCKET clientSocket, DWORD reqObjectID, DWORD reqMapID) {
+    LOG("[MapHandler] SendSingleCharInfo: client requesting info for ObjectID=" + std::to_string(reqObjectID) + " map=" + std::to_string(reqMapID));
 
     if (!g_MapInstances.count(reqMapID)) return;
-
     CMapInstance* mapInst = g_MapInstances[reqMapID];
 
-    
-
     sServerObject objCopy;
-
     bool found = false;
-
     {
-
         std::lock_guard<std::mutex> lock(mapInst->GetMutex());
-
         sServerObject* pObj = mapInst->GetPlayer(reqObjectID);
-
-        if (pObj) { objCopy = *pObj; found = true; }
-
+        if (!pObj && reqObjectID < 800000000) pObj = mapInst->GetPlayer(reqObjectID + 400000000);
+        if (!pObj && reqObjectID >= 800000000) pObj = mapInst->GetPlayer(reqObjectID - 400000000);
+        if (pObj) {
+            objCopy = *pObj;
+            if (objCopy.dwObjectID < 800000000) {
+                if (objCopy.dwObjectID < 400000000) objCopy.dwObjectID += 800000000;
+                else objCopy.dwObjectID += 400000000;
+            }
+            found = true;
+        }
     }
 
     if (!found) {
-
-        LOG("[MapHandler] OnCharInfoReq: ObjectID=" + std::to_string(reqObjectID) + " NOT FOUND on map " + std::to_string(reqMapID));
-
+        LOG("[MapHandler] SendSingleCharInfo: ObjectID=" + std::to_string(reqObjectID) + " NOT FOUND on map " + std::to_string(reqMapID));
         return;
-
     }
 
-    
-
-    // Use CHARINFOLIST_ACK (0x4412) format with count=1 锟?this format is proven to work
-
+    // Use CHARINFOLIST_ACK (0x4412) format with count=1
     std::vector<BYTE> ackBuf; ackBuf.reserve(256);
-
     ackBuf.push_back(0); // bResult = success
 
-    
-
     auto pushDWord = [&](DWORD d) { ackBuf.push_back(d & 0xFF); ackBuf.push_back((d>>8)&0xFF); ackBuf.push_back((d>>16)&0xFF); ackBuf.push_back((d>>24)&0xFF); };
-
     auto pushWord = [&](WORD w) { ackBuf.push_back(w & 0xFF); ackBuf.push_back((w>>8)&0xFF); };
-
     auto pushByte = [&](BYTE b) { ackBuf.push_back(b); };
-
     auto pushString = [&](const std::string& str) {
-
         WORD len = (WORD)(str.length() + 1); // +1 含 null terminator
-
         pushWord(len);
-
         for (char c : str) pushByte(c);
-
         pushByte(0); // null terminator
-
     };
 
-    
-
     pushDWord(reqMapID);  // dwMapID (outer)
-
     pushWord(1);          // wObjectNum = 1
 
-    
-
     // Single player entry (same format as OnCharInfoListReq)
-
     pushDWord(objCopy.dwObjectID);
-
     pushWord(objCopy.wPosX); pushWord(objCopy.wPosY); pushByte(objCopy.bHeight);
-
     if (objCopy.bIsMoving) {
-
         pushWord(objCopy.wMoveDesX); pushWord(objCopy.wMoveDesY); pushByte(objCopy.bMoveDesH);
-
     } else {
-
         pushWord(objCopy.wPosX); pushWord(objCopy.wPosY); pushByte(objCopy.bHeight);
-
     }
-
     pushByte(objCopy.wWalkSpeed & 0xFF);
-
     pushWord(0); // wDirection
-
     pushByte(0); // bState
-
     pushByte(objCopy.bPropType); // bCharType
-
     pushString(objCopy.szName);
-
     pushDWord(objCopy.dwFame); // dwFame
-
     pushByte(objCopy.bShopStatus); // bShopStatus
-
     pushString(objCopy.strShopName); // strShopName
-
     pushString(objCopy.strShopDescription); // strShopDescription
-
     pushByte(0); // bSemiPKStatus
-
     pushByte(objCopy.bCurFiveElm); // bCurFiveElm
     pushByte(objCopy.bFELevel); // bFELevel
-
     pushByte(0); // bInstanceCnt
-
     pushByte(0); // bChangeItemSet
-
     pushDWord(objCopy.dwMunpaID); // dwMunpaID
 
-    // 客户端 if(dwMunpaID) 条件分支
     if (objCopy.dwMunpaID > 0) {
-        pushString(objCopy.szMunpaName);     // szMunpaName
-        pushDWord(objCopy.dwMunpaOrder);     // dwMunpaOrder
-        pushString(objCopy.szMunpaNickName); // szMunpaNickName
-        pushDWord(objCopy.dwMunpaMarkID);    // dwMunpaMarkID
-        pushByte(0);                         // bWarStatus (0=无战争)
+        pushString(objCopy.szMunpaName);
+        pushDWord(objCopy.dwMunpaOrder);
+        pushString(objCopy.szMunpaNickName);
+        pushDWord(objCopy.dwMunpaMarkID);
+        pushByte(0);
     }
 
     pushDWord(0); // dwPartyID
-
     for(int i=0; i<9; i++) {
-
         pushWord(objCopy.wVisualID[i]); 
-
-        pushByte(objCopy.bRarity[i]); 
-
-        pushByte(objCopy.bStxType[i]); 
-
+        pushByte(objCopy.bRarity[i]);
+        pushByte(objCopy.bStxType[i]);
         pushByte(objCopy.bNeedCharType[i]);
-
     }
-
-    pushByte(objCopy.bRebirth); // bRebirth（从 CHAR_BASIC 加载的觉醒次数）
-
-    pushByte(0); // bPoisonUnderCover
-
-    pushDWord(0); // bwGMMark
-
-    
+    pushByte(objCopy.bRebirth);
+    pushByte(0);
+    pushDWord(0);
 
     std::vector<BYTE> fullAck; fullAck.resize(4);
-
     fullAck.insert(fullAck.end(), ackBuf.begin(), ackBuf.end());
-
     PACKET_HEADER* ah = (PACKET_HEADER*)fullAck.data();
-
-    ah->id = 0x4412;   // CS_IT_CHARINFOLIST_ACK (proven format!)
-
+    ah->id = 0x4412;   // CS_IT_CHARINFOLIST_ACK
     ah->payloadSize = (WORD)ackBuf.size();
-
     EncryptPacket(fullAck.data(), 0x42);
-
     SafeSend(clientSocket, (const char*)fullAck.data(), fullAck.size(), 0);
 
-    
-
     LOG("[MapHandler] Sent CHARINFOLIST_ACK (0x4412) for single ObjectID=" + std::to_string(reqObjectID) + " at (" + std::to_string(objCopy.wPosX) + "," + std::to_string(objCopy.wPosY) + ") moving=" + std::to_string(objCopy.bIsMoving) + " bCharType=" + std::to_string(objCopy.bPropType) + " name=" + objCopy.szName);
+}
 
+void OnCharInfoReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalSize) {
+    if (totalSize < 8) return;
+    DWORD reqObjectID = *(DWORD*)(payload);
+    DWORD reqMapID = *(DWORD*)(payload + 4);
+    SendSingleCharInfo(clientSocket, reqObjectID, reqMapID);
 }
 
 
@@ -1460,6 +1381,59 @@ void OnCharInfoListReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD to
     SafeSend(clientSocket, (const char*)fullAck.data(), fullAck.size(), 0);
 
     LOG("[MapHandler] Sent PC Info List for Map " + std::to_string(reqMapID) + " count: " + std::to_string(count));
+
+    // 补推视野内活跃战宠的 MAPENTER_ACK (0x3502) 给刚同步完角色模型的客户端，确保其即时触发并获取战宠外观
+    if (g_MapInstances.count(reqMapID)) {
+        CMapInstance* mapInst = g_MapInstances[reqMapID];
+        DWORD myCharID = SessionMgr::GetInstance().GetCharID(clientSocket);
+        std::vector<PlayerData> petsToSend;
+        {
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            sServerObject* myObj = mapInst->GetPlayer(myCharID + 400000000);
+            if (!myObj && myCharID < 800000000) myObj = mapInst->GetPlayer(myCharID + 800000000);
+            if (!myObj) myObj = mapInst->GetPlayer(myCharID);
+
+            int myX = myObj ? myObj->wPosX : 0;
+            int myY = myObj ? myObj->wPosY : 0;
+
+            for (auto& pair : mapInst->GetPlayers()) {
+                auto& p = pair.second;
+                if (p.bObjectType == 4 && p.dwHpCur > 0) { // 战宠/分身
+                    if (myObj) {
+                        int dx = p.wPosX - myX;
+                        int dy = p.wPosY - myY;
+                        if (dx * dx + dy * dy > 150 * 150) continue;
+                    }
+                    petsToSend.push_back(p);
+                }
+            }
+        }
+
+        for (const auto& pet : petsToSend) {
+            std::vector<BYTE> enterBuf(4);
+            enterBuf.push_back(0); // bResult = 0
+            auto pushDWord = [&](DWORD d) { enterBuf.push_back(d & 0xFF); enterBuf.push_back((d >> 8) & 0xFF); enterBuf.push_back((d >> 16) & 0xFF); enterBuf.push_back(d >> 24); };
+            auto pushWord = [&](WORD w) { enterBuf.push_back(w & 0xFF); enterBuf.push_back((w >> 8) & 0xFF); };
+
+            pushDWord(reqMapID);
+            pushDWord(pet.dwObjectID);
+            enterBuf.push_back(4); // bObjectType = 4 (PET)
+            pushWord(pet.wPosX);
+            pushWord(pet.wPosY);
+            enterBuf.push_back(pet.bHeight);
+            pushWord(0); // wDirection
+            enterBuf.push_back(0); // bStatus = Stand (0)
+            enterBuf.push_back(pet.wWalkSpeed & 0xFF);
+
+            PACKET_HEADER* enterHead = (PACKET_HEADER*)enterBuf.data();
+            enterHead->id = 0x3502; // CS_NC_MAPENTER_ACK
+            enterHead->payloadSize = (WORD)(enterBuf.size() - sizeof(PACKET_HEADER));
+            EncryptPacket(enterBuf.data(), 0x42);
+            SafeSend(clientSocket, (const char*)enterBuf.data(), enterBuf.size(), 0);
+
+            LOG("[MapHandler] Pushed active pet ObjID=" + std::to_string(pet.dwObjectID) + " to client after PC Info List");
+        }
+    }
 
 
 

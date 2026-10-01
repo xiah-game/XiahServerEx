@@ -234,7 +234,10 @@ void CMapInstance::Update(DWORD tick) {
                 }
                 if (!isInCombat) {
                     int dist = std::abs((int)pl.wPosX - (int)owner.wPosX) + std::abs((int)pl.wPosY - (int)owner.wPosY);
-                    if (dist >= 18) {
+                    // 业务设计意图：非战斗状态下，宠物的正常跟随移动完全由主人客户端 PetAI 自主平滑导航并向服务端上报（0x3507/0x3509/0x350B）。
+                    // 服务端不再执行每秒强行+1格并广播0x430C/0x4310急刹车的冲突位移，彻底消除闪跳与抽搐！
+                    // 仅在极端脱节（如主人传送卷轴/换地图/距离超过50格）时执行兜底拉回同步。
+                    if (dist >= 50) {
                         int oldX = pl.wPosX; int oldY = pl.wPosY;
                         int gridIdxOld = GetGridIndex(oldX, oldY);
                         if (gridIdxOld >= 0) RemoveFromGrid(m_playerGrid, gridIdxOld, pl.dwObjectID);
@@ -242,82 +245,21 @@ void CMapInstance::Update(DWORD tick) {
                         pl.fPosX = (float)pl.wPosX; pl.fPosY = (float)pl.wPosY;
                         int gridIdxNew = GetGridIndex(pl.wPosX, pl.wPosY);
                         if (gridIdxNew >= 0) AddToGrid(m_playerGrid, gridIdxNew, pl.dwObjectID);
-                        std::vector<BYTE> leaveBuf; leaveBuf.resize(4);
-                        leaveBuf.push_back(0);
-                        leaveBuf.push_back(pl.dwObjectID & 0xFF); leaveBuf.push_back((pl.dwObjectID >> 8) & 0xFF);
-                        leaveBuf.push_back((pl.dwObjectID >> 16) & 0xFF); leaveBuf.push_back(pl.dwObjectID >> 24);
-                        leaveBuf.push_back(4);
-                        leaveBuf.push_back(m_dwMapID & 0xFF); leaveBuf.push_back((m_dwMapID >> 8) & 0xFF);
-                        leaveBuf.push_back((m_dwMapID >> 16) & 0xFF); leaveBuf.push_back(m_dwMapID >> 24);
-                        leaveBuf.push_back(0);
-                        PACKET_HEADER* lh = (PACKET_HEADER*)leaveBuf.data();
-                        lh->id = 0x3506; lh->payloadSize = leaveBuf.size() - 4;
-                        EncryptPacket(leaveBuf.data(), 0x42);
-                        BroadcastPacketAOI_NoLock(oldX, oldY, leaveBuf);
-                        std::vector<BYTE> enterBuf; enterBuf.resize(4);
-                        enterBuf.push_back(0);
-                        enterBuf.push_back(m_dwMapID & 0xFF); enterBuf.push_back((m_dwMapID >> 8) & 0xFF);
-                        enterBuf.push_back((m_dwMapID >> 16) & 0xFF); enterBuf.push_back(m_dwMapID >> 24);
-                        enterBuf.push_back(pl.dwObjectID & 0xFF); enterBuf.push_back((pl.dwObjectID >> 8) & 0xFF);
-                        enterBuf.push_back((pl.dwObjectID >> 16) & 0xFF); enterBuf.push_back(pl.dwObjectID >> 24);
-                        enterBuf.push_back(4);
-                        enterBuf.push_back(pl.wPosX & 0xFF); enterBuf.push_back(pl.wPosX >> 8);
-                        enterBuf.push_back(pl.wPosY & 0xFF); enterBuf.push_back(pl.wPosY >> 8);
-                        enterBuf.push_back(pl.bHeight);
-                        enterBuf.push_back(0); enterBuf.push_back(0);
-                        enterBuf.push_back(0);
-                        enterBuf.push_back(pl.wWalkSpeed & 0xFF);
-                        PACKET_HEADER* eh = (PACKET_HEADER*)enterBuf.data();
-                        eh->id = 0x3502; eh->payloadSize = enterBuf.size() - 4;
-                        EncryptPacket(enterBuf.data(), 0x42);
-                        BroadcastPacketAOI_NoLock(pl.wPosX, pl.wPosY, enterBuf);
-                    }
-                    else if (dist > 2) {
-                        if (tick - pl.dwLastPetMoveTime >= 1000) {
-                            pl.dwLastPetMoveTime = tick;
-                            int oldX = pl.wPosX; int oldY = pl.wPosY;
-                            int gridIdxOld = GetGridIndex(oldX, oldY);
-                            if (gridIdxOld >= 0) RemoveFromGrid(m_playerGrid, gridIdxOld, pl.dwObjectID);
-                            int stepX = (owner.wPosX > pl.wPosX) ? 1 : ((owner.wPosX < pl.wPosX) ? -1 : 0);
-                            int stepY = (owner.wPosY > pl.wPosY) ? 1 : ((owner.wPosY < pl.wPosY) ? -1 : 0);
-                            pl.wPosX += stepX; pl.wPosY += stepY;
-                            pl.fPosX = (float)pl.wPosX; pl.fPosY = (float)pl.wPosY;
-                            int gridIdxNew = GetGridIndex(pl.wPosX, pl.wPosY);
-                            if (gridIdxNew >= 0) AddToGrid(m_playerGrid, gridIdxNew, pl.dwObjectID);
-                            float angle = std::atan2((float)stepY, (float)stepX) * 180.0f / 3.14159265f;
-                            if (angle < 0) angle += 360.0f;
-                            WORD wDirection = (WORD)angle;
-                            std::vector<BYTE> moveBuf; moveBuf.resize(4);
-                            moveBuf.push_back(0);
-                            moveBuf.push_back(pl.dwObjectID & 0xFF); moveBuf.push_back((pl.dwObjectID >> 8) & 0xFF);
-                            moveBuf.push_back((pl.dwObjectID >> 16) & 0xFF); moveBuf.push_back((pl.dwObjectID >> 24) & 0xFF);
-                            moveBuf.push_back(pl.wPosX & 0xFF); moveBuf.push_back(pl.wPosX >> 8);
-                            moveBuf.push_back(pl.wPosY & 0xFF); moveBuf.push_back(pl.wPosY >> 8);
-                            moveBuf.push_back(pl.bHeight);
-                            moveBuf.push_back(owner.wPosX & 0xFF); moveBuf.push_back(owner.wPosX >> 8);
-                            moveBuf.push_back(owner.wPosY & 0xFF); moveBuf.push_back(owner.wPosY >> 8);
-                            moveBuf.push_back(owner.bHeight);
-                            moveBuf.push_back(wDirection & 0xFF); moveBuf.push_back(wDirection >> 8);
-                            moveBuf.push_back(1);
-                            moveBuf.push_back(pl.wWalkSpeed & 0xFF);
-                            moveBuf.push_back(0);
-                            PACKET_HEADER* moveHead = (PACKET_HEADER*)moveBuf.data();
-                            moveHead->id = 0x430C; moveHead->payloadSize = moveBuf.size() - 4;
-                            EncryptPacket(moveBuf.data(), 0x42);
-                            BroadcastPacketAOI_NoLock(pl.wPosX, pl.wPosY, moveBuf);
-                            std::vector<BYTE> stopBuf; stopBuf.resize(4);
-                            stopBuf.push_back(0);
-                            stopBuf.push_back(pl.dwObjectID & 0xFF); stopBuf.push_back((pl.dwObjectID >> 8) & 0xFF);
-                            stopBuf.push_back((pl.dwObjectID >> 16) & 0xFF); stopBuf.push_back((pl.dwObjectID >> 24) & 0xFF);
-                            stopBuf.push_back(pl.wPosX & 0xFF); stopBuf.push_back(pl.wPosX >> 8);
-                            stopBuf.push_back(pl.wPosY & 0xFF); stopBuf.push_back(pl.wPosY >> 8);
-                            stopBuf.push_back(pl.bHeight);
-                            stopBuf.push_back(wDirection & 0xFF); stopBuf.push_back(wDirection >> 8);
-                            PACKET_HEADER* stopHead = (PACKET_HEADER*)stopBuf.data();
-                            stopHead->id = 0x4310; stopHead->payloadSize = stopBuf.size() - 4;
-                            EncryptPacket(stopBuf.data(), 0x42);
-                            BroadcastPacketAOI_NoLock(pl.wPosX, pl.wPosY, stopBuf);
-                        }
+
+                        std::vector<BYTE> stopBuf; stopBuf.resize(4, 0);
+                        stopBuf.push_back(0); // bResult
+                        stopBuf.push_back(pl.dwObjectID & 0xFF); stopBuf.push_back((pl.dwObjectID >> 8) & 0xFF);
+                        stopBuf.push_back((pl.dwObjectID >> 16) & 0xFF); stopBuf.push_back((pl.dwObjectID >> 24) & 0xFF);
+                        stopBuf.push_back(4); // OBJTYPE_PET
+                        stopBuf.push_back(pl.wPosX & 0xFF); stopBuf.push_back(pl.wPosX >> 8);
+                        stopBuf.push_back(pl.wPosY & 0xFF); stopBuf.push_back(pl.wPosY >> 8);
+                        stopBuf.push_back(pl.bHeight);
+                        stopBuf.push_back(0); // bStatus
+                        PACKET_HEADER* stopHead = (PACKET_HEADER*)stopBuf.data();
+                        stopHead->id = 0x350C; stopHead->payloadSize = (WORD)(stopBuf.size() - 4);
+                        EncryptPacket(stopBuf.data(), 0x42);
+                        BroadcastPacketAOI_NoLock(pl.wPosX, pl.wPosY, stopBuf);
+                        LOG("[PetSync] Master far away (dist=" + std::to_string(dist) + "), warped pet " + std::to_string(pl.dwObjectID) + " to master at (" + std::to_string(pl.wPosX) + "," + std::to_string(pl.wPosY) + ")");
                     }
                 }
             }
@@ -490,7 +432,7 @@ void CMapInstance::ProcessSingleGroundEffect(DWORD tick, sGroundEffect& ge) {
     // 1. 搜索范围内所有怪物，结算毒雾伤害，并挂载中毒 Debuff
     std::vector<MonsterData*> nearbyMonsters = GetMonstersInAOI(ge.wPosX, ge.wPosY);
     for (MonsterData* pMon : nearbyMonsters) {
-        if (!pMon || pMon->dwHpCur == 0) continue;
+        if (!pMon || pMon->dwHpCur == 0 || IsGatherResource(pMon->bPropType)) continue;
         float dx = (float)pMon->wPosX - (float)ge.wPosX;
         float dy = (float)pMon->wPosY - (float)ge.wPosY;
         if (sqrtf(dx * dx + dy * dy) > ge.fRadius) continue;
@@ -882,6 +824,7 @@ int CMapInstance::FindFurthestVisibleWaypoint(int curX, int curY, const std::vec
 
 void CMapInstance::ProcessMonsterAI(DWORD tick, MonsterData& obj) {
     if (obj.bObjectType != 3) return; // Monster only
+    if (IsGatherResource(obj.bPropType)) return; // 采集资源静态实体，不跑AI，不移动不攻击
     sNpcTemplate& tpl = g_NpcTemplates[obj.bPropType];
     if (tpl.dwHpInit == 0) return; // Missing template
 
@@ -2394,8 +2337,20 @@ void CMapInstance::HandleMonsterDoTDeath(DWORD tick, MonsterData& obj, DWORD cas
 
     LOG("[DoT-Death] Monster " + std::to_string(obj.dwObjectID) + " (PropType=" + std::to_string((int)obj.bPropType) + ") died from skill " + std::to_string(dwMugongID) + " by Caster " + std::to_string(casterID));
 
-    // 1. 生成怪物掉落物品
-    DropManager::GetInstance()->GenerateDrops(casterID, obj);
+    // 1. 生成怪物掉落物品：若施法者为战宠/召唤物(800000000~850000000)，掉落归属权赋给主人
+    DWORD actualKillerCharID = 0;
+    DWORD actualDropCasterID = casterID;
+    if (casterID >= 800000000 && casterID < 850000000) {
+        PlayerData* pPet = GetPlayer(casterID);
+        if (pPet && pPet->dwOwnerID > 0) {
+            actualKillerCharID = pPet->dwOwnerID;
+            actualDropCasterID = actualKillerCharID + 400000000;
+        }
+    } else if (casterID >= 400000000 && casterID < 800000000) {
+        actualKillerCharID = casterID - 400000000;
+    }
+
+    DropManager::GetInstance()->GenerateDrops(actualDropCasterID, obj);
 
     // 2. 广播 0x3510 死亡动作包。这非常关键，客户端在此包里处理 NPCSTATUS_DIE 并丢弃选中目标、关闭目标面板
     std::vector<BYTE> animBuf;
@@ -2418,27 +2373,13 @@ void CMapInstance::HandleMonsterDoTDeath(DWORD tick, MonsterData& obj, DWORD cas
     BroadcastPacketAOI_NoLock(obj.wPosX, obj.wPosY, animBuf);
 
     // 3. 结算击杀经验与五行经验给施法者玩家，并处理潜在的升级属性同步
-    DWORD attackerCharID = casterID - 400000000;
-    if (attackerCharID > 0 && attackerCharID < 400000000) {
+    if (actualKillerCharID > 0 && actualKillerCharID < 400000000) {
         DWORD deadExp = obj.dwExp;
         DWORD targetFiveElmExp = g_NpcTemplates.count(obj.bPropType) ? g_NpcTemplates[obj.bPropType].wFiveElmExp : 0;
         targetFiveElmExp += obj.wIncFiveElmExp;
 
-        bool needRefresh = GrantExpToPlayer(attackerCharID, deadExp, targetFiveElmExp);
-        if (needRefresh) {
-            SOCKET clientSocket = SessionMgr::GetInstance().GetSocketByCharID(attackerCharID);
-            if (clientSocket != INVALID_SOCKET && clientSocket != 0) {
-                UpdatePlayerStatsAndSend(clientSocket, attackerCharID);
-
-                // 升级后将在场角色的 HP/IP 回满并刷新数据库状态
-                DWORD dwObjID = attackerCharID + 400000000;
-                PlayerData* pCaster = GetPlayer(dwObjID);
-                if (pCaster) {
-                    pCaster->dwHpCur = pCaster->dwHpMax;
-                    pCaster->wIpCur = pCaster->wIpMax;
-                }
-                CharacterDB::GetInstance().RestoreHpIpToMax(attackerCharID);
-            }
-        }
+        // 统一调用队伍经验分配逻辑（包含同地图与50格距离严格校验，以及升级广播）
+        DistributePartyExp(actualKillerCharID, deadExp, targetFiveElmExp, m_dwMapID, obj.wPosX, obj.wPosY, true /* callerHoldsMapLock */);
     }
 }
+

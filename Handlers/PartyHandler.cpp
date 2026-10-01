@@ -3,6 +3,7 @@
 #include "../Network/PacketRouter.h"
 #include "../Network/SessionMgr.h"
 #include "../GameObjects/MapInstance.h"
+#include "../DB/CharacterDB.h"
 #include <cstring>
 
 extern std::map<DWORD, CMapInstance*> g_MapInstances;
@@ -23,19 +24,32 @@ static PartyMemberInfo BuildMemberInfo(DWORD dwCharID, BYTE bPriority) {
     info.dwMaxHp = 0;
     info.dwMapID = 0;
 
-    // Find player data from map instances
+    // 1. 先尝试从数据库直接获取确切的角色等级、名称与HP上限，确保绝不发错1级
+    CharacterDB::CharPower cp;
+    if (CharacterDB::GetInstance().GetCharData(dwCharID, cp)) {
+        info.wLevel = (cp.wLevel > 0) ? cp.wLevel : 1;
+        info.dwCurHp = cp.dwHpCur;
+        info.dwMaxHp = (cp.dwHpMax > 0) ? cp.dwHpMax : 60000;
+    }
+    std::string vizName;
+    BYTE vizType = 0;
+    if (CharacterDB::GetInstance().GetCharVisual(dwCharID, vizName, vizType)) {
+        info.szName = vizName;
+    }
+
+    // 2. 然后用在线地图中的实时数据覆盖（如实时坐标、动态血量、最新等级）
     for (auto& pair : g_MapInstances) {
         CMapInstance* mapInst = pair.second;
         if (!mapInst) continue;
         std::lock_guard<std::mutex> lock(mapInst->GetMutex());
         sServerObject* player = mapInst->GetPlayer(info.dwObjectID);
         if (player) {
-            info.szName = player->szName;
-            info.wLevel = player->wLevel;
+            if (!player->szName.empty()) info.szName = player->szName;
+            if (player->wLevel > 0) info.wLevel = player->wLevel;
             info.wPosX = player->wPosX;
             info.wPosY = player->wPosY;
-            info.dwCurHp = player->dwHpCur;
-            info.dwMaxHp = player->dwHpMax;
+            if (player->dwHpCur > 0) info.dwCurHp = player->dwHpCur;
+            if (player->dwHpMax > 0) info.dwMaxHp = player->dwHpMax;
             info.dwMapID = player->dwMapID;
             break;
         }
@@ -297,6 +311,12 @@ void OnInvitePartyReq(SOCKET clientSocket, DWORD dwCharID, BYTE* pPayload, WORD 
             return;
         }
 
+        // Check if party is full
+        if (PartyManager::GetInstance().GetMembers(partyID).size() >= MAX_PARTY_MEMBERS) {
+            SendInvitePartyAck(clientSocket, dwAskID, dwAskedID, 8);
+            return;
+        }
+
         // Check if target already in a party
         if (PartyManager::GetInstance().GetPartyID(dwAskedCharID) != 0) {
             SendInvitePartyAck(clientSocket, dwAskID, dwAskedID, 8);
@@ -485,7 +505,7 @@ bool PartyManager::AddMember(DWORD dwPartyID, const PartyMemberInfo& member) {
 
     if (m_charToParty.count(member.dwCharID)) return false;
     if (!m_parties.count(dwPartyID)) return false;
-    if (m_parties[dwPartyID].size() >= 5) return false; // Max 5 members
+    if (m_parties[dwPartyID].size() >= MAX_PARTY_MEMBERS) return false; // Max 8 members
 
     m_parties[dwPartyID].push_back(member);
     m_charToParty[member.dwCharID] = dwPartyID;
@@ -637,3 +657,31 @@ void OnPartyShareReq(SOCKET clientSocket, DWORD dwCharID, BYTE* pPayload, WORD w
         }
     }
 }
+
+void PartyManager::BroadcastMemberPosition(DWORD dwCharID, WORD wLevel, DWORD dwHpCur, DWORD dwHpMax, DWORD dwMapID, WORD wPosX, WORD wPosY) {
+    DWORD partyID = GetPartyID(dwCharID);
+    if (partyID == 0) return;
+
+    auto members = GetMembers(partyID);
+    if (members.size() <= 1) return;
+
+    DWORD dwObjID = dwCharID + 400000000;
+    std::vector<BYTE> payload;
+    pushDWord(payload, partyID);
+    pushDWord(payload, dwObjID);
+    pushWord(payload, wLevel);
+    pushDWord(payload, dwHpCur);
+    pushDWord(payload, dwHpMax);
+    pushDWord(payload, dwMapID);
+    pushWord(payload, wPosX);
+    pushWord(payload, wPosY);
+
+    for (auto& m : members) {
+        if (m.dwCharID == dwCharID) continue; // skip self
+        SOCKET mSocket = SessionMgr::GetInstance().GetSocketByCharID(m.dwCharID);
+        if (mSocket != INVALID_SOCKET) {
+            SendPacket(mSocket, PKT_PARTYPOSITION_ACK, payload);
+        }
+    }
+}
+

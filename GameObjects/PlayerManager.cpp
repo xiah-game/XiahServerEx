@@ -55,6 +55,7 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket, bool sendI
     // 2. Fetch equipment stats from DB
     int equipAtk=0, equipDef=0, equipMag=0, equipSpd=0, equipAtkSpd=0, equipCrit=0, equipHp=0, equipIp=0, equipRestoreHp=0, equipRestoreIp=0;
     int equippedWeaponKind = -1; // 记录装备的武器子类型
+    WORD equippedWeaponRefID = 0;
     bool ignoreDefFE = false;
     bool ignoreFE = false;
     std::vector<ItemDB::EquipStatRow> equipRows;
@@ -73,6 +74,7 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket, bool sendI
         }
         if (g_ItemTemplates.count(ref) && g_ItemTemplates[ref].bType == 1) {
             equippedWeaponKind = g_ItemTemplates[ref].bKind;
+            equippedWeaponRefID = ref;
         }
         if (d4 == -9999) d4 = (g_ItemTemplates.count(ref) ? g_ItemTemplates[ref].nData4 : 0);
         if (d5 == -9999) d5 = (g_ItemTemplates.count(ref) ? g_ItemTemplates[ref].nData5 : 0);
@@ -127,6 +129,19 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket, bool sendI
             pObj->bIgnoreDefFiveElm = ignoreDefFE;
             pObj->bIgnoreFiveElm = ignoreFE;
 
+            // 装备武器类型缓存更新
+            pObj->bEquippedWeaponType = (equippedWeaponKind != -1) ? 1 : 0;
+            pObj->bEquippedWeaponKind = (equippedWeaponKind != -1) ? (BYTE)equippedWeaponKind : 255;
+            pObj->wEquippedWeaponRefID = equippedWeaponRefID;
+
+            // 保存换装前的旧外观，用于精准差异比对（Diff Check），杜绝未改变槽位的冗余广播
+            WORD oldVisualID[9] = {0};
+            BYTE oldRarity[9] = {0};
+            BYTE oldStxType[9] = {0};
+            memcpy(oldVisualID, pObj->wVisualID, sizeof(oldVisualID));
+            memcpy(oldRarity, pObj->bRarity, sizeof(oldRarity));
+            memcpy(oldStxType, pObj->bStxType, sizeof(oldStxType));
+
             // Load visual equipment and fame from DB into memory
             CharacterDB::GetInstance().LoadVisualEquipAndFame(dwCharID, pObj);
 
@@ -135,6 +150,13 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket, bool sendI
 
             // Broadcast equipment changes to other players in the same map
             for (BYTE pos = 0; pos < 9; pos++) {
+                // 差异过滤：槽位外观完全未变，无需广播
+                if (oldVisualID[pos] == pObj->wVisualID[pos] &&
+                    oldRarity[pos] == pObj->bRarity[pos] &&
+                    oldStxType[pos] == pObj->bStxType[pos]) {
+                    continue;
+                }
+
                 std::vector<BYTE> ackBuf; ackBuf.resize(4);
                 
                 auto pushDWord = [&](DWORD d) { ackBuf.push_back(d & 0xFF); ackBuf.push_back((d>>8)&0xFF); ackBuf.push_back((d>>16)&0xFF); ackBuf.push_back((d>>24)&0xFF); };
@@ -149,15 +171,16 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket, bool sendI
                 pushByte(pObj->bStxType[pos]);   // bStxType
                 
                 PACKET_HEADER* ah = (PACKET_HEADER*)ackBuf.data();
-                ah->id = 0x3F0C; // 瀵归綈鐪熷疄 CS_CD_CHGEQUIPMENT_ACK (瀹㈡埛绔 OFFSET_CS_CD + 11 = 0x3F0C)
+                ah->id = 0x3F0C; // 对齐真实 CS_CD_CHGEQUIPMENT_ACK (客户端 OFFSET_CS_CD + 11 = 0x3F0C)
                 ah->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);
                 EncryptPacket(ackBuf.data(), 0x42);
                 
-                if (pos == 8) {
-                    // LOG("[RecalcStats] Broadcasting Pos 8 (Title): wVisualID[8]=" + std::to_string(pObj->wVisualID[pos]) + " to Map: " + std::to_string(pMapID));
-                }
-                // Broadcast to all sockets on the map
+                // Broadcast to sockets on the map
+                // 注：对于常规装备位 (pos < 8)，主角客户端在收到 0x420E 时已由本地 CEquipSack 即时刷新 3D 模型，
+                // 绝不能再发给主角自己，否则将触发 DXVK 昂贵的模型销毁与重新绑定导致主线程约 1 秒卡顿！
+                // 仅虚槽位称号 (pos == 8) 因客户端无背包槽驱动，才需要同时同步给主角自己。
                 SessionMgr::GetInstance().ForEachSocketInMap(pMapID, [&](SOCKET sSocket, DWORD sCharID) {
+                    if (sSocket == s && pos < 8) return;
                     SafeSend(sSocket, (const char*)ackBuf.data(), ackBuf.size(), 0);
                 });
             }
@@ -199,12 +222,13 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket, bool sendI
             // Attack speed: computed on-the-fly in PreAttackReq, not stored on PlayerData
 
             // Calculate and update HP/IP max on the object (same formula as SendCharStatusInfoAck)
-            pObj->dwHpMax = (baseInt * 8) + ((baseLevel - 1) * 8) + equipHp; // baseInt = wSus
-            DWORD computedIpMax = (baseVit * 0) + ((baseLevel - 1) * 4) + (DWORD)equipIp;
+            pObj->dwHpMax = (baseVit * 8) + ((baseLevel - 1) * 8) + equipHp; // baseVit = wVit (体质增加生命)
+            DWORD computedIpMax = (baseInt * 4) + ((baseLevel - 1) * 4) + (DWORD)equipIp; // baseInt = wSus (强壮增加内力)
             pObj->wIpMax = computedIpMax;
+            pObj->wLevel = (baseLevel > 0) ? (WORD)baseLevel : 1;
             // 注意：不在这里截断 current，因为 wIpMax/dwHpMax 还没加上被动武功/buff/称号加成
 
-            LOG("[RecalcStats] Base to pObj: restoreHp=" + std::to_string(pObj->wEquipRestoreHp) + " restoreIp=" + std::to_string(pObj->wEquipRestoreIp) + " dwHpMax=" + std::to_string(pObj->dwHpMax) + " dwHpCur=" + std::to_string(pObj->dwHpCur) + " wIpMax=" + std::to_string(pObj->wIpMax));
+            LOG("[RecalcStats] Base to pObj: Level=" + std::to_string(pObj->wLevel) + " restoreHp=" + std::to_string(pObj->wEquipRestoreHp) + " restoreIp=" + std::to_string(pObj->wEquipRestoreIp) + " dwHpMax=" + std::to_string(pObj->dwHpMax) + " dwHpCur=" + std::to_string(pObj->dwHpCur) + " wIpMax=" + std::to_string(pObj->wIpMax));
         
             // ========== Additive Percentage Stat Calculation ==========
             // Phase 1: Accumulate ALL flat bonuses
@@ -380,15 +404,45 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket, bool sendI
     }
 
     // 7. Send packet to client
-    if (sendPacket) {
+    if (sendIFPacket) {
         SOCKET s = SessionMgr::GetInstance().GetSocketByCharID(dwCharID);
-        if (s) {
-            SendCharStatusInfoAck(s, dwCharID, 0x4414); // CS_IT_CHARSTATUSINFO_ACK
+        if (s != INVALID_SOCKET && s != 0) {
+            SendCharStatusInfoAck(s, dwCharID, 0x3B02); // 统一用 0x3B02 静默刷新客户端面板数据，不清空武功窗口与重置UI
+            LOG("[RecalcStats] Sent 0x3B02 silent stats update for charID: " + std::to_string(dwCharID));
+
+            // 同时发送 0x3B0D 确保客户端左上角血条与蓝条上限即时同步更新
+            if (g_MapInstances.count(pMapID)) {
+                CMapInstance* mapInst2 = g_MapInstances[pMapID];
+                std::lock_guard<std::mutex> lock2(mapInst2->GetMutex());
+                sServerObject* pObj2 = mapInst2->GetPlayer(dwObjectID);
+                if (pObj2) {
+                    std::vector<BYTE> hpBuf(4);
+                    auto push4 = [&](DWORD d) { hpBuf.push_back(d&0xFF); hpBuf.push_back((d>>8)&0xFF); hpBuf.push_back((d>>16)&0xFF); hpBuf.push_back((d>>24)&0xFF); };
+                    auto push2 = [&](WORD w) { hpBuf.push_back(w&0xFF); hpBuf.push_back((w>>8)&0xFF); };
+                    push4(pObj2->dwHpMax);
+                    push4(pObj2->dwHpCur);
+                    push4(pObj2->wIpMax);
+                    push4(pObj2->wIpCur);
+                    hpBuf.push_back(0); // bType
+                    PACKET_HEADER* hpHead = (PACKET_HEADER*)hpBuf.data();
+                    hpHead->id = 0x3B0D; // CS_IF_CHARHP_ACK
+                    hpHead->payloadSize = hpBuf.size() - 4;
+                    EncryptPacket(hpBuf.data(), 0x42);
+                    SafeSend(s, (const char*)hpBuf.data(), hpBuf.size(), 0);
+                    LOG("[RecalcStats] Sent 0x3B0D bar update with 0x3B02: HpCur=" + std::to_string(pObj2->dwHpCur) + "/" + std::to_string(pObj2->dwHpMax)
+                        + " IpCur=" + std::to_string(pObj2->wIpCur) + "/" + std::to_string(pObj2->wIpMax));
+                }
+            }
+        }
+    } else if (sendPacket) {
+        SOCKET s = SessionMgr::GetInstance().GetSocketByCharID(dwCharID);
+        if (s != INVALID_SOCKET && s != 0) {
+            SendCharStatusInfoAck(s, dwCharID, 0x4414); // CS_IT_CHARSTATUSINFO_ACK (仅在明确关闭 sendIFPacket 时作为初始登录包发送)
             // Client's Init_WindowOutSide/InSide clears mugong data upon receiving 0x4414,
             // so we must immediately re-send the mugong lists to repopulate the UI.
-            BYTE typeGeneral = 0; // General/Outgong (鐏傚瀽鏉)
+            BYTE typeGeneral = 0; // General/Outgong
             OnMugongListReq(s, dwCharID, &typeGeneral, 1);
-            BYTE typePassive = 1; // Passive/Ingong (娲版偂鏉)  also triggers Active list
+            BYTE typePassive = 1; // Passive/Ingong
             OnMugongListReq(s, dwCharID, &typePassive, 1);
 
             // Send 0x3B0D (HP/IP bar update) to ensure bars are refreshed with in-memory values
@@ -414,12 +468,6 @@ void PlayerManager::RecalculateStats(DWORD dwCharID, bool sendPacket, bool sendI
                         + " IpCur=" + std::to_string(pObj2->wIpCur) + "/" + std::to_string(pObj2->wIpMax));
                 }
             }
-        }
-    } else if (sendIFPacket) {
-        SOCKET s = SessionMgr::GetInstance().GetSocketByCharID(dwCharID);
-        if (s) {
-            SendCharStatusInfoAck(s, dwCharID, 0x3B02); // 用 0x3B02 静默刷新客户端面板数据，不清空武功窗口
-            LOG("[RecalcStats] Sent 0x3B02 silent stats update for charID: " + std::to_string(dwCharID));
         }
     }
 }
@@ -450,7 +498,7 @@ void PlayerManager::SavePlayer(DWORD dwCharID) {
 // ========================================================================
 
 void UpdatePlayerStatsAndSend(SOCKET clientSocket, DWORD dwCharID) {
-    PlayerManager::GetInstance().RecalculateStats(dwCharID, true);
+    PlayerManager::GetInstance().RecalculateStats(dwCharID, false, true);
 }
 
 void BroadcastPacketToMap(DWORD mapID, const std::vector<BYTE>& packet) {
@@ -460,7 +508,7 @@ void BroadcastPacketToMap(DWORD mapID, const std::vector<BYTE>& packet) {
 }
 
 void SendCharStatusInfoAck(SOCKET clientSocket, DWORD dwCharID, WORD opCode) {
-    if (!clientSocket || dwCharID == 0) return;
+    if (!clientSocket || clientSocket == INVALID_SOCKET || dwCharID == 0) return;
 
     DWORD dwObjectID = ToClientPCID(dwCharID);
     
@@ -511,8 +559,8 @@ void SendCharStatusInfoAck(SOCKET clientSocket, DWORD dwCharID, WORD opCode) {
         long long int dwExp = fs.dwExp, levelExp = 0, nextLevelExp = 0;
         
         // Calculate Max HP and Max IP dynamically
-        dwHpMax = (wSus * 8) + ((wLevel - 1) * 8) + playerObj.wEquipHp;
-        DWORD computedIpMax = (wVit * 0) + ((wLevel - 1) * 4) + (DWORD)playerObj.wEquipIp;
+        dwHpMax = (wVit * 8) + ((wLevel - 1) * 8) + playerObj.wEquipHp;
+        DWORD computedIpMax = (wSus * 4) + ((wLevel - 1) * 4) + (DWORD)playerObj.wEquipIp;
         wIpMax = computedIpMax;
         
         LOG("[SendStatusAck] BEFORE fix: dwHpCur=" + std::to_string(dwHpCur) + " dwHpMax=" + std::to_string(dwHpMax)

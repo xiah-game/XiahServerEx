@@ -155,7 +155,8 @@ void OnStartGameReq(SOCKET clientSocket, std::string& clientAccountName, BYTE* p
     SafeSend(clientSocket, (const char*)ackBuf.data(), ackBuf.size(), 0);
     LOG("[LoginHandler] Sent CS_NV_STARTGAME_ACK!");
 
-    UpdatePlayerStatsAndSend(clientSocket, dwCharID);
+    // During StartGame login handshake, send 0x4414 (CS_IT_CHARSTATUSINFO_ACK) which safely initializes intro frames without requiring g_pMainChar
+    SendCharStatusInfoAck(clientSocket, dwCharID, 0x4414);
 }
 
 void OnEndGameReq(SOCKET clientSocket, DWORD dwCharID, BYTE* payload, WORD totalSize) {

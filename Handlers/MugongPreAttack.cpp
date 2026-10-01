@@ -1,4 +1,4 @@
-﻿// MugongPreAttack.cpp — OnSelMugongReq / OnMugongPreAttackReq / IsAoeSkill
+// MugongPreAttack.cpp — OnSelMugongReq / OnMugongPreAttackReq / IsAoeSkill
 // 从 MugongHandler.cpp 拆分而来，纯搬迁不改逻辑
 #include <unordered_map>
 #include "MugongHandler.h"
@@ -88,6 +88,41 @@ void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
 
     LOG("[MugongHandler] OnMugongPreAttackReq: Skill " + std::to_string(dwMugongID) + " by " + std::to_string(dwAttackID) + " against " + std::to_string(dwDefenseID));
 
+    DWORD playerMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+    // 无法使用技能攻击采集资源
+    if (bDefenseType == 3 && g_MapInstances.count(playerMapID)) {
+        CMapInstance* mapInst = g_MapInstances[playerMapID];
+        std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+        MonsterData* pMon = mapInst->GetMonster(dwDefenseID);
+        if (pMon && IsGatherResource(pMon->bPropType)) {
+            std::vector<BYTE> buf; buf.resize(4, 0);
+            DWORD senderObjID = 0;
+            buf.push_back(senderObjID & 0xFF); buf.push_back((senderObjID >> 8) & 0xFF); buf.push_back((senderObjID >> 16) & 0xFF); buf.push_back(senderObjID >> 24);
+            buf.push_back(8); // CT_TIMEMESSAGE
+            std::string msg = "无法对采集资源使用武功！";
+            WORD len = (WORD)msg.size();
+            buf.push_back(len & 0xFF); buf.push_back((len >> 8) & 0xFF);
+            buf.insert(buf.end(), msg.begin(), msg.end());
+            WORD packetID = 0x3E02; // CS_CH_CHAT_ACK
+            WORD payloadSize = (WORD)(buf.size() - 4);
+            memcpy(&buf[0], &packetID, 2);
+            memcpy(&buf[2], &payloadSize, 2);
+            EncryptPacket(buf.data(), 0x42);
+            SafeSend(clientSocket, (const char*)buf.data(), (int)buf.size(), 0);
+
+            // 发送失败包 (bResult = 1)
+            std::vector<BYTE> failBuf(4 + 29, 0);
+            failBuf[4] = 1; // bResult = 1
+            *(DWORD*)(failBuf.data() + 5) = dwMugongID;
+            PACKET_HEADER* head = (PACKET_HEADER*)failBuf.data();
+            head->id = 0x4014; // CS_BT_MUGONGPREATTACK_ACK
+            head->payloadSize = failBuf.size() - 4;
+            EncryptPacket(failBuf.data(), 0x42);
+            SafeSend(clientSocket, (const char*)failBuf.data(), failBuf.size(), 0);
+            return;
+        }
+    }
+
 
 
     std::vector<BYTE> ackBuf(4 + 29);
@@ -119,7 +154,7 @@ void OnMugongPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD
     }
     bool isBuff = (pd && pd->dwKeepUpTime > 0 && dwMugongID != 41 && !isDebuffOnTarget);
 
-    DWORD playerMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+    playerMapID = SessionMgr::GetInstance().GetMapID(clientSocket);
     if (g_MapInstances.count(playerMapID)) {
         CMapInstance* mapInst = g_MapInstances[playerMapID];
         std::lock_guard<std::mutex> lock(mapInst->GetMutex());

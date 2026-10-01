@@ -46,6 +46,31 @@ void OnPreAttackReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                 std::lock_guard<std::mutex> lock(g_MapInstances[pMapID]->GetMutex());
                 PlayerData* pAtk = g_MapInstances[pMapID]->GetPlayer(atkId);
                 if (pAtk) {
+                    // 采集资源前置校验：如果目标是采集资源，必须装备采集工具(bType=1, bKind=8)
+                    if (totalSize >= 15 && payload[10] == 3) { // bDefType == 3 (Monster)
+                        DWORD defId = *(DWORD*)(payload + 11);
+                        MonsterData* pTar = g_MapInstances[pMapID]->GetMonster(defId);
+                        if (pTar && IsGatherResource(pTar->bPropType)) {
+                            if (pAtk->bEquippedWeaponType != 1 || pAtk->bEquippedWeaponKind != 8) {
+                                std::vector<BYTE> buf; buf.resize(4, 0);
+                                DWORD senderObjID = 0;
+                                buf.push_back(senderObjID & 0xFF); buf.push_back((senderObjID >> 8) & 0xFF); buf.push_back((senderObjID >> 16) & 0xFF); buf.push_back(senderObjID >> 24);
+                                buf.push_back(8); // CT_TIMEMESSAGE
+                                std::string msg = "只有装备采集工具才能进行采集！";
+                                WORD len = (WORD)msg.size();
+                                buf.push_back(len & 0xFF); buf.push_back((len >> 8) & 0xFF);
+                                buf.insert(buf.end(), msg.begin(), msg.end());
+                                WORD packetID = 0x3E02; // CS_CH_CHAT_ACK
+                                WORD payloadSize = (WORD)(buf.size() - 4);
+                                memcpy(&buf[0], &packetID, 2);
+                                memcpy(&buf[2], &payloadSize, 2);
+                                EncryptPacket(buf.data(), 0x42);
+                                SafeSend(clientSocket, (const char*)buf.data(), (int)buf.size(), 0);
+                                return;
+                            }
+                        }
+                    }
+
                     // 检查控制类 Debuff (定身/冰冻/眩晕) 拦截物理起手
                     bool isCC = false;
                     for (const auto& bf : pAtk->activeBuffs) {
@@ -125,6 +150,8 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
         std::vector<DWORD> partyExpMembers;
         MonsterData deadMonsterCopy; // copy for GenerateDrops outside mutex
         bool hasDeadMonsterCopy = false;
+        bool isGatherTarget = false;
+        MonsterData gatherMonsterCopy;
         {
             std::lock_guard<std::mutex> lock(mapInst->GetMutex());
             PlayerData* pAttacker = mapInst->GetPlayer(attackerId);
@@ -169,11 +196,15 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                 finalDmg = pAttacker->dwTotalAtk;
                 if (finalDmg == 0) finalDmg = 50; // Fallback
 
-                // 战宠与分身协同攻击：锁定怪物目标
-                for (auto& pair : mapInst->GetPlayers()) {
-                    PlayerData& pl = pair.second;
-                    if (pl.dwOwnerID == (attackerId - 800000000) && pl.dwObjectID >= 800000000 && pl.dwHpCur > 0) {
-                        pl.dwPetTargetObjectID = targetId;
+                // 战宠与分身协同攻击：锁定怪物目标（非采集资源）
+                MonsterData* pCheckMon = mapInst->GetMonster(targetId);
+                bool isGather = (pCheckMon && IsGatherResource(pCheckMon->bPropType));
+                if (!isGather) {
+                    for (auto& pair : mapInst->GetPlayers()) {
+                        PlayerData& pl = pair.second;
+                        if (pl.dwOwnerID == (attackerId - 800000000) && pl.dwObjectID >= 800000000 && pl.dwHpCur > 0) {
+                            pl.dwPetTargetObjectID = targetId;
+                        }
                     }
                 }
                 
@@ -182,7 +213,21 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
             
             MonsterData* pTarget = mapInst->GetMonster(targetId);
             if (pTarget) {
-                if (pTarget->dwHpCur == 0 || pTarget->dwDeadTime > 0) {
+                if (IsGatherResource(pTarget->bPropType)) {
+                    // 采集资源处理分支：
+                    // 3. 只能使用物品 btype=1 and bkind=8 才能攻击
+                    if (!pAttacker || pAttacker->bEquippedWeaponType != 1 || pAttacker->bEquippedWeaponKind != 8) {
+                        return;
+                    }
+                    isGatherTarget = true;
+                    gatherMonsterCopy = *pTarget;
+                    bResult = 2; // Hit
+                    bHitFlag = 0;
+                    finalDmg = 1; // 飘字伤害为 1
+                    // 1 & 2. 采集资源不可被打死，受击不扣血
+                    dwHpMax = pTarget->dwHpMax;
+                    dwHpCur = pTarget->dwHpCur; // 保持当前血量不变
+                } else if (pTarget->dwHpCur == 0 || pTarget->dwDeadTime > 0) {
                     // 目标怪物已在先前的攻击中死亡：杜绝二次致死、重复加经验与重复爆装备
                     dwHpMax = pTarget->dwHpMax;
                     dwHpCur = 0;
@@ -319,7 +364,7 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                     deadExp = pTarget->dwExp;
                     LOG("[CombatHandler] Monster " + g_NpcTemplates[deadPropType].szName + " died!");
                     
-                    attackerCharID = (attackerId >= 850000000 && pAttacker && pAttacker->dwOwnerID > 0) ? pAttacker->dwOwnerID : attackerId - 400000000;
+                    attackerCharID = (attackerId >= 800000000 && pAttacker && pAttacker->dwOwnerID > 0) ? pAttacker->dwOwnerID : (attackerId >= 400000000 ? attackerId - 400000000 : attackerId);
                     
                     // 计算被击杀怪物提供的五行经验值
                     DWORD monsterFiveElmExp = 0;
@@ -328,73 +373,9 @@ void OnAttackHitReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD total
                     }
                     monsterFiveElmExp += pTarget->wIncFiveElmExp;
                     
-                    // Party EXP sharing
-                    DWORD partyID = PartyManager::GetInstance().GetPartyID(attackerCharID);
-                    BYTE expShareMode = (partyID != 0) ? PartyManager::GetInstance().GetExpShareMode(partyID) : 0;
-                    
-                    if (partyID != 0 && expShareMode == 1) {
-                        // Shared mode: find nearby same-map party members
-                        auto members = PartyManager::GetInstance().GetMembers(partyID);
-                        std::vector<DWORD> nearbyMembers;
-                        
-                        // Get attacker position for distance check
-                        WORD atkX = 0, atkY = 0;
-                        PlayerData* pAtk2 = mapInst->GetPlayer(attackerId);
-                        if (pAtk2) { atkX = pAtk2->wPosX; atkY = pAtk2->wPosY; }
-                        
-                        for (auto& m : members) {
-                            SOCKET mSock = SessionMgr::GetInstance().GetSocketByCharID(m.dwCharID);
-                            if (mSock != INVALID_SOCKET) {
-                                DWORD mMap = SessionMgr::GetInstance().GetMapID(mSock);
-                                if (mMap == playerMapID) {
-                                    // Distance check (within AOI range ~50 tiles)
-                                    DWORD mObjID = m.dwCharID + 400000000;
-                                    PlayerData* mObj = mapInst->GetPlayer(mObjID);
-                                    if (mObj) {
-                                        float dx = (float)mObj->wPosX - (float)atkX;
-                                        float dy = (float)mObj->wPosY - (float)atkY;
-                                        float dist = std::sqrt(dx*dx + dy*dy);
-                                        if (dist <= 50.0f) {
-                                            nearbyMembers.push_back(m.dwCharID);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        if (nearbyMembers.empty()) nearbyMembers.push_back(attackerCharID);
-                        
-                        DWORD sharedExp = deadExp / (DWORD)nearbyMembers.size();
-                        if (sharedExp == 0) sharedExp = 1;
-                        
-                        DWORD sharedFiveElmExp = monsterFiveElmExp / (DWORD)nearbyMembers.size();
-                        
-                        LOG("[PARTY-EXP] Party " + std::to_string(partyID) + 
-                            " sharing " + std::to_string(deadExp) + " EXP & " + std::to_string(monsterFiveElmExp) + " FiveElmEXP among " + 
-                            std::to_string(nearbyMembers.size()) + " nearby members (" + 
-                            std::to_string(sharedExp) + " each)");
-                        
-                        for (DWORD memberCharID : nearbyMembers) {
-                            bool lvlUp = GrantExpToPlayer(memberCharID, sharedExp, sharedFiveElmExp);
-                            if (memberCharID == attackerCharID) {
-                                needStatusRefresh = lvlUp;
-                            } else if (lvlUp) {
-                                SOCKET mSock = SessionMgr::GetInstance().GetSocketByCharID(memberCharID);
-                                if (mSock != INVALID_SOCKET) {
-                                    UpdatePlayerStatsAndSend(mSock, memberCharID);
-                                    DWORD mObjID = memberCharID + 400000000;
-                                    PlayerData* mObj = mapInst->GetPlayer(mObjID);
-                                    if (mObj) {
-                                        mObj->dwHpCur = mObj->dwHpMax;
-                                        mObj->wIpCur = mObj->wIpMax;
-                                    }
-                                }
-                            }
-                        }
-                        partyExpMembers = nearbyMembers;
-                    } else {
-                        // Individual mode or not in party
-                        needStatusRefresh = GrantExpToPlayer(attackerCharID, deadExp, monsterFiveElmExp);
-                    }
+                    // 统一调用队伍经验分配逻辑（包含同地图与50格距离严格校验，以及升级广播）
+                    DistributePartyExp(attackerCharID, deadExp, monsterFiveElmExp, playerMapID, pTarget->wPosX, pTarget->wPosY, true /* callerHoldsMapLock */);
+                    needStatusRefresh = false; // 升级同步已在 DistributePartyExp 中完成处理
                     
                     // Save monster copy for GenerateDrops (called after mutex release)
                     deadMonsterCopy = *pTarget;
@@ -652,6 +633,12 @@ APPLY_PHYSICAL_DAMAGE:
         // Generate drops AFTER all combat packets (0x4006, 0x3510, 0x4034)
         if (monsterDied && hasDeadMonsterCopy) {
             DropManager::GetInstance()->GenerateDrops(attackerId, deadMonsterCopy);
+        }
+
+        // 采集资源专用掉落逻辑：所暴物品直接给到人物背包
+        if (isGatherTarget && bResult == 2) {
+            DWORD atkCharID = (attackerId >= 400000000) ? (attackerId - 400000000) : attackerId;
+            DropManager::GetInstance()->GenerateGatherDrops(clientSocket, atkCharID, gatherMonsterCopy);
         }
     }
 }

@@ -9,6 +9,9 @@
             MonsterData* pTarget = mapInst->GetMonster(dwDefenseID);
 
             if (pTarget) {
+                if (IsGatherResource(pTarget->bPropType)) {
+                    return; // 采集资源无法被武功攻击
+                }
                 if (pTarget->dwHpCur == 0 || pTarget->dwDeadTime > 0) {
                     // 目标怪物已死亡：杜绝回传虚假血量与伤害
                     dwDefHpMax = pTarget->dwHpMax;
@@ -311,11 +314,10 @@
                         if (pTarget->dwDeadTime == 0) {
                             isDead = true;
                             pTarget->dwDeadTime = GetTickCount();
-                            pTarget->dwTargetID = 0;
-                            deadExp = pTarget->dwExp; // Use computed Init+Inc value
+                            deadExp = pTarget->dwExp;
                             DWORD targetFiveElmExp = g_NpcTemplates.count(pTarget->bPropType) ? g_NpcTemplates[pTarget->bPropType].wFiveElmExp : 0;
                             targetFiveElmExp += pTarget->wIncFiveElmExp;
-                            deadEntities.push_back({dwDefenseID, deadExp, g_NpcTemplates[pTarget->bPropType].szName, targetFiveElmExp});
+                            deadEntities.push_back({dwDefenseID, deadExp, g_NpcTemplates[pTarget->bPropType].szName, targetFiveElmExp, pTarget->wPosX, pTarget->wPosY});
                             // 妙手空空(bKind=23)：击杀时暴率翻倍
                             WORD origRootItem = pTarget->wRootItem;
                             if (tpl && tpl->bType == 4 && tpl->bKind == 23 && pMugongData) {
@@ -404,7 +406,7 @@
 
                     for (MonsterData* pMon : aoiMonsters) {
 
-                        if (!pMon || pMon->dwObjectID == dwDefenseID || pMon->dwHpCur == 0 || pMon->bIsReturning) continue;
+                        if (!pMon || pMon->dwObjectID == dwDefenseID || pMon->dwHpCur == 0 || pMon->bIsReturning || IsGatherResource(pMon->bPropType)) continue;
 
                         float dx = (float)pMon->wPosX - (float)wAoeCenterX;
 
@@ -594,7 +596,7 @@
                                 DWORD splashFiveElmExp = g_NpcTemplates.count(pSplashMon->bPropType) ? g_NpcTemplates[pSplashMon->bPropType].wFiveElmExp : 0;
                                 splashFiveElmExp += pSplashMon->wIncFiveElmExp;
 
-                                deadEntities.push_back({pSplashMon->dwObjectID, pSplashMon->dwExp, g_NpcTemplates[pSplashMon->bPropType].szName, splashFiveElmExp});
+                                deadEntities.push_back({pSplashMon->dwObjectID, pSplashMon->dwExp, g_NpcTemplates[pSplashMon->bPropType].szName, splashFiveElmExp, pSplashMon->wPosX, pSplashMon->wPosY});
 
                                 DropManager::GetInstance()->GenerateDrops(dwAttackID, *pSplashMon);
 

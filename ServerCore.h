@@ -190,11 +190,19 @@ struct PlayerData : EntityBase {
         return 0;
     }
 
+    // 装备武器类型缓存（用于采集工具校验、被动武功判定等）
+    BYTE  bEquippedWeaponType = 0;   // 1=武器
+    BYTE  bEquippedWeaponKind = 255; // 0=剑, 1=刀, 2=扇, 3=笔, 4=斧, 5=爪, 6=刺, 7=大刀, 8=采集工具; 255=未装备
+    WORD  wEquippedWeaponRefID = 0;
+
     // 技能CD跟踪：技能ID → 上次释放时间(GetTickCount)
     std::map<DWORD, DWORD> mugongLastCastTime;
 
     PlayerData() { 
         bObjectType = 1; 
+        bEquippedWeaponType = 0;
+        bEquippedWeaponKind = 255;
+        wEquippedWeaponRefID = 0;
         memset(wVisualID, 0, sizeof(wVisualID));
         memset(bRarity, 0, sizeof(bRarity));
         memset(bStxType, 0, sizeof(bStxType));
@@ -390,3 +398,9 @@ void LoadWorldObjects();
 // sackID: 1=page1(pos 20-55), 2=page2(pos 60-95), 3=page3(pos 100-135)
 // Returns absolute bSackPos, or 255 if no space
 BYTE FindFreeSackPos(DWORD charID, BYTE sackID, BYTE bCX, BYTE bCY);
+
+// 采集资源判定 (NPC 228-231)
+inline bool IsGatherResource(BYTE bPropType) {
+    return (bPropType >= 228 && bPropType <= 231);
+}
+

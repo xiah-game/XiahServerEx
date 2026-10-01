@@ -23,58 +23,12 @@ void SendItemRefresh(SOCKET clientSocket, DWORD dwItemID, BYTE bSackID, BYTE bSa
 
 #include <unordered_map>
 #include <mutex>
-
-class PetLevelExpManager {
-public:
-    static PetLevelExpManager& GetInstance() {
-        static PetLevelExpManager instance;
-        return instance;
-    }
-
-    bool LoadFromDB() {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_levelMap.clear();
-
-        std::string query = "SELECT wLevel, i64NeedExp FROM PET_LEVEL_EXP";
-        bool success = DBHelper::GetInstance().ExecuteQuery(query, [&](SQLHSTMT hStmt) {
-            int level = 0;
-            long long needExp = 0;
-            SQLGetData(hStmt, 1, SQL_INTEGER, &level, 0, NULL);
-            SQLGetData(hStmt, 2, SQL_C_SBIGINT, &needExp, 0, NULL);
-            m_levelMap[level] = needExp;
-        });
-
-        LOG("[PetLevelExpManager] Loaded " + std::to_string(m_levelMap.size()) + " levels data from DB.");
-        return success;
-    }
-
-    long long GetNeedExp(int level) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        auto it = m_levelMap.find(level);
-        return (it != m_levelMap.end()) ? it->second : 0;
-    }
-
-    long long GetLevelStartExp(int level) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        long long sum = 0;
-        for (int i = 1; i < level; ++i) {
-            auto it = m_levelMap.find(i);
-            if (it != m_levelMap.end()) {
-                sum += it->second;
-            }
-        }
-        return sum;
-    }
-
-private:
-    std::unordered_map<int, long long> m_levelMap;
-    std::mutex m_mutex;
-    PetLevelExpManager() = default;
-};
+#include "../GameObjects/PetLevelExpManager.h"
 
 bool LoadPetLevelExp() {
     return PetLevelExpManager::GetInstance().LoadFromDB();
 }
+
 
 void SendCharPremiumList(SOCKET clientSocket, DWORD charID) {
     if (charID == 0) return;
@@ -445,14 +399,21 @@ void OnItemMoveReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD totalS
                 ItemDB::GetInstance().UpdateSackPos(dwSrcObjID, (BYTE)realDes);
             }
             
-            UpdatePlayerStatsAndSend(clientSocket, charID);
-        
+            // 立即向客户端发送 0x420E 移动成功确认包，消除 UI 拖拽与穿脱停顿
             std::vector<BYTE> ackBuf; ackBuf.resize(4); ackBuf.push_back(0); 
             ackBuf.push_back(bSrcSackID); ackBuf.push_back(bSrcSackPos);
             ackBuf.push_back(bDesSackID); ackBuf.push_back(bDesSackPos);
             
-            PACKET_HEADER* ackHead = (PACKET_HEADER*)ackBuf.data(); ackHead->id = 0x420E; ackHead->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);
-            EncryptPacket(ackBuf.data(), 0x42); SafeSend(clientSocket, (const char*)ackBuf.data(), ackBuf.size(), 0);
+            PACKET_HEADER* ackHead = (PACKET_HEADER*)ackBuf.data(); 
+            ackHead->id = 0x420E; 
+            ackHead->payloadSize = ackBuf.size() - sizeof(PACKET_HEADER);
+            EncryptPacket(ackBuf.data(), 0x42); 
+            SafeSend(clientSocket, (const char*)ackBuf.data(), ackBuf.size(), 0);
+
+            // 仅当涉及装备栏 (Sack 0) 时才触发角色属性重算与广播
+            if (bSrcSackID == 0 || bDesSackID == 0) {
+                UpdatePlayerStatsAndSend(clientSocket, charID);
+            }
         }
     }
 }
@@ -2144,6 +2105,9 @@ void OnPetControlReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tota
                 petEntity.bObjectType = 4; 
                 petEntity.dwMapID = pMapID;
                 petEntity.bNpcType = pet.bNpcType;
+                petEntity.szName = pet.szName;
+                petEntity.wLevel = pet.wLevel;
+                petEntity.bRebirth = pet.bRevolutionStep;
                 petEntity.wPosX = pCaster->wPosX + 2;
                 petEntity.wPosY = pCaster->wPosY + 2;
                 petEntity.bHeight = pCaster->bHeight;
@@ -2162,23 +2126,27 @@ void OnPetControlReq(SOCKET clientSocket, DWORD charID, BYTE* payload, WORD tota
 
                 mapInst->AddPlayer(petEntity);
 
-                std::vector<BYTE> aoiBuf; aoiBuf.resize(4); aoiBuf.push_back(0); 
-                aoiBuf.push_back(1); aoiBuf.push_back(0); 
-                auto pushDWord = [&](DWORD d) { aoiBuf.push_back(d & 0xFF); aoiBuf.push_back((d>>8)&0xFF); aoiBuf.push_back((d>>16)&0xFF); aoiBuf.push_back(d>>24); };
-                auto pushWord = [&](WORD w) { aoiBuf.push_back(w & 0xFF); aoiBuf.push_back(w>>8); };
-                auto pushByte = [&](BYTE b) { aoiBuf.push_back(b); };
+                // 广播 CS_NC_MAPENTER_ACK (0x3502) 触发周围玩家客户端拉取战宠详细外观与属性
+                std::vector<BYTE> enterBuf(4);
+                enterBuf.push_back(0); // bResult = 0
+                auto pushDWord = [&](DWORD d) { enterBuf.push_back(d & 0xFF); enterBuf.push_back((d>>8)&0xFF); enterBuf.push_back((d>>16)&0xFF); enterBuf.push_back(d>>24); };
+                auto pushWord = [&](WORD w) { enterBuf.push_back(w & 0xFF); enterBuf.push_back(w>>8); };
 
+                pushDWord(pMapID);
                 pushDWord(petEntity.dwObjectID);
-                pushByte(petEntity.bObjectType);
+                enterBuf.push_back(4); // bObjectType = 4 (PET)
                 pushWord(petEntity.wPosX);
                 pushWord(petEntity.wPosY);
-                pushByte(petEntity.bHeight);
+                enterBuf.push_back(petEntity.bHeight);
+                pushWord(0); // wDirection
+                enterBuf.push_back(0); // bStatus = Stand (0)
+                enterBuf.push_back(petEntity.wWalkSpeed & 0xFF);
 
-                PACKET_HEADER* aoiHead = (PACKET_HEADER*)aoiBuf.data();
-                aoiHead->id = 0x4312; 
-                aoiHead->payloadSize = aoiBuf.size() - sizeof(PACKET_HEADER);
-                EncryptPacket(aoiBuf.data(), 0x42);
-                BroadcastPacketToMap(pMapID, aoiBuf);
+                PACKET_HEADER* enterHead = (PACKET_HEADER*)enterBuf.data();
+                enterHead->id = 0x3502; // CS_NC_MAPENTER_ACK
+                enterHead->payloadSize = (WORD)(enterBuf.size() - sizeof(PACKET_HEADER));
+                EncryptPacket(enterBuf.data(), 0x42);
+                BroadcastPacketToMap(pMapID, enterBuf);
 
                 LOG("[PetControl] Summoned pet dwPetID=" + std::to_string(dwPetID) + " to coordinates (" + std::to_string(petEntity.wPosX) + "," + std::to_string(petEntity.wPosY) + ")");
             }

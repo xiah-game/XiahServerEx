@@ -1,4 +1,4 @@
-#include "ChatHandler.h"
+﻿#include "ChatHandler.h"
 #include "PartyHandler.h"
 #include "../Network/PacketRouter.h"
 #include "../Network/SessionMgr.h"
@@ -8,6 +8,9 @@
 #include "../DBHelper.h"
 #include "ItemSerializer.h"
 #include <cstring>
+#include <cmath>
+#include <set>
+#include <algorithm>
 
 // 外部声明：RebuildItemHandler.cpp 中已实现的物品刷新函数
 void SendItemRefresh(SOCKET clientSocket, DWORD dwItemID, BYTE bSackID, BYTE bSackPos);
@@ -28,6 +31,9 @@ static std::string ReadSString(BYTE*& ptr, WORD& remaining) {
     std::string s((char*)ptr, len);
     ptr += len;
     remaining -= len;
+    while (!s.empty() && (s.back() == '\0' || s.back() == '\r' || s.back() == '\n')) {
+        s.pop_back();
+    }
     return s;
 }
 
@@ -182,6 +188,205 @@ static DWORD FindCharIDByName(const std::string& name) {
 }
 
 // =========================================================
+// 字符编码转换工具：服务端内部为 UTF-8，客户端网络通信为 GBK (CP936)
+// =========================================================
+static std::string Utf8ToGbk(const std::string& utf8Str) {
+    if (utf8Str.empty()) return "";
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), (int)utf8Str.size(), NULL, 0);
+    if (wlen <= 0) return utf8Str;
+    std::wstring wstr(wlen, 0);
+    MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), (int)utf8Str.size(), &wstr[0], wlen);
+
+    int glen = WideCharToMultiByte(936, 0, wstr.c_str(), wlen, NULL, 0, NULL, NULL);
+    if (glen <= 0) return utf8Str;
+    std::string gbkStr(glen, 0);
+    WideCharToMultiByte(936, 0, wstr.c_str(), wlen, &gbkStr[0], glen, NULL, NULL);
+    return gbkStr;
+}
+
+static std::string GbkToUtf8(const std::string& gbkStr) {
+    if (gbkStr.empty()) return "";
+    int wlen = MultiByteToWideChar(936, 0, gbkStr.c_str(), (int)gbkStr.size(), NULL, 0);
+    if (wlen <= 0) return gbkStr;
+    std::wstring wstr(wlen, 0);
+    MultiByteToWideChar(936, 0, gbkStr.c_str(), (int)gbkStr.size(), &wstr[0], wlen);
+
+    int ulen = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), wlen, NULL, 0, NULL, NULL);
+    if (ulen <= 0) return gbkStr;
+    std::string utf8Str(ulen, 0);
+    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), wlen, &utf8Str[0], ulen, NULL, NULL);
+    return utf8Str;
+}
+
+// =========================================================
+// 发送私有系统消息到玩家聊天框 (转为 GBK 发送给客户端)
+// =========================================================
+static void SendSystemChat(SOCKET clientSocket, const std::string& msgUtf8) {
+    std::string msgGbk = Utf8ToGbk(msgUtf8);
+    std::string senderGbk = Utf8ToGbk("[系统]");
+    std::vector<BYTE> ackBuf = BuildChatAck(0, CT_NORMAL, msgGbk, senderGbk);
+    EncryptPacket(ackBuf.data(), 0x42);
+    SafeSend(clientSocket, (const char*)ackBuf.data(), (int)ackBuf.size(), 0);
+}
+
+// =========================================================
+// 处理玩家输入的命令（如 /信息）
+// =========================================================
+static bool HandlePlayerCommand(SOCKET clientSocket, DWORD dwCharID, const std::string& rawCmd) {
+    if (rawCmd.empty() || rawCmd[0] != '/') return false;
+
+    // 去除两端可能多余的空格、换行、或客户端尾部多传的 '\0' 终结符
+    std::string cleanCmd = rawCmd;
+    while (!cleanCmd.empty() && ((unsigned char)cleanCmd.back() == '\0' || cleanCmd.back() == ' ' || cleanCmd.back() == '\r' || cleanCmd.back() == '\n' || cleanCmd.back() == '\t')) {
+        cleanCmd.pop_back();
+    }
+
+    // 将客户端 GBK 输入转为 UTF-8 便于统一比对
+    std::string utf8Cmd = GbkToUtf8(cleanCmd);
+
+    LOG("[CMD] Received rawCmd len=" + std::to_string(rawCmd.size()) +
+        " cleanCmd len=" + std::to_string(cleanCmd.size()) +
+        " utf8Cmd=" + utf8Cmd);
+
+    // 匹配 /信息 与 /info (支持全等匹配及前缀匹配，兼容 GBK 与 UTF-8)
+    bool isInfo = (utf8Cmd == "/信息" || utf8Cmd.find("/信息") == 0 ||
+                   utf8Cmd == "/info" || utf8Cmd.find("/info") == 0 ||
+                   utf8Cmd == "/INFO" || utf8Cmd.find("/INFO") == 0 ||
+                   cleanCmd == "/信息" || cleanCmd.find("/信息") == 0 ||
+                   cleanCmd == "/\xd0\xc5\xcf\xa2" || cleanCmd.find("/\xd0\xc5\xcf\xa2") == 0 ||
+                   cleanCmd == "/info" || cleanCmd.find("/info") == 0);
+
+    if (isInfo) {
+        // 1. 基础倍率
+        double expMult = 1.0;
+        int vipLevel = CharacterDB::GetInstance().GetVipLevel(dwCharID);
+        if (vipLevel >= 1 && vipLevel <= 5) {
+            expMult += vipLevel * 0.2;
+        }
+
+        // 经验卡加成
+        int totalBonusPercent = 0;
+        std::string qExpBuff = 
+            "SELECT COALESCE(SUM(p.wValue), 0) "
+            "FROM CHAR_PREMIUM c "
+            "INNER JOIN ITEM_PREMIUM p ON c.wRefID = p.wRefID "
+            "WHERE c.dwCharID = " + std::to_string(dwCharID) + " "
+            "  AND c.dateEnd > GETDATE() "
+            "  AND p.bType IN (0, 1, 8)";
+        DBHelper::GetInstance().ExecuteQuery(qExpBuff, [&](SQLHSTMT hStmt) {
+            SQLGetData(hStmt, 1, SQL_C_LONG, &totalBonusPercent, 0, NULL);
+        });
+        if (totalBonusPercent > 0) {
+            double cardBonus = (totalBonusPercent / 100.0) - 1.0;
+            if (cardBonus > 0.0) {
+                expMult += cardBonus;
+            }
+        }
+
+        // 称号经验加成
+        int titleExpBonus = 0;
+        std::string qTitleExp = 
+            "SELECT COALESCE(SUM(t.wExpPerc), 0) "
+            "FROM CHAR_TITLE ct "
+            "INNER JOIN TITLE_TEMPLATE t ON ct.dwTitleID = t.dwTitleID "
+            "WHERE ct.dwCharID = " + std::to_string(dwCharID) + " AND ct.bActive = 1";
+        DBHelper::GetInstance().ExecuteQuery(qTitleExp, [&](SQLHSTMT hStmt) {
+            SQLGetData(hStmt, 1, SQL_C_LONG, &titleExpBonus, 0, NULL);
+        });
+        if (titleExpBonus > 0) {
+            expMult += (titleExpBonus / 100.0);
+        }
+
+        // 云虎符加成
+        int expBonus = ItemDB::GetInstance().GetEquippedItemDataValue(dwCharID, 5, 18);
+        if (expBonus > 0) {
+            expMult += (expBonus / 100.0);
+        }
+
+        // 队伍经验加成
+        double partyBonusRatio = 0.0;
+        DWORD partyID = PartyManager::GetInstance().GetPartyID(dwCharID);
+        if (partyID > 0) {
+            DWORD mapID = SessionMgr::GetInstance().GetMapID(clientSocket);
+            auto members = PartyManager::GetInstance().GetMembers(partyID);
+            std::vector<DWORD> eligibleMembers;
+            if (g_MapInstances.count(mapID)) {
+                CMapInstance* mapInst = g_MapInstances[mapID];
+                std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+                PlayerData* myPl = mapInst->GetPlayer(dwCharID + 400000000);
+                if (myPl) {
+                    for (const auto& m : members) {
+                        PlayerData* pl = mapInst->GetPlayer(m.dwCharID + 400000000);
+                        if (pl && pl->dwMapID == mapID) {
+                            float dx = (float)pl->wPosX - (float)myPl->wPosX;
+                            float dy = (float)pl->wPosY - (float)myPl->wPosY;
+                            float dist = std::sqrt(dx * dx + dy * dy);
+                            if (dist <= 150.0f) {
+                                eligibleMembers.push_back(m.dwCharID);
+                            }
+                        }
+                    }
+                }
+            }
+            if (eligibleMembers.size() >= 2) {
+                double sizeBonus = (std::min)(0.35, (eligibleMembers.size() - 1) * 0.05);
+                std::set<BYTE> activeClasses;
+                if (g_MapInstances.count(mapID)) {
+                    CMapInstance* mapInst = g_MapInstances[mapID];
+                    std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+                    for (DWORD memCharID : eligibleMembers) {
+                        PlayerData* pl = mapInst->GetPlayer(memCharID + 400000000);
+                        if (pl && pl->bPropType >= 1 && pl->bPropType <= 4) {
+                            activeClasses.insert(pl->bPropType);
+                        }
+                    }
+                }
+                double classBonus = (activeClasses.size() == 4) ? 0.25 : 0.0;
+                partyBonusRatio = sizeBonus + classBonus;
+            }
+        }
+
+        // 2. 总暴率（掉落倍率）
+        double dropMult = 1.0;
+        if (vipLevel >= 1 && vipLevel <= 5) {
+            dropMult += vipLevel * 0.2;
+        }
+
+        // 称号掉宝加成
+        int titleDropBonus = 0;
+        std::string qTitleDrop = 
+            "SELECT COALESCE(SUM(t.wDropPerc), 0) "
+            "FROM CHAR_TITLE ct "
+            "INNER JOIN TITLE_TEMPLATE t ON ct.dwTitleID = t.dwTitleID "
+            "WHERE ct.dwCharID = " + std::to_string(dwCharID) + " AND ct.bActive = 1";
+        DBHelper::GetInstance().ExecuteQuery(qTitleDrop, [&](SQLHSTMT hStmt) {
+            SQLGetData(hStmt, 1, SQL_C_LONG, &titleDropBonus, 0, NULL);
+        });
+        if (titleDropBonus > 0) {
+            dropMult += (titleDropBonus / 100.0);
+        }
+
+        if (partyBonusRatio > 0.0) {
+            expMult += partyBonusRatio;
+        }
+
+        int expPercent = (int)std::round(expMult * 100.0);
+        int dropPercent = (int)std::round(dropMult * 100.0);
+
+        std::string expMsg = "经验倍率【" + std::to_string(expPercent) + "%】";
+        std::string dropMsg = "总暴率【" + std::to_string(dropPercent) + "%】";
+
+        SendSystemChat(clientSocket, expMsg);
+        SendSystemChat(clientSocket, dropMsg);
+        return true;
+    }
+
+    // 未知命令提示
+    SendSystemChat(clientSocket, "未知命令。输入 /信息 可查看当前经验倍率与总暴率。");
+    return true;
+}
+
+// =========================================================
 // OnChatReq - Main chat packet handler
 // =========================================================
 void OnChatReq(SOCKET clientSocket, DWORD dwCharID, BYTE* pPayload, WORD wSize) {
@@ -198,6 +403,13 @@ void OnChatReq(SOCKET clientSocket, DWORD dwCharID, BYTE* pPayload, WORD wSize) 
 
     // Read content (sString)
     std::string content = ReadSString(ptr, remaining);
+
+    // 命令拦截：如果内容以 / 开头，优先由命令处理器响应
+    if (!content.empty() && content[0] == '/') {
+        if (HandlePlayerCommand(clientSocket, dwCharID, content)) {
+            return;
+        }
+    }
 
     // 号角聊天的尾部字段与普通聊天不同：
     // 普通聊天: szNickName(sString)

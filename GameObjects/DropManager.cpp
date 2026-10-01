@@ -9,6 +9,7 @@
 #include "../GameObjects/MugongManager.h"
 #include "QuestManager.h"
 #include "../Handlers/PartyHandler.h"
+#include "../Handlers/ItemSerializer.h"
 #include <iostream>
 
 extern std::map<DWORD, CMapInstance*> g_MapInstances;
@@ -371,9 +372,20 @@ void DropManager::GenerateDrops(DWORD killerID, const MonsterData& obj) {
     DWORD partyID = PartyManager::GetInstance().GetPartyID(actualCharID);
     if (partyID > 0) {
         auto members = PartyManager::GetInstance().GetMembers(partyID);
-        for (const auto& m : members) {
-            if (m.dwCharID != actualCharID && m.dwMapID == obj.dwMapID) {
-                QuestManager::GetInstance().OnMonsterKilled(m.dwCharID, obj.bPropType, dwNpcListID);
+        if (g_MapInstances.count(obj.dwMapID)) {
+            CMapInstance* mapInst = g_MapInstances[obj.dwMapID];
+            std::lock_guard<std::mutex> lock(mapInst->GetMutex());
+            for (const auto& m : members) {
+                if (m.dwCharID == actualCharID) continue;
+                PlayerData* pMember = mapInst->GetPlayer(m.dwCharID + 400000000);
+                if (pMember && pMember->dwMapID == obj.dwMapID) {
+                    float dx = (float)pMember->wPosX - (float)obj.wPosX;
+                    float dy = (float)pMember->wPosY - (float)obj.wPosY;
+                    float dist = std::sqrt(dx * dx + dy * dy);
+                    if (dist <= 150.0f) {
+                        QuestManager::GetInstance().OnMonsterKilled(m.dwCharID, obj.bPropType, dwNpcListID);
+                    }
+                }
             }
         }
     }
@@ -525,9 +537,25 @@ void DropManager::HandlePickup(SOCKET clientSocket, DWORD playerID, BYTE* payloa
         if (pickerCharID >= 800000000) pickerCharID -= 400000000;
 
         if (elapsed < DROP_OWNER_EXCLUSIVE_MS && ownerCharID != 0 && ownerCharID != pickerCharID) {
-            LOG("[DropManager] Pick denied: owner-exclusive period. ownerID=" + std::to_string(it->second.ownerID) + " playerID=" + std::to_string(playerID));
-            SendSystemWarningChat(clientSocket, "\x5B\xCF\xB5\xCD\xB3\x5D\x20\xB8\xC3\xCE\xEF\xC6\xB7\xB4\xA6\xD3\xDA\xCB\xF9\xD3\xD0\xD5\xDF\xB1\xA3\xBB\xA4\xC6\xDA\xA3\xAC\xC4\xE3\xD4\xDD\xCA\xB1\xCE\xDE\xB7\xA8\xBC\xF1\xC8\xA1\xA1\xA3");
-            return;
+            // 组队保护期权限校验：如果在同一个队伍中，且同一地图，且拾取者与掉落物距离 <= 150 格，则享有优先拾取权
+            bool canPartyPick = false;
+            DWORD partyID = PartyManager::GetInstance().GetPartyID(ownerCharID);
+            if (partyID != 0 && partyID == PartyManager::GetInstance().GetPartyID(pickerCharID)) {
+                // 必须在同一地图
+                if (mapID == it->second.mapID) {
+                    float dx = (float)x - (float)it->second.wPosX;
+                    float dy = (float)y - (float)it->second.wPosY;
+                    float dist = std::sqrt(dx * dx + dy * dy);
+                    if (dist <= 150.0f) { // 必须在 150 格视野交互范围内！
+                        canPartyPick = true;
+                    }
+                }
+            }
+            if (!canPartyPick) {
+                LOG("[DropManager] Pick denied: owner-exclusive period. ownerID=" + std::to_string(it->second.ownerID) + " playerID=" + std::to_string(playerID));
+                SendSystemWarningChat(clientSocket, "\x5B\xCF\xB5\xCD\xB3\x5D\x20\xB8\xC3\xCE\xEF\xC6\xB7\xB4\xA6\xD3\xDA\xCB\xF9\xD3\xD0\xD5\xDF\xB1\xA3\xBB\xA4\xC6\xDA\xA3\xAC\xC4\xE3\xD4\xDD\xCA\xB1\xCE\xDE\xB7\xA8\xBC\xF1\xC8\xA1\xA1\xA3");
+                return;
+            }
         }
         
         drop = it->second;
@@ -917,3 +945,177 @@ void DropManager::CleanupExpiredDrops() {
         LOG("[DropManager] Cleaned up " + std::to_string(expired.size()) + " expired drops.");
     }
 }
+
+bool DropManager::GiveItemDirectlyToBag(SOCKET clientSocket, DWORD charID, DWORD itemRefID, WORD amount) {
+    if (charID == 0 || itemRefID == 0) return false;
+
+    // 1. 获取物品尺寸
+    BYTE bcx = 1, bcy = 1;
+    if (g_ItemTemplates.count((WORD)itemRefID)) {
+        bcx = g_ItemTemplates[(WORD)itemRefID].bCX;
+        bcy = g_ItemTemplates[(WORD)itemRefID].bCY;
+    }
+
+    // 2. 寻找背包 1~3 页空位
+    BYTE freePos = 255;
+    BYTE actualSackID = 1;
+    for (BYTE tryID = 1; tryID <= 3; tryID++) {
+        freePos = FindFreeSackPos(charID, tryID, bcx, bcy);
+        if (freePos != 255) {
+            actualSackID = tryID;
+            break;
+        }
+    }
+
+    if (freePos == 255) {
+        LOG("[Gather] Sack full for CharID " + std::to_string(charID));
+        if (clientSocket != INVALID_SOCKET) {
+            std::vector<BYTE> buf; buf.resize(4, 0);
+            DWORD senderObjID = 0;
+            buf.push_back(senderObjID & 0xFF); buf.push_back((senderObjID >> 8) & 0xFF); buf.push_back((senderObjID >> 16) & 0xFF); buf.push_back(senderObjID >> 24);
+            buf.push_back(8); // CT_TIMEMESSAGE
+            std::string msg = "背包空间不足，采集物品无法放入！";
+            WORD len = (WORD)msg.size();
+            buf.push_back(len & 0xFF); buf.push_back((len >> 8) & 0xFF);
+            buf.insert(buf.end(), msg.begin(), msg.end());
+            WORD packetID = 0x3E02; // CS_CH_CHAT_ACK
+            WORD payloadSize = (WORD)(buf.size() - 4);
+            memcpy(&buf[0], &packetID, 2);
+            memcpy(&buf[2], &payloadSize, 2);
+            EncryptPacket(buf.data(), 0x42);
+            SafeSend(clientSocket, (const char*)buf.data(), (int)buf.size(), 0);
+        }
+        return false;
+    }
+
+    // 3. 在数据库中创建物品
+    DWORD newItemID = ItemDB::GetInstance().CreateItemFromTemplate((WORD)itemRefID);
+    if (newItemID == 0) {
+        LOG("[Gather] Failed to create item from template wRefID=" + std::to_string(itemRefID));
+        return false;
+    }
+
+    // 装备类 (bType < 10) 插入默认 ITEMDATA
+    if (g_ItemTemplates.count((WORD)itemRefID) && g_ItemTemplates[(WORD)itemRefID].bType < 10) {
+        int defaultData[25] = {0};
+        ItemDB::GetInstance().InsertItemData(newItemID, defaultData);
+    }
+
+    // 4. 插入 SACKITEM 表
+    ItemDB::GetInstance().AddToSack(charID, freePos, newItemID);
+
+    // 5. 序列化并发送 0x420A (CS_IM_ADDITEMTOSACK_ACK)
+    int startPos = (actualSackID == 1) ? 20 : (actualSackID == 2) ? 60 : 100;
+    BYTE relativeSackPos = freePos - startPos;
+    ItemDB::FullItemRow row;
+    if (ItemDB::GetInstance().GetFullItemData(newItemID, row)) {
+        std::vector<BYTE> bi(4);
+        pushByte(bi, actualSackID);
+        pushByte(bi, relativeSackPos);
+        SerializeItemData(row, bi);
+        pushWord(bi, (WORD)(row.nData25 > 0 ? row.nData25 : 0));
+
+        PACKET_HEADER* addHead = (PACKET_HEADER*)bi.data();
+        addHead->id = 0x420A;
+        addHead->payloadSize = (WORD)(bi.size() - 4);
+        EncryptPacket(bi.data(), 0x42);
+        SafeSend(clientSocket, (const char*)bi.data(), (int)bi.size(), 0);
+    }
+
+    // 6. 客户端左下角系统提示及音效
+    std::string itemName = "未知物品";
+    if (g_ItemTemplates.count((WORD)itemRefID)) {
+        itemName = g_ItemTemplates[(WORD)itemRefID].szName;
+    }
+    SystemMessage::SendHelpMessage(clientSocket, SystemMessage::MsgType::PICK_ITEM, itemName, amount);
+    LOG("[Gather] CharID " + std::to_string(charID) + " gathered " + itemName + " (RefID: " + std::to_string(itemRefID) + ", dbItemID: " + std::to_string(newItemID) + ")");
+    return true;
+}
+
+void DropManager::GenerateGatherDrops(SOCKET clientSocket, DWORD playerID, const MonsterData& obj) {
+    auto tplIt = g_NpcTemplates.find(obj.bPropType);
+    if (tplIt == g_NpcTemplates.end()) return;
+
+    DWORD actualCharID = playerID;
+    if (actualCharID >= 800000000) actualCharID -= 400000000;
+    if (actualCharID >= 400000000) actualCharID -= 400000000;
+
+    // VIP 与称号爆率加成
+    int vipLevel = CharacterDB::GetInstance().GetVipLevel(actualCharID);
+    double multiplier = 1.0;
+    if (vipLevel >= 1 && vipLevel <= 5) {
+        multiplier += vipLevel * 0.2;
+    }
+
+    int titleDropBonus = 0;
+    std::string qTitleDrop = "SELECT COALESCE(SUM(t.wDropPerc), 0) "
+                             "FROM CHAR_TITLE ct "
+                             "INNER JOIN TITLE_TEMPLATE t ON ct.dwTitleID = t.dwTitleID "
+                             "WHERE ct.dwCharID = " + std::to_string(actualCharID) + " AND ct.bActive = 1";
+    DBHelper::GetInstance().ExecuteQuery(qTitleDrop, [&](SQLHSTMT hStmt) {
+        SQLGetData(hStmt, 1, SQL_C_LONG, &titleDropBonus, 0, NULL);
+    });
+    if (titleDropBonus > 0) {
+        multiplier += (titleDropBonus / 100.0);
+    }
+
+    // 检查基础爆率门槛 (wRootItem)
+    int finalRootItem = obj.wRootItem;
+    if (multiplier > 1.0 && finalRootItem > 0) {
+        finalRootItem = (int)(finalRootItem / multiplier);
+        if (finalRootItem < 1) finalRootItem = 1;
+    }
+    if (finalRootItem > 1 && (rand() % finalRootItem != 0)) {
+        return;
+    }
+
+    // 1. 新掉落组系统
+    auto groupIt = m_dropGroups.find(obj.bPropType);
+    if (groupIt != m_dropGroups.end() && !groupIt->second.empty()) {
+        for (const auto& group : groupIt->second) {
+            if (group.wDropRate == 0 || group.items.empty()) continue;
+            int finalDropRate = group.wDropRate;
+            if (multiplier > 1.0 && finalDropRate > 0) {
+                finalDropRate = (int)(finalDropRate / multiplier);
+                if (finalDropRate < 1) finalDropRate = 1;
+            }
+            if (rand() % finalDropRate != 0) continue;
+
+            int picks = group.bMinDrop;
+            if (group.bMaxDrop > group.bMinDrop)
+                picks += rand() % (group.bMaxDrop - group.bMinDrop + 1);
+
+            int totalWeight = 0;
+            for (const auto& item : group.items) totalWeight += item.wWeight;
+            if (totalWeight <= 0) continue;
+
+            for (int n = 0; n < picks; n++) {
+                int roll = rand() % totalWeight;
+                int cumulative = 0;
+                for (const auto& item : group.items) {
+                    cumulative += item.wWeight;
+                    if (roll < cumulative) {
+                        GiveItemDirectlyToBag(clientSocket, actualCharID, item.dwItemID);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. 兼容旧表 NPC_ROOTITEM
+    auto rootIt = m_rootItems.find(obj.bPropType);
+    if (rootIt != m_rootItems.end()) {
+        for (const auto& item : rootIt->second) {
+            int finalRatio = item.wItemRatio;
+            if (multiplier > 1.0 && finalRatio > 0) {
+                finalRatio = (int)(finalRatio / multiplier);
+                if (finalRatio < 1) finalRatio = 1;
+            }
+            if (finalRatio > 0 && (rand() % finalRatio == 0)) {
+                GiveItemDirectlyToBag(clientSocket, actualCharID, item.dwItemID);
+            }
+        }
+    }
+}
+
